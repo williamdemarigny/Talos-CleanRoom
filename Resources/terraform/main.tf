@@ -1,4 +1,4 @@
 provider "proxmox" {
-  endpoint = "https://192.168.7.90:8006/"
+  endpoint = "https://pve01.knowledgeondemand.net:8006"
   insecure = true # Only needed if your Proxmox server is using a self-signed certificate
 }
