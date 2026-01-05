@@ -9,4 +9,4 @@
 credentials.auto.tfvars
 *.auto.tfvars.json
 credentials.sh
-.env
+.envrc
