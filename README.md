@@ -8,8 +8,8 @@ This project provides automated deployment and lifecycle management of a Talos K
 
 - **Cluster Provisioning**: Deploy Talos VMs across your Proxmox cluster with automatic node distribution
 - **Automatic Node Discovery**: Discovers available Proxmox nodes and distributes VMs using round-robin scheduling
-- **Cleanup Operations**: Power down and delete VMs with automatic shutdown
 - **Flexible Configuration**: Support for control plane, worker nodes, and GPU workers
+- **Resource Outputs**: Comprehensive VM details, MAC addresses, and cluster status information
 
 ## Project Structure
 
@@ -18,15 +18,14 @@ Talos-CleanRoom/
 ├── Resources/
 │   └── IAC/
 │       └── Terraform/
-│           └── Talos-Cluster/                  # Unified provisioning & cleanup module
-│               ├── variables.tf                # All variables (provisioning + cleanup)
+│           └── Talos-Cluster-Create/           # Cluster provisioning module
+│               ├── variables.tf                # Variable declarations
 │               ├── main.tf                     # Provisioning resources
-│               ├── cleanup.tf                  # Cleanup resources (optional)
-│               ├── locals.tf                   # Local values
-│               ├── cluster.auto.tfvars         # Provisioning configuration
-│               ├── cleanup.auto.tfvars         # Cleanup configuration (optional)
+│               ├── locals.tf                   # Local value definitions
+│               ├── cluster.auto.tfvars         # Cluster configuration
 │               ├── credentials.auto.tfvars     # Proxmox credentials (gitignored)
-│               └── .gitignore
+│               ├── .terraform.lock.hcl         # Terraform lock file
+│               └── terraform.tfstate           # Terraform state
 │
 └── README.md
 ```
@@ -42,7 +41,7 @@ Talos-CleanRoom/
 
 ### 1. Configure Your Environment
 
-Edit `Resources/IAC/Terraform/Talos-Cluster/credentials.auto.tfvars`:
+Edit `Resources/IAC/Terraform/Talos-Cluster-Create/credentials.auto.tfvars`:
 
 ```hcl
 proxmox_api_url      = "https://your-proxmox:8006/api2/json"
@@ -52,7 +51,7 @@ proxmox_pool         = "talos-cluster"
 proxmox_ssh_password = "..."
 ```
 
-Edit `Resources/IAC/Terraform/Talos-Cluster/cluster.auto.tfvars`:
+Edit `Resources/IAC/Terraform/Talos-Cluster-Create/cluster.auto.tfvars`:
 
 ```hcl
 talos_iso_file = "cephfs:iso/talos-1.12.1.iso"
@@ -75,7 +74,7 @@ nodes = [
 ### 2. Provision the Cluster
 
 ```bash
-cd Resources/IAC/Terraform/Talos-Cluster
+cd Resources/IAC/Terraform/Talos-Cluster-Create
 
 # Initialize Terraform
 terraform init
@@ -87,22 +86,18 @@ terraform plan
 terraform apply
 ```
 
-### 3. Cleanup (Optional)
+### 3. Destroy the Cluster (Optional)
 
-To power down and delete VMs:
+To remove all VMs and clean up resources:
 
 ```bash
-# Edit cleanup.auto.tfvars
-vi cleanup.auto.tfvars
+cd Resources/IAC/Terraform/Talos-Cluster-Create
 
-# Set cleanup_enabled = true
-# Set vm_ids_to_cleanup = [2000, 3001, 3002, 3003]
+# Review what will be destroyed
+terraform plan -destroy
 
-# Review cleanup plan
-terraform plan
-
-# Execute cleanup
-terraform apply
+# Destroy all resources
+terraform destroy
 ```
 
 ## Configuration
@@ -139,20 +134,20 @@ nodes = [
 ]
 ```
 
-### Cleanup Configuration
+### Credentials Configuration
 
-Edit `cleanup.auto.tfvars`:
+Create `credentials.auto.tfvars` (this file should be gitignored):
 
 ```hcl
-# Enable cleanup mode (DANGEROUS - will delete VMs)
-cleanup_enabled = true
-
-# VM IDs to delete
-vm_ids_to_cleanup = [2000, 3001, 3002, 3003]
-
-# Shutdown timeout in seconds
-shutdown_timeout = 300
+# Proxmox API configuration
+proxmox_api_url      = "https://your-proxmox-host:8006/api2/json"
+proxmox_node         = "pve01"                    # Default node
+proxmox_api_token    = "terraform@pve!provider=..."
+proxmox_pool         = "talos-cluster"            # Optional resource pool
+proxmox_ssh_password = "your-ssh-password"        # For VM operations
 ```
+
+**Important**: Never commit `credentials.auto.tfvars` to version control!
 
 ## Features
 
@@ -221,32 +216,67 @@ terraform output
 ```
 
 Shows:
-- VM MAC addresses
-- VM details (VMID, IP, role, specs)
-- Node roles and distribution
-- Cluster status
+- **vm_mac_addresses**: MAC addresses for all VMs
+- **vm_details**: Complete VM information (VMID, name, IP, role, Proxmox node, specs)
+- **node_roles**: Summary of nodes by role (controlplane, worker, worker-gpu)
+- **cluster_status**: Overall cluster configuration and health
+- **vm_distribution**: How VMs are distributed across Proxmox nodes
 
 ## Best Practices
 
-1. Always run `terraform plan` before `terraform apply`
-2. Keep `credentials.auto.tfvars` secure and gitignored
-3. Use resource pools for VM organization
-4. Test cleanup in non-production environment first
-5. Document all configuration changes
+1. **Always run `terraform plan` before `terraform apply`** to review changes
+2. **Keep `credentials.auto.tfvars` secure and gitignored** - never commit credentials
+3. **Use resource pools** for VM organization in Proxmox
+4. **Test in non-production** before deploying to production clusters
+5. **Document configuration changes** for team visibility
+6. **Review node distribution** to ensure balanced VM placement across Proxmox nodes
+7. **Use VLAN tagging** for network isolation when running multiple clusters
 
 ## Security Considerations
 
-- ✅ API tokens marked as sensitive
-- ✅ Credentials in separate file (gitignored)
-- ⚠️ Store credentials in secret management for CI/CD
+- ✅ **Sensitive variables**: API tokens and passwords marked as sensitive in Terraform
+- ✅ **Separate credentials file**: Credentials isolated in `credentials.auto.tfvars`
+- ✅ **Gitignore configured**: Credentials file pattern added to `.gitignore`
+- ⚠️ **Secret management**: For CI/CD pipelines, use proper secret management (HashiCorp Vault, AWS Secrets Manager, etc.)
+- ⚠️ **State file security**: Terraform state files contain sensitive data - store in secure backend (S3 with encryption, Terraform Cloud, etc.)
+- ⚠️ **Network security**: Ensure Proxmox API is accessible only from trusted networks
+- ⚠️ **API token permissions**: Use minimal required permissions for Terraform API tokens
 
-## Support
+## Troubleshooting
 
-For issues or questions, refer to troubleshooting section in extended documentation.
+### Common Issues
+
+**VM Creation Fails**
+- Verify Proxmox API token has correct permissions
+- Ensure ISO file exists at the specified storage location
+- Check that target storage has sufficient space
+- Verify VLAN ID exists on the network bridge
+
+**Node Distribution Issues**
+- Check that Proxmox cluster nodes are online and accessible
+- Verify `proxmox_node` variable matches an available node
+- Review `node_affinity` configuration for conflicts
+
+**Network Configuration Problems**
+- Ensure VLAN ID is valid (1-4094)
+- Verify network bridge exists on all Proxmox nodes
+- Check that IP addresses don't conflict with existing VMs
+
+**State File Conflicts**
+- Use remote state backend for team collaboration
+- Run `terraform refresh` to sync state with actual infrastructure
+- Consider `terraform import` for existing resources
+
+## Additional Resources
+
+- [Talos Linux Documentation](https://www.talos.dev/)
+- [Proxmox VE API Documentation](https://pve.proxmox.com/pve-docs/api-viewer/)
+- [Terraform Proxmox Provider](https://github.com/bpg/terraform-provider-proxmox)
 
 ---
 
-**Last Updated**: 2024
+**Last Updated**: January 2026
 **Terraform Version**: >= 1.0
 **Proxmox Provider Version**: 0.82.1
+**Talos Version**: v1.12.1
 
