@@ -92,7 +92,3 @@ nodes = [
   #  tags = ["talos", "worker-gpu"] 
   #}
 ]
-
-# After editing run:
-# terraform plan -out .tfplan
-# terraform apply .tfplan
