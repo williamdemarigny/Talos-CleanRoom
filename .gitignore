@@ -3,7 +3,8 @@
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
-tfplan
+*tfplan*
+*.tfplan*
 
 # Terraform credentials / env (sensitive)
 credentials.auto.tfvars
