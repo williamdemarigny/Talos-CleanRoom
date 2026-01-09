@@ -1,0 +1,70 @@
+#!/bin/sh
+# OPNSense Automated Installation Configuration for opnsense-fw-01
+# Place this file as /installerconfig on the ISO or config drive
+
+# Set noninteractive mode
+export BSDINSTALL_DISTSITE="file:///usr/freebsd-dist"
+export nonInteractive="YES"
+
+# Disk configuration
+export ZFSBOOT_DISKS="da0"
+export ZFSBOOT_POOL_NAME="zroot"
+export ZFSBOOT_BOOT_POOL_SIZE="512M"
+export ZFSBOOT_SWAP_SIZE="2G"
+
+# Network configuration for WAN interface
+INTERFACE="vtnet0"
+IPADDRESS="10.83.3.5"
+NETMASK="255.255.255.0"
+GATEWAY="10.83.3.1"
+NAMESERVER="8.8.8.8"
+
+# Hostname
+HOSTNAME="opnsense-fw-01"
+
+# Perform automated installation
+echo "Starting automated OPNSense installation..."
+
+# Auto-partition with ZFS
+bsdinstall script << 'ENDSCRIPT'
+DISTRIBUTIONS="base.txz kernel.txz"
+PARTITIONS="da0 { auto freebsd-zfs }"
+#!/bin/sh
+echo "Partitioning complete"
+ENDSCRIPT
+
+# Post-installation configuration
+cat > /tmp/post-install.sh << 'POSTINSTALL'
+#!/bin/sh
+
+# Configure network interface
+sysrc hostname="opnsense-fw-01.local"
+sysrc ifconfig_vtnet0="inet 10.83.3.5 netmask 255.255.255.0"
+sysrc defaultrouter="10.83.3.1"
+
+# Configure DNS
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+
+# Enable SSH
+sysrc sshd_enable="YES"
+echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+
+# Set root password (default: opnsense)
+echo "opnsense" | pw usermod root -h 0
+
+# Enable OPNSense
+sysrc opnsense_enable="YES"
+
+echo "Post-installation configuration complete"
+POSTINSTALL
+
+chmod +x /tmp/post-install.sh
+/tmp/post-install.sh
+
+# Signal completion
+touch /tmp/install-complete
+
+echo "Installation complete. System will reboot."
+sleep 3
+reboot

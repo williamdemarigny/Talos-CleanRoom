@@ -1,6 +1,42 @@
 # Fully populated cluster configuration (non-secret). Adjust as needed.
 # Secrets (API token, SSH password) go ONLY in credentials.auto.tfvars.
 
+# ============================================================================
+# OPNSense Firewall Configuration
+# ============================================================================
+# Enable OPNSense firewall deployment (deployed before Talos cluster)
+opnsense_enabled = true
+
+# OPNSense ISO uploaded to Proxmox ISO storage
+opnsense_iso_file = "cephfs:iso/OPNsense-25.7-dvd-amd64.iso"
+
+# OPNSense VMs (2 CPU cores, 8GB RAM, 30GB storage each, VLAN 3)
+opnsense_vms = [
+  {
+    name        = "opnsense-fw-01"
+    vmid        = 1000
+    ip          = "10.83.3.5"
+    cores       = 2
+    memory      = 8192
+    disk_size   = "30G"
+    mac_address = "BC:24:21:F1:00:01"
+    tags        = ["opnsense", "firewall", "fw-01"]
+  },
+  {
+    name        = "opnsense-fw-02"
+    vmid        = 1001
+    ip          = "10.83.3.6"
+    cores       = 2
+    memory      = 8192
+    disk_size   = "30G"
+    mac_address = "BC:24:21:F1:00:02"
+    tags        = ["opnsense", "firewall", "fw-02"]
+  }
+]
+
+# ============================================================================
+# Talos Kubernetes Cluster Configuration
+# ============================================================================
 # Talos ISOs uploaded to Proxmox ISO storage
 # Confirm filenames match Proxmox storage list.
 talos_iso_file = "cephfs:iso/talos-1.12.1.iso"              # Standard Talos ISO

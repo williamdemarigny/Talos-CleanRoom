@@ -100,3 +100,31 @@ variable "node_affinity" {
   type        = map(string)
   default     = {}
 }
+
+# OPNSense Configuration Variables
+variable "opnsense_enabled" {
+  description = "Enable deployment of OPNSense firewall VMs."
+  type        = bool
+  default     = false
+}
+
+variable "opnsense_iso_file" {
+  description = "Proxmox storage reference to the uploaded OPNSense ISO, e.g. cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
+  type        = string
+  default     = ""
+}
+
+variable "opnsense_vms" {
+  description = "List of OPNSense firewall VMs to create."
+  type = list(object({
+    name        = string
+    vmid        = number
+    ip          = string
+    cores       = number
+    memory      = number
+    disk_size   = string
+    mac_address = string
+    tags        = optional(list(string))
+  }))
+  default = []
+}
