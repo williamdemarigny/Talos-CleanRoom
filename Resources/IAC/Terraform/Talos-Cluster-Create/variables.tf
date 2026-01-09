@@ -1,7 +1,7 @@
 variable "proxmox_api_url" {
   description = "The URL for the Proxmox API."
   type        = string
-  
+
   validation {
     condition     = can(regex("^https://", var.proxmox_api_url))
     error_message = "proxmox_api_url must start with https://"
@@ -41,18 +41,18 @@ variable "proxmox_ssh_password" {
 variable "nodes" {
   description = "A list of virtual machines to create."
   type = list(object({
-    name                 = string
-    vmid                 = number
-    role                 = string
-    ip                   = string
-    cores                = number
-    memory               = number
-    disk_size            = string
-    mac_address          = string
-    tags                 = optional(list(string))
-    additional_disk_size = optional(string)
+    name                    = string
+    vmid                    = number
+    role                    = string
+    ip                      = string
+    cores                   = number
+    memory                  = number
+    disk_size               = string
+    mac_address             = string
+    tags                    = optional(list(string))
+    additional_disk_size    = optional(string)
     additional_disk_storage = optional(string, "datapool")
-    vlan_id              = optional(number)
+    vlan_id                 = optional(number)
   }))
 }
 
@@ -88,7 +88,7 @@ variable "vlan_id" {
   description = "VLAN ID to assign to all VMs (1-4094)."
   type        = number
   default     = 3
-  
+
   validation {
     condition     = var.vlan_id >= 1 && var.vlan_id <= 4094
     error_message = "vlan_id must be between 1 and 4094."
@@ -108,10 +108,22 @@ variable "opnsense_enabled" {
   default     = false
 }
 
-variable "opnsense_iso_file" {
-  description = "Proxmox storage reference to the uploaded OPNSense ISO, e.g. cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
+variable "opnsense_template_vmid" {
+  description = "VM ID of the OPNSense template to clone from, e.g. 1000"
+  type        = number
+  default     = 1000
+}
+
+variable "opnsense_template_node" {
+  description = "Proxmox node where the OPNSense template is located (where template VMID exists)"
   type        = string
   default     = ""
+}
+
+variable "opnsense_template_storage" {
+  description = "Proxmox storage where the OPNSense template is located, e.g. CleanRoom_Storage"
+  type        = string
+  default     = "CleanRoom_Storage"
 }
 
 variable "opnsense_vms" {
