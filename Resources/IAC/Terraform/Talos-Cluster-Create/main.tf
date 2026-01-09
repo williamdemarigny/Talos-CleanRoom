@@ -21,7 +21,7 @@ provider "proxmox" {
 data "proxmox_virtual_environment_nodes" "cluster_nodes" {
 }
 
-# OPNSense Firewall VMs - deployed first
+# OPNSense Firewall VMs - deployed first (cloned from template)
 resource "proxmox_virtual_environment_vm" "opnsense" {
   for_each = local.opnsense_vms_transformed
 
@@ -31,7 +31,17 @@ resource "proxmox_virtual_environment_vm" "opnsense" {
   tags        = each.value.tags
   vm_id       = each.value.vmid
 
+  # Clone from template
+  clone {
+    vm_id        = var.opnsense_template_vmid
+    node_name    = var.opnsense_template_node != "" ? var.opnsense_template_node : null
+    datastore_id = var.opnsense_template_storage
+    full         = true
+  }
+
+  # Start VM after configuration is applied (MAC address updated)
   started = true
+  on_boot = true
   bios    = local.opnsense_config.bios
 
   # Enable QEMU Guest Agent for better VM management
@@ -39,8 +49,8 @@ resource "proxmox_virtual_environment_vm" "opnsense" {
     enabled = true
   }
 
-  # Boot from ISO first for initial installation, then disk
-  boot_order = local.opnsense_config.boot_order
+  # Boot from disk
+  boot_order = ["scsi0"]
 
   cpu {
     cores   = each.value.cores
@@ -52,7 +62,7 @@ resource "proxmox_virtual_environment_vm" "opnsense" {
     dedicated = each.value.memory
   }
 
-  # Network configuration
+  # Network configuration - MAC address will be updated after clone to avoid conflicts
   network_device {
     bridge      = each.value.network_bridge
     model       = each.value.network_model
@@ -60,24 +70,8 @@ resource "proxmox_virtual_environment_vm" "opnsense" {
     vlan_id     = each.value.vlan_id
   }
 
-  # Primary disk
-  disk {
-    interface    = "scsi0"
-    datastore_id = each.value.disk_storage
-    size         = tonumber(trimsuffix(each.value.disk_size, "G"))
-    cache        = "none"
-    discard      = "ignore"
-    ssd          = false
-  }
-
   # Assign to resource pool for organization
   pool_id = var.proxmox_pool != "" ? var.proxmox_pool : null
-
-  # Attach OPNSense ISO
-  cdrom {
-    interface = "ide2"
-    file_id   = each.value.iso_file
-  }
 
   depends_on = [data.proxmox_virtual_environment_nodes.cluster_nodes]
 }
@@ -94,12 +88,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   started = each.value.onboot
   bios    = local.node_configs[each.value.role].bios
-  
+
   # Enable QEMU Guest Agent for better VM management
   agent {
     enabled = true
   }
-  
+
   # Boot the disk first, then the ISO as fallback
   boot_order = local.node_configs[each.value.role].boot_order
 
@@ -108,7 +102,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     sockets = each.value.sockets
     type    = local.node_configs[each.value.role].cpu_type
   }
-  
+
   memory {
     dedicated = each.value.memory
   }
@@ -232,7 +226,7 @@ output "deployment_order" {
   value = var.opnsense_enabled ? {
     first  = "OPNSense Firewalls"
     second = "Talos Kubernetes Cluster"
-  } : {
+    } : {
     only = "Talos Kubernetes Cluster"
   }
 }
