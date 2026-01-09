@@ -104,4 +104,16 @@ locals {
     bios           = "seabios"
     description    = "OPNSense Firewall Appliance (cloned from template) - Managed by Terraform"
   }
+
+  # OPNSense API configuration for each VM
+  opnsense_api_config = var.opnsense_enabled && var.opnsense_api_key != "" ? {
+    for vm_name, vm_data in local.opnsense_vms_transformed : vm_name => {
+      url        = "${var.opnsense_api_protocol}://${vm_data.ip}:${var.opnsense_api_port}"
+      api_key    = var.opnsense_api_key
+      api_secret = var.opnsense_api_secret
+      insecure   = var.opnsense_api_insecure
+      ip         = vm_data.ip
+      name       = vm_data.name
+    }
+  } : {}
 }

@@ -17,7 +17,7 @@ opnsense_template_storage = "CleanRoom_Storage"
 # Note: Cloned VMs must use different VMIDs than the template
 opnsense_vms = [
   {
-    name        = "opnsense-fw-01-clone"
+    name        = "opnsense-fw-01"
     vmid        = 1010
     ip          = "10.83.3.5"
     cores       = 2
@@ -27,7 +27,7 @@ opnsense_vms = [
     tags        = ["opnsense", "firewall", "fw-01"]
   },
   {
-    name        = "opnsense-fw-02-clone"
+    name        = "opnsense-fw-02"
     vmid        = 1011
     ip          = "10.83.3.6"
     cores       = 2

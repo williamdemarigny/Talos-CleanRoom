@@ -140,3 +140,41 @@ variable "opnsense_vms" {
   }))
   default = []
 }
+
+# OPNSense API Configuration Variables
+variable "opnsense_api_key" {
+  description = "API key for OPNSense firewall configuration (usually starts with alphanumeric string)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "opnsense_api_secret" {
+  description = "API secret for OPNSense firewall configuration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "opnsense_api_port" {
+  description = "Port for OPNSense API access (default: 443)"
+  type        = number
+  default     = 443
+}
+
+variable "opnsense_api_protocol" {
+  description = "Protocol for OPNSense API access (http or https)"
+  type        = string
+  default     = "https"
+
+  validation {
+    condition     = contains(["http", "https"], var.opnsense_api_protocol)
+    error_message = "opnsense_api_protocol must be either 'http' or 'https'."
+  }
+}
+
+variable "opnsense_api_insecure" {
+  description = "Allow insecure SSL connections to OPNSense API (skip certificate verification)"
+  type        = bool
+  default     = false
+}
