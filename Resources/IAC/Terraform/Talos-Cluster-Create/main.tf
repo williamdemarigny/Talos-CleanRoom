@@ -21,6 +21,68 @@ provider "proxmox" {
 data "proxmox_virtual_environment_nodes" "cluster_nodes" {
 }
 
+# OPNSense Firewall VMs - deployed first
+resource "proxmox_virtual_environment_vm" "opnsense" {
+  for_each = local.opnsense_vms_transformed
+
+  name        = each.value.name
+  node_name   = each.value.node_name
+  description = local.opnsense_config.description
+  tags        = each.value.tags
+  vm_id       = each.value.vmid
+
+  started = true
+  bios    = local.opnsense_config.bios
+
+  # Enable QEMU Guest Agent for better VM management
+  agent {
+    enabled = true
+  }
+
+  # Boot from ISO first for initial installation, then disk
+  boot_order = local.opnsense_config.boot_order
+
+  cpu {
+    cores   = each.value.cores
+    sockets = 1
+    type    = local.opnsense_config.cpu_type
+  }
+
+  memory {
+    dedicated = each.value.memory
+  }
+
+  # Network configuration
+  network_device {
+    bridge      = each.value.network_bridge
+    model       = each.value.network_model
+    mac_address = each.value.mac_address
+    vlan_id     = each.value.vlan_id
+  }
+
+  # Primary disk
+  disk {
+    interface    = "scsi0"
+    datastore_id = each.value.disk_storage
+    size         = tonumber(trimsuffix(each.value.disk_size, "G"))
+    cache        = "none"
+    discard      = "ignore"
+    ssd          = false
+  }
+
+  # Assign to resource pool for organization
+  pool_id = var.proxmox_pool != "" ? var.proxmox_pool : null
+
+  # Attach OPNSense ISO
+  cdrom {
+    interface = "ide2"
+    file_id   = each.value.iso_file
+  }
+
+  depends_on = [data.proxmox_virtual_environment_nodes.cluster_nodes]
+}
+
+# Talos Kubernetes Cluster VMs - deployed after OPNSense
 resource "proxmox_virtual_environment_vm" "vm" {
   for_each = local.all_nodes_transformed
 
@@ -92,7 +154,10 @@ resource "proxmox_virtual_environment_vm" "vm" {
     file_id   = each.value.iso_file
   }
 
-  depends_on = [data.proxmox_virtual_environment_nodes.cluster_nodes]
+  depends_on = [
+    data.proxmox_virtual_environment_nodes.cluster_nodes,
+    proxmox_virtual_environment_vm.opnsense
+  ]
 }
 
 output "vm_mac_addresses" {
@@ -142,5 +207,32 @@ output "vm_distribution" {
       for vm_name, vm_data in local.all_nodes_transformed :
       vm_data.name if vm_data.node_name == node_name
     ]
+  }
+}
+
+# OPNSense Outputs
+output "opnsense_vms" {
+  description = "Details of deployed OPNSense firewall VMs."
+  value = var.opnsense_enabled ? {
+    for k, v in proxmox_virtual_environment_vm.opnsense : k => {
+      vmid        = v.vm_id
+      name        = v.name
+      ip          = local.opnsense_vms_transformed[k].ip
+      mac_address = v.network_device[0].mac_address
+      cores       = v.cpu[0].cores
+      memory      = v.memory[0].dedicated
+      node        = v.node_name
+      status      = "deployed"
+    }
+  } : {}
+}
+
+output "deployment_order" {
+  description = "Order of VM deployment."
+  value = var.opnsense_enabled ? {
+    first  = "OPNSense Firewalls"
+    second = "Talos Kubernetes Cluster"
+  } : {
+    only = "Talos Kubernetes Cluster"
   }
 }

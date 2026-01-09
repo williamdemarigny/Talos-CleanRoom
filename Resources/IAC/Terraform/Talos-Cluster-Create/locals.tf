@@ -78,4 +78,32 @@ locals {
       description = "Talos GPU Worker Node (configure GPU passthrough in Proxmox UI) - Managed by Terraform"
     }
   }
+
+  # OPNSense VM configuration
+  opnsense_vms_transformed = var.opnsense_enabled ? {
+    for idx, vm in var.opnsense_vms : vm.name => {
+      vmid           = vm.vmid
+      name           = vm.name
+      node_name      = lookup(var.node_affinity, vm.name, local.available_nodes[idx % length(local.available_nodes)])
+      cores          = vm.cores
+      memory         = vm.memory
+      ip             = vm.ip
+      disk_size      = vm.disk_size
+      disk_storage   = local.disk_storage
+      network_bridge = local.network_bridge
+      network_model  = "virtio"
+      mac_address    = vm.mac_address
+      vlan_id        = local.vlan_id
+      tags           = lookup(vm, "tags", ["opnsense", "firewall"])
+      iso_file       = var.opnsense_iso_file
+    }
+  } : {}
+
+  opnsense_config = {
+    cpu_type       = "host"
+    memory_balloon = false
+    bios           = "seabios"
+    boot_order     = ["ide2", "scsi0"]  # Boot from ISO first for initial setup, then disk
+    description    = "OPNSense Firewall Appliance - Managed by Terraform"
+  }
 }

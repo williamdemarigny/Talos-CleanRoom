@@ -4,11 +4,13 @@ A complete Terraform-based Infrastructure-as-Code (IaC) solution for provisionin
 
 ## Overview
 
-This project provides automated deployment and lifecycle management of a Talos Kubernetes cluster across a Proxmox cluster. It includes:
+This project provides automated deployment and lifecycle management of a Talos Kubernetes cluster across a Proxmox cluster, with optional OPNSense firewall deployment. It includes:
 
+- **OPNSense Firewall Deployment**: Optional deployment of OPNSense firewall appliances (deployed first)
 - **Cluster Provisioning**: Deploy Talos VMs across your Proxmox cluster with automatic node distribution
 - **Automatic Node Discovery**: Discovers available Proxmox nodes and distributes VMs using round-robin scheduling
 - **Flexible Configuration**: Support for control plane, worker nodes, and GPU workers
+- **Ordered Deployment**: OPNSense firewalls deploy first, followed by Talos cluster nodes
 - **Resource Outputs**: Comprehensive VM details, MAC addresses, and cluster status information
 
 ## Project Structure
@@ -34,7 +36,8 @@ Talos-CleanRoom/
 
 - **Terraform** >= 1.0
 - **Proxmox VE** cluster with API access
-- **Talos ISOs** uploaded to Proxmox storage
+- **Talos ISOs** uploaded to Proxmox storage (required)
+- **OPNSense ISO** uploaded to Proxmox storage (optional, for firewall deployment)
 - Valid Proxmox API token with VM management permissions
 
 ## Quick Start
@@ -54,6 +57,34 @@ proxmox_ssh_password = "..."
 Edit `Resources/IAC/Terraform/Talos-Cluster-Create/cluster.auto.tfvars`:
 
 ```hcl
+# OPNSense Firewall Configuration (Optional)
+opnsense_enabled = true
+opnsense_iso_file = "cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
+
+opnsense_vms = [
+  {
+    name        = "opnsense-fw-01"
+    vmid        = 1000
+    ip          = "10.83.3.5"
+    cores       = 2
+    memory      = 8192
+    disk_size   = "30G"
+    mac_address = "BC:24:21:F1:00:01"
+    tags        = ["opnsense", "firewall"]
+  },
+  {
+    name        = "opnsense-fw-02"
+    vmid        = 1001
+    ip          = "10.83.3.6"
+    cores       = 2
+    memory      = 8192
+    disk_size   = "30G"
+    mac_address = "BC:24:21:F1:00:02"
+    tags        = ["opnsense", "firewall"]
+  }
+]
+
+# Talos Cluster Configuration
 talos_iso_file = "cephfs:iso/talos-1.12.1.iso"
 disk_storage = "CleanRoom_Storage"
 network_bridge = "vmbr0"
@@ -71,7 +102,7 @@ nodes = [
 ]
 ```
 
-### 2. Provision the Cluster
+### 2. Provision the Infrastructure
 
 ```bash
 cd Resources/IAC/Terraform/Talos-Cluster-Create
@@ -82,9 +113,19 @@ terraform init
 # Review the deployment plan
 terraform plan
 
-# Deploy the cluster
+# Deploy the infrastructure
+# Note: OPNSense VMs are deployed first, then Talos cluster nodes
 terraform apply
 ```
+
+**Deployment Order:**
+1. **OPNSense Firewall VMs** (if enabled) - Deployed first with VMID 1000-1001
+2. **Talos Kubernetes Cluster** - Deployed after OPNSense with dependencies
+
+**Note**: OPNSense VMs require installation from ISO. See [OPNSense Installation Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md) for:
+- Manual installation steps (5-10 minutes per VM)
+- Automated installation with custom ISO
+- Template-based deployment for repeated use
 
 ### 3. Destroy the Cluster (Optional)
 
@@ -151,6 +192,54 @@ proxmox_ssh_password = "your-ssh-password"        # For VM operations
 
 ## Features
 
+### OPNSense Firewall Deployment
+
+Deploy OPNSense firewall appliances before the Kubernetes cluster:
+
+```hcl
+opnsense_enabled = true
+opnsense_iso_file = "cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
+
+opnsense_vms = [
+  {
+    name        = "opnsense-fw-01"
+    vmid        = 1000
+    ip          = "10.83.3.5"
+    cores       = 2
+    memory      = 8192
+    disk_size   = "30G"
+    mac_address = "BC:24:21:F1:00:01"
+    tags        = ["opnsense", "firewall"]
+  }
+]
+```
+
+**Features:**
+- Deployed before Talos cluster nodes (enforced via Terraform dependencies)
+- Connected to vmbr0 network with VLAN 3 tagging
+- 2 CPU cores, 8GB RAM, 30GB storage per VM
+- Boots from ISO for initial installation
+
+**Installation Methods:**
+
+1. **Manual Installation** (Recommended for first-time):
+   - Access VM console in Proxmox
+   - Login: `installer` / `opnsense`
+   - Follow installation wizard
+   - Configure network: WAN interface on vtnet0 with static IP
+   - See [detailed guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md)
+
+2. **Template-Based** (Recommended for production):
+   - Install OPNSense once manually
+   - Convert to Proxmox template
+   - Future deployments clone from template
+   - Fully automated with cloud-init
+
+3. **Custom ISO** (Advanced):
+   - Create custom ISO with embedded installer config
+   - Fully unattended installation
+   - No manual interaction required
+
 ### Automatic Cluster Node Discovery
 
 Automatically discovers available Proxmox nodes and distributes VMs using round-robin scheduling.
@@ -216,7 +305,9 @@ terraform output
 ```
 
 Shows:
-- **vm_mac_addresses**: MAC addresses for all VMs
+- **opnsense_vms**: Details of deployed OPNSense firewall VMs (if enabled)
+- **deployment_order**: Order of VM deployment (OPNSense first, then Talos)
+- **vm_mac_addresses**: MAC addresses for all Talos VMs
 - **vm_details**: Complete VM information (VMID, name, IP, role, Proxmox node, specs)
 - **node_roles**: Summary of nodes by role (controlplane, worker, worker-gpu)
 - **cluster_status**: Overall cluster configuration and health
@@ -246,9 +337,23 @@ Shows:
 
 ### Common Issues
 
+**OPNSense VM Issues**
+- **ISO boots to installer**: This is expected - complete manual installation via console
+  - Login: `installer` / `opnsense`
+  - Follow wizard to install to disk
+  - See [Installation Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md)
+- **VM keeps booting to installer**: Change boot order (Disk before CD-ROM) in Proxmox
+- **Cannot access web UI**:
+  - Ensure installation completed and VM rebooted from disk
+  - Access at `https://10.83.3.5` or `https://10.83.3.6`
+  - Default credentials: `root` / `opnsense`
+- **Network not configured**: Manually configure WAN interface (vtnet0) with static IP during install
+- **Ensure OPNSense ISO exists** at specified path on cephfs storage
+- **Verify VMIDs 1000-1001** are not already in use
+
 **VM Creation Fails**
 - Verify Proxmox API token has correct permissions
-- Ensure ISO file exists at the specified storage location
+- Ensure ISO files exist at the specified storage location
 - Check that target storage has sufficient space
 - Verify VLAN ID exists on the network bridge
 
@@ -270,6 +375,7 @@ Shows:
 ## Additional Resources
 
 - [Talos Linux Documentation](https://www.talos.dev/)
+- [OPNSense Documentation](https://docs.opnsense.org/)
 - [Proxmox VE API Documentation](https://pve.proxmox.com/pve-docs/api-viewer/)
 - [Terraform Proxmox Provider](https://github.com/bpg/terraform-provider-proxmox)
 
@@ -279,4 +385,5 @@ Shows:
 **Terraform Version**: >= 1.0
 **Proxmox Provider Version**: 0.82.1
 **Talos Version**: v1.12.1
+**OPNSense Version**: 25.7
 
