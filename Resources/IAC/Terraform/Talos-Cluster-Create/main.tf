@@ -4,6 +4,10 @@ terraform {
       source  = "bpg/proxmox"
       version = "0.82.1"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 }
 
@@ -229,4 +233,26 @@ output "deployment_order" {
     } : {
     only = "Talos Kubernetes Cluster"
   }
+}
+
+# OPNSense API Connection Information
+output "opnsense_api_endpoints" {
+  description = "OPNSense API endpoints for each firewall VM."
+  sensitive   = true
+  value = var.opnsense_enabled && var.opnsense_api_key != "" ? {
+    for k, v in proxmox_virtual_environment_vm.opnsense : k => {
+      name     = v.name
+      url      = "${var.opnsense_api_protocol}://${local.opnsense_vms_transformed[k].ip}:${var.opnsense_api_port}"
+      ip       = local.opnsense_vms_transformed[k].ip
+      port     = var.opnsense_api_port
+      protocol = var.opnsense_api_protocol
+      insecure = var.opnsense_api_insecure
+    }
+  } : {}
+}
+
+output "opnsense_api_configured" {
+  description = "Indicates whether OPNSense API credentials are configured."
+  sensitive   = true
+  value       = var.opnsense_enabled && var.opnsense_api_key != "" && var.opnsense_api_secret != ""
 }
