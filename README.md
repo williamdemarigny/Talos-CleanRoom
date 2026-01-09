@@ -122,10 +122,10 @@ terraform apply
 1. **OPNSense Firewall VMs** (if enabled) - Deployed first with VMID 1000-1001
 2. **Talos Kubernetes Cluster** - Deployed after OPNSense with dependencies
 
-**Note**: OPNSense VMs require installation from ISO. See [OPNSense Installation Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md) for:
-- Manual installation steps (5-10 minutes per VM)
-- Automated installation with custom ISO
-- Template-based deployment for repeated use
+**Note**: OPNSense VMs require manual installation from ISO. After Terraform creates the VMs:
+- Access each VM console in Proxmox
+- Complete manual installation (5-10 minutes per VM)
+- See [Quick Start Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/QUICK-START.md) for step-by-step instructions
 
 ### 3. Destroy the Cluster (Optional)
 
@@ -220,25 +220,20 @@ opnsense_vms = [
 - 2 CPU cores, 8GB RAM, 30GB storage per VM
 - Boots from ISO for initial installation
 
-**Installation Methods:**
+**Installation Process:**
 
-1. **Manual Installation** (Recommended for first-time):
-   - Access VM console in Proxmox
-   - Login: `installer` / `opnsense`
-   - Follow installation wizard
-   - Configure network: WAN interface on vtnet0 with static IP
-   - See [detailed guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md)
+After Terraform creates the VMs, manual installation is required:
 
-2. **Template-Based** (Recommended for production):
-   - Install OPNSense once manually
-   - Convert to Proxmox template
-   - Future deployments clone from template
-   - Fully automated with cloud-init
+1. **Access VM Console** in Proxmox for each OPNSense VM
+2. **Login** to installer: `installer` / `opnsense`
+3. **Follow Installation Wizard**:
+   - Select "Install (UFS)" or "Install (ZFS)"
+   - Configure WAN interface (vtnet0) with static IP
+   - Set root password
+   - Complete installation and reboot
+4. **See** [Quick Start Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/QUICK-START.md) for detailed step-by-step instructions
 
-3. **Custom ISO** (Advanced):
-   - Create custom ISO with embedded installer config
-   - Fully unattended installation
-   - No manual interaction required
+**Time**: 5-10 minutes per VM (total ~20 minutes for both firewalls)
 
 ### Automatic Cluster Node Discovery
 

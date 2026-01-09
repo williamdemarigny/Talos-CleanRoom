@@ -1,253 +1,262 @@
-# OPNSense Automated Installation Guide
+# OPNSense Installation Guide
 
-This directory contains configuration files and scripts for automating OPNSense installation on Proxmox VMs.
+This directory contains documentation for installing OPNSense firewall appliances deployed by Terraform.
 
-## Problem
+## Overview
 
-OPNSense ISOs boot to a live installer that requires manual interaction to complete installation. This guide provides several solutions for automated deployment.
+The Terraform configuration in this project deploys OPNSense VMs with ISO boot. **Manual installation via console is required** after VMs are created.
 
-## Solutions
+## Deployment Process
 
-### Solution 1: Manual Installation (Simplest)
+### What Terraform Does
 
-**Best for**: Initial setup, learning, single deployments
+When you run `terraform apply`, Terraform will:
 
-1. **Deploy VMs** via Terraform:
-   ```bash
-   terraform apply
-   ```
+1. ✅ Create two OPNSense VMs (VMID 1000 and 1001)
+2. ✅ Attach OPNSense ISO from `cephfs:iso/OPNsense-25.7-dvd-amd64.iso`
+3. ✅ Configure hardware: 2 CPU cores, 8GB RAM, 30GB disk each
+4. ✅ Connect to vmbr0 network bridge with VLAN 3
+5. ✅ Set MAC addresses and VM IDs as specified
+6. ✅ Start the VMs
+7. ⏸️ **VMs boot to OPNSense installer** - MANUAL WORK REQUIRED
 
-2. **Access VM Console** in Proxmox for each OPNSense VM (VMID 1000, 1001)
+### What You Must Do Manually
 
-3. **Complete Installation**:
-   - Login: `installer` / `opnsense`
-   - Select: **Install (UFS)** or **Install (ZFS)**
-   - Choose disk: `da0` (default)
-   - Set root password
-   - Configure network:
-     - **opnsense-fw-01**: WAN = `vtnet0` with IP `10.83.3.5/24`
-     - **opnsense-fw-02**: WAN = `vtnet0` with IP `10.83.3.6/24`
-     - Gateway: `10.83.3.1`
-   - Complete installation and reboot
+After Terraform deployment, you must:
 
-4. **Post-Installation**:
-   - Remove ISO or change boot order in Proxmox
-   - Access web UI: `https://10.83.3.5` or `https://10.83.3.6`
-   - Default credentials: `root` / `opnsense`
+1. **Access each VM console** in Proxmox UI
+2. **Complete OPNSense installation** (5-10 minutes per VM)
+3. **Configure network settings** during installation
+4. **Reboot** after installation completes
+
+See **[QUICK-START.md](QUICK-START.md)** for detailed step-by-step instructions.
 
 ---
 
-### Solution 2: Pre-Built Template (Most Automated)
+## Manual Installation Steps
 
-**Best for**: Production, repeated deployments, CI/CD
+### For opnsense-fw-01 (VMID 1000)
 
-#### Step 1: Create OPNSense Template
+#### 1. Access Console
+- In Proxmox: Select VM 1000 → Click "Console"
 
-1. **Manually install OPNSense once** (follow Solution 1)
-
-2. **Configure the installed VM**:
-   ```bash
-   # SSH into the OPNSense VM
-   ssh root@10.83.3.5
-
-   # Install qemu-guest-agent
-   pkg install qemu-guest-agent
-   sysrc qemu_guest_agent_enable="YES"
-   service qemu-guest-agent start
-
-   # Remove machine-specific data
-   rm -f /conf/config.xml
-   rm -f /etc/ssh/ssh_host_*
-   rm -rf /var/log/*
-   history -c
-   ```
-
-3. **In Proxmox**:
-   - Shutdown the VM
-   - Right-click VM → "Convert to Template"
-   - Name it: `opnsense-template`
-
-#### Step 2: Update Terraform to Clone from Template
-
-Modify `main.tf` to use `clone` instead of ISO:
-
-```hcl
-resource "proxmox_virtual_environment_vm" "opnsense" {
-  # ... existing configuration ...
-
-  # Remove cdrom block
-  # cdrom { ... }
-
-  # Add clone block instead
-  clone {
-    vm_id = 9000  # Your template VMID
-    full  = true
-  }
-
-  # Add cloud-init for customization
-  initialization {
-    ip_config {
-      ipv4 {
-        address = "${each.value.ip}/24"
-        gateway = "10.83.3.1"
-      }
-    }
-
-    user_account {
-      username = "root"
-      password = var.opnsense_root_password
-    }
-
-    dns {
-      servers = ["8.8.8.8", "8.8.4.4"]
-    }
-  }
-}
+#### 2. Login to Installer
+```
+Username: installer
+Password: opnsense
 ```
 
----
+#### 3. Start Installation
+- Select: **"Install (UFS)"** (recommended) or **"Install (ZFS)"**
+- Confirm disk: **da0**
 
-### Solution 3: Custom ISO with Installer Config (Advanced)
+#### 4. Configure Network
+- **WAN Interface**: vtnet0
+- **IP Address**: `10.83.3.5`
+- **Subnet**: `24` (or 255.255.255.0)
+- **Gateway**: `10.83.3.1`
+- **DNS**: `8.8.8.8`, `8.8.4.4`
 
-**Best for**: Fully automated deployments, no template needed
+#### 5. Set Root Password
+- Choose a secure password
+- Confirm password
 
-#### Create Custom ISO
+#### 6. Complete Installation
+- Wait for files to copy (2-3 minutes)
+- Select **Reboot**
 
-1. **Download OPNSense ISO**:
-   ```bash
-   wget https://mirror.ams1.nl.leaseweb.net/opnsense/releases/25.7/OPNsense-25.7-dvd-amd64.iso
-   ```
+#### 7. Post-Installation
+- After reboot, verify VM boots from disk
+- If it boots to installer again:
+  - In Proxmox: VM → Hardware → CD/DVD → "Do not use any media"
+  - Or: VM → Options → Boot Order → Move disk above CD-ROM
+- Access web UI: `https://10.83.3.5`
+- Login: `root` / (password you set)
 
-2. **Extract ISO**:
-   ```bash
-   mkdir /tmp/opnsense-iso
-   mount -o loop OPNsense-25.7-dvd-amd64.iso /tmp/opnsense-iso
-   mkdir /tmp/opnsense-custom
-   cp -r /tmp/opnsense-iso/* /tmp/opnsense-custom/
-   umount /tmp/opnsense-iso
-   ```
+### For opnsense-fw-02 (VMID 1001)
 
-3. **Add installer config**:
-   ```bash
-   # Copy the installerconfig file to the ISO root
-   cp installerconfig-fw-01 /tmp/opnsense-custom/installerconfig
-
-   # Make it executable
-   chmod +x /tmp/opnsense-custom/installerconfig
-   ```
-
-4. **Rebuild ISO**:
-   ```bash
-   mkisofs -o OPNsense-25.7-custom-amd64.iso \
-     -b boot/cdboot -no-emul-boot \
-     -r -J -V "OPNsense" \
-     /tmp/opnsense-custom
-   ```
-
-5. **Upload to Proxmox**:
-   ```bash
-   scp OPNsense-25.7-custom-amd64.iso root@proxmox:/var/lib/vz/template/iso/
-   ```
-
-6. **Update cluster.auto.tfvars**:
-   ```hcl
-   opnsense_iso_file = "local:iso/OPNsense-25.7-custom-amd64.iso"
-   ```
+**Repeat the same steps** with these values:
+- **IP Address**: `10.83.3.6`
+- **Web UI**: `https://10.83.3.6`
 
 ---
-
-### Solution 4: Ansible Post-Deployment Configuration
-
-**Best for**: Configuration management, ongoing updates
-
-Use Ansible to configure OPNSense after manual installation.
-
----
-
-## Configuration Files Included
-
-- **`installerconfig-fw-01`**: Automated install config for first firewall
-- **`installerconfig-fw-02`**: Automated install config for second firewall
-- **`auto-install.sh`**: Generic installation script
-- **`install-config.conf`**: Installation parameters
 
 ## Network Configuration
 
 ### opnsense-fw-01
 - **VMID**: 1000
-- **WAN IP**: 10.83.3.5/24
+- **IP Address**: 10.83.3.5/24
 - **Gateway**: 10.83.3.1
+- **Interface**: vtnet0 (WAN)
+- **VLAN**: 3
 - **MAC**: BC:24:21:F1:00:01
-- **Interface**: vtnet0
 
 ### opnsense-fw-02
 - **VMID**: 1001
-- **WAN IP**: 10.83.3.6/24
+- **IP Address**: 10.83.3.6/24
 - **Gateway**: 10.83.3.1
+- **Interface**: vtnet0 (WAN)
+- **VLAN**: 3
 - **MAC**: BC:24:21:F1:00:02
-- **Interface**: vtnet0
+
+---
 
 ## Post-Installation Access
 
-### Web UI
+### Web Interface
 - **opnsense-fw-01**: https://10.83.3.5
 - **opnsense-fw-02**: https://10.83.3.6
-- **Default User**: root
-- **Default Pass**: opnsense (change immediately!)
+- **Default Credentials**: `root` / password you set during installation
+- **Initial Setup**: Complete the setup wizard on first login
 
-### SSH Access
+### SSH Access (if enabled)
 ```bash
 ssh root@10.83.3.5
 ssh root@10.83.3.6
 ```
 
-## Recommended Approach
-
-**For your use case**, I recommend:
-
-1. **Immediate**: Use **Solution 1 (Manual Installation)**
-   - Takes 5-10 minutes per VM
-   - Most reliable
-   - Complete control
-
-2. **Long-term**: Use **Solution 2 (Template-based)**
-   - Create template from first manual install
-   - All future deployments are automated
-   - Consistent configuration
+---
 
 ## Troubleshooting
 
-### VM boots to installer every time
-- Installation didn't complete successfully
-- Boot order still set to ISO first
-- Change boot order in Proxmox: VM → Options → Boot Order → Move disk above cdrom
+### VM Boots to Installer Every Time
 
-### Cannot access web UI
-- OPNSense interface may be on different network
-- Check console for actual IP assignment
-- Ensure VLAN 3 is configured on network bridge
+**Problem**: Installation didn't complete or boot order is wrong
 
-### Network interface not detected
-- VirtIO driver may not be loaded
-- Use E1000 instead of VirtIO in Terraform
-- Or use FreeBSD virtio drivers
-
-### Installation fails with disk errors
-- Disk may be too small (minimum 8GB recommended)
-- Try UFS instead of ZFS
-- Check Proxmox storage availability
-
-## Security Notes
-
-⚠️ **Important**: The default password in these configs is `opnsense`. Change immediately after installation!
-
-```bash
-# After first login
-passwd root
+**Solution 1 - Remove ISO**:
 ```
+1. Proxmox UI: Select VM → Hardware
+2. Click CD/DVD Drive → Edit
+3. Select "Do not use any media"
+4. Reboot VM
+```
+
+**Solution 2 - Change Boot Order**:
+```
+1. Proxmox UI: Select VM → Options
+2. Click "Boot Order" → Edit
+3. Drag Hard Disk (scsi0) above CD-ROM (ide2)
+4. Reboot VM
+```
+
+### Cannot Access Web UI
+
+**Causes**:
+- Installation not complete
+- VM not booted from disk
+- Network configuration incorrect
+- VLAN 3 not configured on vmbr0
+
+**Solutions**:
+1. Check console - should see OPNSense login prompt (not installer)
+2. From Proxmox node: `ping 10.83.3.5`
+3. Verify VLAN 3 exists on bridge
+4. Accept browser certificate warning (self-signed)
+
+### Installation Fails
+
+**Common Issues**:
+- Insufficient disk space: Ensure 30GB available
+- ISO not found: Verify `cephfs:iso/OPNsense-25.7-dvd-amd64.iso` exists
+- Memory errors: 8GB should be sufficient
+- Network errors: Use UFS instead of ZFS if issues occur
+
+### Network Interface Not Detected
+
+**Problem**: vtnet0 not showing during installation
+
+**Solution**:
+- VirtIO drivers should be included in OPNSense ISO
+- If issues persist, change network model in Terraform from `virtio` to `e1000`
+- Redeploy VMs after Terraform change
+
+---
+
+## Time Estimates
+
+| Task | Time |
+|------|------|
+| Terraform deployment | 2-3 minutes |
+| opnsense-fw-01 installation | 5-10 minutes |
+| opnsense-fw-02 installation | 5-10 minutes |
+| Post-configuration (both) | 10-15 minutes |
+| **Total** | **25-40 minutes** |
+
+---
+
+## Security Recommendations
+
+### Immediately After Installation
+
+1. **Change default password** if you used `opnsense` during install
+2. **Update OPNSense**:
+   - System → Firmware → Check for Updates
+3. **Enable SSH** (if needed):
+   - System → Settings → Administration → Secure Shell
+4. **Configure firewall rules** for Kubernetes cluster access
+5. **Set up backups**:
+   - System → Configuration → Backups
+
+### Best Practices
+
+- ✅ Use strong root passwords
+- ✅ Keep OPNSense updated
+- ✅ Configure proper firewall rules
+- ✅ Enable logging and monitoring
+- ✅ Regular configuration backups
+- ✅ Review security advisories
+
+---
+
+## Integration with Talos Cluster
+
+After both OPNSense VMs are installed and configured:
+
+1. **Terraform continues** deploying Talos cluster VMs
+2. **Configure OPNSense firewall rules** to allow:
+   - Kubernetes API traffic (port 6443)
+   - Internal cluster communication
+   - Container registry access
+3. **Set up NAT/routing** if needed for cluster egress
+4. **Configure monitoring** for cluster traffic
+
+---
 
 ## Additional Resources
 
+- [OPNSense Documentation](https://docs.opnsense.org/)
 - [OPNSense Installation Guide](https://docs.opnsense.org/manual/install.html)
-- [OPNSense Hardware Setup](https://docs.opnsense.org/manual/hardware.html)
-- [Proxmox Cloud-Init](https://pve.proxmox.com/wiki/Cloud-Init_Support)
+- [OPNSense Initial Configuration](https://docs.opnsense.org/manual/how-tos/initial.html)
+- [Proxmox VE Documentation](https://pve.proxmox.com/pve-docs/)
+
+---
+
+## Quick Reference
+
+### Default Credentials
+- **Installer**: `installer` / `opnsense`
+- **Root**: `root` / (password set during install)
+- **Web UI**: Same as root login
+
+### Important Ports
+- **HTTPS Web UI**: 443
+- **SSH**: 22 (if enabled)
+- **DNS**: 53 (if configured)
+
+### Configuration Files
+- **Main Config**: `/conf/config.xml`
+- **Backup Location**: System → Configuration → Backups
+
+---
+
+## Support
+
+For installation issues:
+1. Check [Troubleshooting](#troubleshooting) section above
+2. Review OPNSense logs in web UI
+3. Check Proxmox console for error messages
+4. Verify Terraform deployment completed successfully
+
+For OPNSense-specific questions:
+- [OPNSense Forums](https://forum.opnsense.org/)
+- [OPNSense Documentation](https://docs.opnsense.org/)

@@ -215,7 +215,7 @@ ssh root@10.83.3.6
 ## Need Help?
 
 See the full [Installation Guide](README.md) for:
-- Detailed troubleshooting
-- Automated installation methods
-- Template-based deployment
-- Advanced configuration
+- Detailed troubleshooting steps
+- Security recommendations
+- Integration with Talos cluster
+- Additional resources and support
