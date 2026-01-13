@@ -43,7 +43,8 @@ opnsense_vms = [
 # ============================================================================
 # Talos ISOs uploaded to Proxmox ISO storage
 # Confirm filenames match Proxmox storage list.
-talos_iso_file = "cephfs:iso/talos-1.12.1.iso" # Standard Talos ISO
+#talos_iso_file = "cephfs:iso/talos-1.12.1.iso" # Standard Talos ISO
+talos_iso_file = "cephfs:iso/nocloud-amd64.iso" # Standard Talos ISO
 #talos_gpu_iso_file = "cephfs:iso/talos-1.12.1-gpu.iso"     # GPU-enabled Talos ISO (optional)
 
 # Primary system disk datastore id (Proxmox storage ID)
@@ -87,7 +88,7 @@ nodes = [
     memory               = 8192,
     disk_size            = "30G",
     additional_disk_size = "30G",
-    mac_address          = "BC:24:21:4C:99:A2",
+    mac_address          = "BC:24:21:4C:99:A1",
     tags                 = ["talos", "worker"]
   },
 
@@ -101,7 +102,7 @@ nodes = [
     memory               = 8192,
     disk_size            = "30G",
     additional_disk_size = "30G",
-    mac_address          = "BC:24:21:4C:99:A2",
+    mac_address          = "BC:24:21:4C:99:A3",
     tags                 = ["talos", "worker"]
   },
 
@@ -115,7 +116,7 @@ nodes = [
     memory               = 8192,
     disk_size            = "30G",
     additional_disk_size = "30G",
-    mac_address          = "BC:24:21:4C:99:A2",
+    mac_address          = "BC:24:21:4C:99:A4",
     tags                 = ["talos", "worker"]
   }
 
