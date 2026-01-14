@@ -4,10 +4,10 @@ locals {
   talos_version = "v1.12.1" # Match the ISO version
   cni_name      = "cilium"
 
-  # Network configuration - derive from first node IP
-  network_cidr     = "${join(".", slice(split(".", var.nodes[0].ip), 0, 3))}.0/24"
-  gateway          = "${join(".", slice(split(".", var.nodes[0].ip), 0, 3))}.1"
-  cluster_endpoint = "https://${join(".", slice(split(".", var.nodes[0].ip), 0, 3))}.100:6443"
+  # Network configuration - using FQDN-based addressing
+  network_cidr     = "10.83.3.0/24"
+  gateway          = "10.83.3.1"
+  cluster_endpoint = "https://${var.nodes[0].fqdn}:6443"
 
   # Storage and network settings from variables
   network_bridge          = var.network_bridge
@@ -35,7 +35,7 @@ locals {
       node_name               = lookup(var.node_affinity, node.name, lookup(local.node_distribution, node.name, null))
       cores                   = node.cores
       memory                  = node.memory
-      ip                      = node.ip
+      fqdn                    = node.fqdn
       gateway                 = local.gateway
       disk_size               = node.disk_size
       disk_storage            = local.disk_storage
@@ -80,7 +80,7 @@ locals {
       node_name      = lookup(var.node_affinity, vm.name, local.available_nodes[idx % length(local.available_nodes)])
       cores          = vm.cores
       memory         = vm.memory
-      ip             = vm.ip
+      fqdn           = vm.fqdn
       disk_size      = vm.disk_size
       disk_storage   = local.disk_storage
       network_bridge = local.network_bridge
@@ -101,11 +101,11 @@ locals {
   # OPNSense API configuration for each VM
   opnsense_api_config = var.opnsense_enabled && var.opnsense_api_key != "" ? {
     for vm_name, vm_data in local.opnsense_vms_transformed : vm_name => {
-      url        = "${var.opnsense_api_protocol}://${vm_data.ip}:${var.opnsense_api_port}"
+      url        = "${var.opnsense_api_protocol}://${vm_data.fqdn}:${var.opnsense_api_port}"
       api_key    = var.opnsense_api_key
       api_secret = var.opnsense_api_secret
       insecure   = var.opnsense_api_insecure
-      ip         = vm_data.ip
+      fqdn       = vm_data.fqdn
       name       = vm_data.name
     }
   } : {}

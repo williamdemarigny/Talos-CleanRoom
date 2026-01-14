@@ -170,7 +170,7 @@ output "vm_details" {
   value = {
     for k, v in proxmox_virtual_environment_vm.vm : k => {
       vmid        = v.vm_id
-      ip          = local.all_nodes_transformed[k].ip
+      fqdn        = local.all_nodes_transformed[k].fqdn
       mac_address = v.network_device[0].mac_address
       role        = local.all_nodes_transformed[k].role
       cores       = v.cpu[0].cores
@@ -214,7 +214,7 @@ output "opnsense_vms" {
     for k, v in proxmox_virtual_environment_vm.opnsense : k => {
       vmid        = v.vm_id
       name        = v.name
-      ip          = local.opnsense_vms_transformed[k].ip
+      fqdn        = local.opnsense_vms_transformed[k].fqdn
       mac_address = v.network_device[0].mac_address
       cores       = v.cpu[0].cores
       memory      = v.memory[0].dedicated
@@ -241,8 +241,8 @@ output "opnsense_api_endpoints" {
   value = var.opnsense_enabled && var.opnsense_api_key != "" ? {
     for k, v in proxmox_virtual_environment_vm.opnsense : k => {
       name     = v.name
-      url      = "${var.opnsense_api_protocol}://${local.opnsense_vms_transformed[k].ip}:${var.opnsense_api_port}"
-      ip       = local.opnsense_vms_transformed[k].ip
+      url      = "${var.opnsense_api_protocol}://${local.opnsense_vms_transformed[k].fqdn}:${var.opnsense_api_port}"
+      fqdn     = local.opnsense_vms_transformed[k].fqdn
       port     = var.opnsense_api_port
       protocol = var.opnsense_api_protocol
       insecure = var.opnsense_api_insecure
