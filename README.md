@@ -4,381 +4,226 @@ A complete Terraform-based Infrastructure-as-Code (IaC) solution for provisionin
 
 ## Overview
 
-This project provides automated deployment and lifecycle management of a Talos Kubernetes cluster across a Proxmox cluster, with optional OPNSense firewall deployment. It includes:
+This project provides automated deployment and lifecycle management of a Talos Kubernetes cluster across a Proxmox cluster, with optional OPNSense firewall deployment. It supports two deployment strategies: IP-based and DNS/FQDN-based configurations.
 
+**Key Features:**
+
+- **Dual Deployment Strategies**: IP-based (`IAC/`) or DNS/FQDN-based (`IAC-DNS/`) infrastructure configuration
 - **OPNSense Firewall Deployment**: Optional deployment of OPNSense firewall appliances (deployed first)
 - **Cluster Provisioning**: Deploy Talos VMs across your Proxmox cluster with automatic node distribution
 - **Automatic Node Discovery**: Discovers available Proxmox nodes and distributes VMs using round-robin scheduling
-- **Flexible Configuration**: Support for control plane, worker nodes, and GPU workers
+- **Talos Configuration Management**: Automated config generation with talhelper and SOPS-encrypted secrets
+- **Bootstrap Automation**: Scripts to discover VM IPs and apply Talos configurations automatically
+- **Flexible Configuration**: Support for control plane and worker nodes
 - **Ordered Deployment**: OPNSense firewalls deploy first, followed by Talos cluster nodes
-- **Resource Outputs**: Comprehensive VM details, MAC addresses, and cluster status information
 
 ## Project Structure
 
 ```
 Talos-CleanRoom/
 ├── Resources/
-│   └── IAC/
-│       └── Terraform/
-│           └── Talos-Cluster-Create/           # Cluster provisioning module
-│               ├── variables.tf                # Variable declarations
-│               ├── main.tf                     # Provisioning resources
-│               ├── locals.tf                   # Local value definitions
-│               ├── cluster.auto.tfvars         # Cluster configuration
-│               ├── credentials.auto.tfvars     # Proxmox credentials (gitignored)
-│               ├── .terraform.lock.hcl         # Terraform lock file
-│               └── terraform.tfstate           # Terraform state
+│   ├── IAC/                                    # IP-based deployment (primary)
+│   │   ├── README.md                           # IAC-specific documentation
+│   │   ├── tfvars-to-talos-env.sh             # Generate talenv.yaml from Terraform vars
+│   │   ├── Terraform/
+│   │   │   └── Talos-Cluster-Create/          # Terraform configuration
+│   │   │       ├── main.tf                    # VM provisioning resources
+│   │   │       ├── variables.tf               # Variable declarations
+│   │   │       ├── locals.tf                  # Local value definitions
+│   │   │       ├── cluster.auto.tfvars        # Cluster configuration
+│   │   │       ├── credentials.auto.tfvars    # Proxmox credentials (gitignored)
+│   │   │       └── opnsense-configs/          # OPNSense configuration & guides
+│   │   │           ├── README.md
+│   │   │           └── QUICK-START.md
+│   │   └── talos/                             # Talos configuration
+│   │       ├── talconfig.yaml                 # Talos cluster blueprint
+│   │       ├── talsecret.sops.yaml            # SOPS-encrypted secrets
+│   │       ├── talenv.yaml                    # Generated environment variables
+│   │       ├── apply-configs.sh               # Auto-apply configs to VMs
+│   │       └── clusterconfig/                 # Generated machine configs
+│   │
+│   └── IAC-DNS/                               # DNS/FQDN-based deployment (alternative)
+│       ├── README.md                          # DNS deployment documentation
+│       ├── DNS-MAPPING.md                     # DNS to IP reference table
+│       ├── tfvars-to-talos-env.sh            # Generate talenv.yaml (FQDN version)
+│       ├── terraform/
+│       │   └── talos-cluster-create/         # Terraform configuration (FQDN)
+│       └── talos/                            # Talos configuration (FQDN)
+│           ├── talconfig.yaml
+│           ├── apply-configs.sh
+│           └── clusterconfig/
 │
-└── README.md
+├── .gitignore                                 # Excludes credentials and state files
+└── README.md                                  # This file
 ```
 
 ## Prerequisites
 
 - **Terraform** >= 1.0
 - **Proxmox VE** cluster with API access
-- **Talos ISOs** uploaded to Proxmox storage (required)
-- **OPNSense ISO** uploaded to Proxmox storage (optional, for firewall deployment)
+- **Talos ISO** uploaded to Proxmox storage (e.g., `nocloud-amd64.iso`)
+- **OPNSense Template VM** (optional, for firewall deployment)
+- **talhelper** (v3.0.45+) - Talos configuration generator
+- **talosctl** (v1.11.6+) - Talos CLI tool
+- **SOPS** (v3.11.0+) with Age encryption for secrets management
+- **jq** (v1.8.1+) - JSON processor for scripts
 - Valid Proxmox API token with VM management permissions
 
-## Quick Start
+### Network Configuration
+- **Network**: 10.83.3.0/24
+- **Gateway**: 10.83.3.1
+- **VLAN**: 3
+- **Addressing**: DNS resolution via FQDNs
 
-### 1. Configure Your Environment
+## DNS Records Required
 
-Edit `Resources/IAC/Terraform/Talos-Cluster-Create/credentials.auto.tfvars`:
+Before deploying, ensure the following DNS A records are configured:
 
-```hcl
-proxmox_api_url      = "https://your-proxmox:8006/api2/json"
-proxmox_node         = "pve01"
-proxmox_api_token    = "terraform@pve!provider=..."
-proxmox_pool         = "talos-cluster"
-proxmox_ssh_password = "..."
+### Proxmox Cluster Nodes
+```
+pve01.knowledgeondemand.net    → 10.83.2.20
+pve02.knowledgeondemand.net    → 10.83.2.21
+pve03.knowledgeondemand.net    → 10.83.2.22
+pve04.knowledgeondemand.net    → 10.83.2.23
 ```
 
-Edit `Resources/IAC/Terraform/Talos-Cluster-Create/cluster.auto.tfvars`:
-
-```hcl
-# OPNSense Firewall Configuration (Optional)
-opnsense_enabled = true
-opnsense_iso_file = "cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
-
-opnsense_vms = [
-  {
-    name        = "opnsense-fw-01"
-    vmid        = 1000
-    ip          = "10.83.3.5"
-    cores       = 2
-    memory      = 8192
-    disk_size   = "30G"
-    mac_address = "BC:24:21:F1:00:01"
-    tags        = ["opnsense", "firewall"]
-  },
-  {
-    name        = "opnsense-fw-02"
-    vmid        = 1001
-    ip          = "10.83.3.6"
-    cores       = 2
-    memory      = 8192
-    disk_size   = "30G"
-    mac_address = "BC:24:21:F1:00:02"
-    tags        = ["opnsense", "firewall"]
-  }
-]
-
-# Talos Cluster Configuration
-talos_iso_file = "cephfs:iso/talos-1.12.1.iso"
-disk_storage = "CleanRoom_Storage"
-network_bridge = "vmbr0"
-vlan_id = 3
-
-nodes = [
-  {
-    name = "talos-master-01"
-    vmid = 2000
-    role = "controlplane"
-    ip = "10.83.3.10"
-    # ... other fields
-  },
-  # ... additional nodes
-]
+### OPNsense Firewall VMs
+```
+opnsense-fw-01.knowledgeondemand.net → 10.83.3.5
+opnsense-fw-02.knowledgeondemand.net → 10.83.3.6
 ```
 
-### 2. Provision the Infrastructure
+### Talos Kubernetes Cluster
+```
+talos-CleanRoom-master-01.knowledgeondemand.net → 10.83.3.10
+talos-CleanRoom-worker-01.knowledgeondemand.net → 10.83.3.15
+talos-CleanRoom-worker-02.knowledgeondemand.net → 10.83.3.16
+talos-CleanRoom-worker-03.knowledgeondemand.net → 10.83.3.17
+```
+
+## Virtual Machines
+
+### OPNsense Firewall VMs
+| Name | VMID | FQDN | MAC | Cores | Memory | Disk |
+|------|------|------|-----|-------|--------|------|
+| opnsense-fw-01 | 1010 | opnsense-fw-01.knowledgeondemand.net | BC:24:21:F1:00:01 | 2 | 8GB | 30G |
+| opnsense-fw-02 | 1011 | opnsense-fw-02.knowledgeondemand.net | BC:24:21:F1:00:02 | 2 | 8GB | 30G |
+
+### Talos Kubernetes Cluster
+| Name | VMID | Role | FQDN | MAC | Cores | Memory | Primary Disk | Additional Disk |
+|------|------|------|------|-----|-------|--------|--------------|-----------------|
+| talos-CleanRoom-master-01 | 2000 | Control Plane | talos-CleanRoom-master-01.knowledgeondemand.net | BC:24:21:A4:B2:97 | 4 | 8GB | 30G | - |
+| talos-CleanRoom-worker-01 | 3001 | Worker | talos-CleanRoom-worker-01.knowledgeondemand.net | BC:24:21:4C:99:A1 | 4 | 8GB | 30G | 30G |
+| talos-CleanRoom-worker-02 | 3002 | Worker | talos-CleanRoom-worker-02.knowledgeondemand.net | BC:24:21:4C:99:A2 | 4 | 8GB | 30G | 30G |
+| talos-CleanRoom-worker-03 | 3003 | Worker | talos-CleanRoom-worker-03.knowledgeondemand.net | BC:24:21:4C:99:A3 | 4 | 8GB | 30G | 30G |
+
+## Directory Structure
+
+```
+Resources/IAC-DNS/
+├── terraform/
+│   └── talos-cluster-create/
+│       ├── main.tf                      # Main Terraform configuration (FQDN-based)
+│       ├── variables.tf                 # Variable definitions (FQDN fields)
+│       ├── locals.tf                    # Local values (FQDN references)
+│       ├── cluster.auto.tfvars          # Cluster configuration (FQDNs)
+│       └── credentials.auto.tfvars      # Proxmox credentials (FQDN API URL)
+├── talos/
+│   ├── talconfig.yaml                   # Talos cluster configuration (FQDN-based)
+│   ├── talsecret.sops.yaml             # SOPS-encrypted secrets
+│   ├── talenv.yaml                      # Generated environment variables (FQDNs)
+│   ├── apply-configs.sh                 # Automation script for applying configs
+│   └── clusterconfig/                   # Generated Talos machine configs
+├── tfvars-to-talos-env.sh              # Extract Terraform vars for Talos (FQDN support)
+├── DNS-MAPPING.md                       # DNS to IP address mapping reference
+└── README.md                            # This file
+```
+
+## Prerequisites
+
+### Required Tools
+- Terraform (v1.x+)
+- talhelper (v3.0.45)
+- talosctl (v1.11.6)
+- sops (v3.11.0)
+- jq (v1.8.1)
+- curl
+
+### Network Prerequisites
+1. **DNS Server**: Configured with all required A records
+2. **Network Access**: Jumpbox must be able to resolve and reach all FQDNs
+3. **DHCP**: Configured for 10.83.3.0/24 network
+4. **Firewall**: Network access from jumpbox to Proxmox cluster and VMs
+
+## Deployment Workflow
+
+### 1. Deploy Infrastructure with Terraform
 
 ```bash
-cd Resources/IAC/Terraform/Talos-Cluster-Create
+cd Resources/IAC-DNS/terraform/talos-cluster-create
 
-# Initialize Terraform
 terraform init
-
-# Review the deployment plan
-terraform plan
-
-# Deploy the infrastructure
-# Note: OPNSense VMs are deployed first, then Talos cluster nodes
-terraform apply
+terraform plan -out=".tfplan"
+terraform apply ".tfplan"
 ```
 
-**Deployment Order:**
-1. **OPNSense Firewall VMs** (if enabled) - Deployed first with VMID 1000-1001
-2. **Talos Kubernetes Cluster** - Deployed after OPNSense with dependencies
-
-**Note**: OPNSense VMs require manual installation from ISO. After Terraform creates the VMs:
-- Access each VM console in Proxmox
-- Complete manual installation (5-10 minutes per VM)
-- See [Quick Start Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/QUICK-START.md) for step-by-step instructions
-
-### 3. Destroy the Cluster (Optional)
-
-To remove all VMs and clean up resources:
+### 2. Generate Talos Configuration
 
 ```bash
-cd Resources/IAC/Terraform/Talos-Cluster-Create
+cd Resources/IAC-DNS
+./tfvars-to-talos-env.sh
 
-# Review what will be destroyed
-terraform plan -destroy
-
-# Destroy all resources
-terraform destroy
+cd talos
+export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
+talhelper gensecret > talsecret.sops.yaml
+sops -e -i talsecret.sops.yaml
+export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
+talhelper genconfig --env-file talenv.yaml
 ```
 
-## Configuration
-
-### Main Cluster Configuration
-
-Edit `cluster.auto.tfvars`:
-
-```hcl
-# Talos ISO configuration
-talos_iso_file = "cephfs:iso/talos-1.12.1.iso"
-
-# Storage configuration
-disk_storage = "CleanRoom_Storage"
-additional_disk_storage = "CleanRoom_Storage"
-
-# Network configuration
-network_bridge = "vmbr0"
-vlan_id = 3
-
-# Node definitions
-nodes = [
-  {
-    name = "talos-CleanRoom-master-01"
-    vmid = 2000
-    role = "controlplane"
-    ip = "10.83.3.10"
-    cores = 2
-    memory = 8192
-    disk_size = "30G"
-    tags = ["talos", "controlplane"]
-  },
-  # ... additional nodes
-]
-```
-
-### Credentials Configuration
-
-Create `credentials.auto.tfvars` (this file should be gitignored):
-
-```hcl
-# Proxmox API configuration
-proxmox_api_url      = "https://your-proxmox-host:8006/api2/json"
-proxmox_node         = "pve01"                    # Default node
-proxmox_api_token    = "terraform@pve!provider=..."
-proxmox_pool         = "talos-cluster"            # Optional resource pool
-proxmox_ssh_password = "your-ssh-password"        # For VM operations
-```
-
-**Important**: Never commit `credentials.auto.tfvars` to version control!
-
-## Features
-
-### OPNSense Firewall Deployment
-
-Deploy OPNSense firewall appliances before the Kubernetes cluster:
-
-```hcl
-opnsense_enabled = true
-opnsense_iso_file = "cephfs:iso/OPNSense-25.7-dvd-amd64.iso"
-
-opnsense_vms = [
-  {
-    name        = "opnsense-fw-01"
-    vmid        = 1000
-    ip          = "10.83.3.5"
-    cores       = 2
-    memory      = 8192
-    disk_size   = "30G"
-    mac_address = "BC:24:21:F1:00:01"
-    tags        = ["opnsense", "firewall"]
-  }
-]
-```
-
-**Features:**
-- Deployed before Talos cluster nodes (enforced via Terraform dependencies)
-- Connected to vmbr0 network with VLAN 3 tagging
-- 2 CPU cores, 8GB RAM, 30GB storage per VM
-- Boots from ISO for initial installation
-
-**Installation Process:**
-
-After Terraform creates the VMs, manual installation is required:
-
-1. **Access VM Console** in Proxmox for each OPNSense VM
-2. **Login** to installer: `installer` / `opnsense`
-3. **Follow Installation Wizard**:
-   - Select "Install (UFS)" or "Install (ZFS)"
-   - Configure WAN interface (vtnet0) with static IP
-   - Set root password
-   - Complete installation and reboot
-4. **See** [Quick Start Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/QUICK-START.md) for detailed step-by-step instructions
-
-**Time**: 5-10 minutes per VM (total ~20 minutes for both firewalls)
-
-### Automatic Cluster Node Discovery
-
-Automatically discovers available Proxmox nodes and distributes VMs using round-robin scheduling.
-
-### Node Affinity (Manual Pinning)
-
-Pin specific VMs to specific Proxmox nodes:
-
-```hcl
-node_affinity = {
-  "talos-CleanRoom-master-01" = "pve01"
-  "talos-CleanRoom-worker-01" = "pve02"
-}
-```
-
-### VLAN Support
-
-Configure VLAN tagging for all VMs:
-
-```hcl
-vlan_id = 3
-```
-
-### Resource Pooling
-
-VMs organized in Proxmox resource pools:
-
-```hcl
-proxmox_pool = "talos-cluster"
-```
-
-### GPU Worker Support
-
-```hcl
-talos_gpu_iso_file = "cephfs:iso/talos-1.12.1-gpu.iso"
-
-nodes = [
-  {
-    name = "talos-CleanRoom-gpu-worker-01"
-    role = "worker-gpu"
-    # ... other config
-  }
-]
-```
-
-### Additional Storage Disks
-
-```hcl
-nodes = [
-  {
-    # ... other config
-    additional_disk_size = "30G"
-  }
-]
-```
-
-## Outputs
-
-View outputs after deployment:
+### 3. Apply Talos Configs
 
 ```bash
-terraform output
+cd Resources/IAC-DNS/talos
+./apply-configs.sh --bootstrap
+
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+talosctl kubeconfig -n talos-CleanRoom-master-01 ~/.kube/config
+
+talhelper gencommand bootstrap 
+talosctl bootstrap --talosconfig=./clusterconfig/talosconfig --nodes=talos-CleanRoom-master-01;
+
+talhelper gencommand kubeconfig 
 ```
 
-Shows:
-- **opnsense_vms**: Details of deployed OPNSense firewall VMs (if enabled)
-- **deployment_order**: Order of VM deployment (OPNSense first, then Talos)
-- **vm_mac_addresses**: MAC addresses for all Talos VMs
-- **vm_details**: Complete VM information (VMID, name, IP, role, Proxmox node, specs)
-- **node_roles**: Summary of nodes by role (controlplane, worker, worker-gpu)
-- **cluster_status**: Overall cluster configuration and health
-- **vm_distribution**: How VMs are distributed across Proxmox nodes
+### 4. Verify Deployment
 
-## Best Practices
+```bash
+kubectl get nodes
+kubectl get pods -A
+```
 
-1. **Always run `terraform plan` before `terraform apply`** to review changes
-2. **Keep `credentials.auto.tfvars` secure and gitignored** - never commit credentials
-3. **Use resource pools** for VM organization in Proxmox
-4. **Test in non-production** before deploying to production clusters
-5. **Document configuration changes** for team visibility
-6. **Review node distribution** to ensure balanced VM placement across Proxmox nodes
-7. **Use VLAN tagging** for network isolation when running multiple clusters
+## Benefits of DNS-Based Deployment
 
-## Security Considerations
-
-- ✅ **Sensitive variables**: API tokens and passwords marked as sensitive in Terraform
-- ✅ **Separate credentials file**: Credentials isolated in `credentials.auto.tfvars`
-- ✅ **Gitignore configured**: Credentials file pattern added to `.gitignore`
-- ⚠️ **Secret management**: For CI/CD pipelines, use proper secret management (HashiCorp Vault, AWS Secrets Manager, etc.)
-- ⚠️ **State file security**: Terraform state files contain sensitive data - store in secure backend (S3 with encryption, Terraform Cloud, etc.)
-- ⚠️ **Network security**: Ensure Proxmox API is accessible only from trusted networks
-- ⚠️ **API token permissions**: Use minimal required permissions for Terraform API tokens
+1. **Portability**: Deploy from workstation or jumpbox without code changes
+2. **Flexibility**: IP addresses can change without modifying infrastructure code
+3. **Maintainability**: Centralized DNS management
+4. **Scalability**: Easier to add/move nodes
+5. **Network Integration**: Better integration with existing network infrastructure
 
 ## Troubleshooting
 
+See [DNS-MAPPING.md](DNS-MAPPING.md) for complete DNS to IP address mappings.
+
 ### Common Issues
 
-**OPNSense VM Issues**
-- **ISO boots to installer**: This is expected - complete manual installation via console
-  - Login: `installer` / `opnsense`
-  - Follow wizard to install to disk
-  - See [Installation Guide](Resources/IAC/Terraform/Talos-Cluster-Create/opnsense-configs/README.md)
-- **VM keeps booting to installer**: Change boot order (Disk before CD-ROM) in Proxmox
-- **Cannot access web UI**:
-  - Ensure installation completed and VM rebooted from disk
-  - Access at `https://10.83.3.5` or `https://10.83.3.6`
-  - Default credentials: `root` / `opnsense`
-- **Network not configured**: Manually configure WAN interface (vtnet0) with static IP during install
-- **Ensure OPNSense ISO exists** at specified path on cephfs storage
-- **Verify VMIDs 1000-1001** are not already in use
+- **DNS Resolution**: Verify all FQDNs resolve correctly with `nslookup`
+- **Network Access**: Ensure jumpbox can reach all hosts
+- **Credentials**: Update `credentials.auto.tfvars` with correct Proxmox API URL
 
-**VM Creation Fails**
-- Verify Proxmox API token has correct permissions
-- Ensure ISO files exist at the specified storage location
-- Check that target storage has sufficient space
-- Verify VLAN ID exists on the network bridge
-
-**Node Distribution Issues**
-- Check that Proxmox cluster nodes are online and accessible
-- Verify `proxmox_node` variable matches an available node
-- Review `node_affinity` configuration for conflicts
-
-**Network Configuration Problems**
-- Ensure VLAN ID is valid (1-4094)
-- Verify network bridge exists on all Proxmox nodes
-- Check that IP addresses don't conflict with existing VMs
-
-**State File Conflicts**
-- Use remote state backend for team collaboration
-- Run `terraform refresh` to sync state with actual infrastructure
-- Consider `terraform import` for existing resources
-
-## Additional Resources
+## References
 
 - [Talos Linux Documentation](https://www.talos.dev/)
-- [OPNSense Documentation](https://docs.opnsense.org/)
-- [Proxmox VE API Documentation](https://pve.proxmox.com/pve-docs/api-viewer/)
-- [Terraform Proxmox Provider](https://github.com/bpg/terraform-provider-proxmox)
-
----
-
-**Last Updated**: January 2026
-**Terraform Version**: >= 1.0
-**Proxmox Provider Version**: 0.82.1
-**Talos Version**: v1.12.1
-**OPNSense Version**: 25.7
-
+- [Proxmox Terraform Provider](https://registry.terraform.io/providers/bpg/proxmox/latest/docs)
+- [talhelper Documentation](https://github.com/budimanjojo/talhelper)
+- [SOPS Documentation](https://github.com/getsops/sops)
