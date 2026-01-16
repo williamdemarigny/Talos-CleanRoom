@@ -28,6 +28,8 @@ TFVARS_FILE="terraform/talos-cluster-create/cluster.auto.tfvars"
 OUTPUT_FILE="talos/talenv.yaml"
 OUTPUT_FORMAT="yaml"
 VERBOSE=true
+BACKUP=false
+FORCE=false
 
 # Show usage
 usage() {
@@ -41,11 +43,19 @@ OPTIONS:
     -h, --help              Show this help message
     -o, --output FILE       Output to file (default: talos/talenv.yaml)
     -f, --format FORMAT     Output format: yaml|shell (default: yaml)
-    -v, --verbose          Enable verbose output
+    -v, --verbose           Enable verbose output
+    -b, --backup            Create backup of existing file before overwriting
+    --force                 Overwrite existing file without confirmation
 
 EXAMPLES:
     # Generate talenv.yaml for talhelper
     $0
+
+    # Generate with backup of existing file
+    $0 --backup
+
+    # Overwrite without confirmation (for scripts/CI)
+    $0 --force
 
     # Generate shell exports (legacy)
     $0 -f shell
@@ -75,6 +85,14 @@ while [[ $# -gt 0 ]]; do
             VERBOSE=true
             shift
             ;;
+        -b|--backup)
+            BACKUP=true
+            shift
+            ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
         -*)
             echo "Unknown option: $1" >&2
             usage
@@ -92,6 +110,49 @@ if [[ ! -f "$TFVARS_FILE" ]]; then
     echo "Error: Terraform vars file '$TFVARS_FILE' not found" >&2
     exit 1
 fi
+
+# Function to create backup of existing file
+create_backup() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local backup_file="${file}.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$file" "$backup_file"
+        print_info "Backup created: $backup_file"
+    fi
+}
+
+# Function to prompt for confirmation
+confirm_overwrite() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        echo -e "${YELLOW}[WARNING]${NC} File '$file' already exists."
+        read -p "Overwrite? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Aborted. Use --force to skip confirmation or --backup to create a backup."
+            exit 1
+        fi
+    fi
+}
+
+# Function to perform atomic write (write to temp file, then move)
+atomic_write() {
+    local target_file="$1"
+    local temp_file
+    temp_file=$(mktemp "${target_file}.tmp.XXXXXX")
+
+    # Generate content to temp file
+    if generate_env_vars > "$temp_file"; then
+        # Move temp file to target (atomic operation)
+        mv "$temp_file" "$target_file"
+        return 0
+    else
+        # Clean up temp file on failure
+        rm -f "$temp_file"
+        echo "Error: Failed to generate configuration" >&2
+        return 1
+    fi
+}
 
 if [[ "$VERBOSE" == true ]]; then
     print_info "Processing: $TFVARS_FILE"
@@ -389,22 +450,57 @@ if [[ "$OUTPUT_FORMAT" == "yaml" ]]; then
         # Create talos directory if it doesn't exist
         mkdir -p "$(dirname "$OUTPUT_FILE")"
     fi
-    generate_env_vars > "$OUTPUT_FILE"
-    print_success "talenv.yaml generated: $OUTPUT_FILE"
-    if [[ "$VERBOSE" == true ]]; then
-        print_warning "Next steps:"
-        echo "  cd talos && talhelper genconfig --env-file talenv.yaml"
+
+    # Check for existing file and handle accordingly
+    if [[ -f "$OUTPUT_FILE" ]]; then
+        # Create backup if requested
+        if [[ "$BACKUP" == true ]]; then
+            create_backup "$OUTPUT_FILE"
+        fi
+
+        # Prompt for confirmation unless --force is used
+        if [[ "$FORCE" != true ]]; then
+            confirm_overwrite "$OUTPUT_FILE"
+        fi
+    fi
+
+    # Use atomic write to safely generate the file
+    if atomic_write "$OUTPUT_FILE"; then
+        print_success "talenv.yaml generated: $OUTPUT_FILE"
+        if [[ "$VERBOSE" == true ]]; then
+            print_warning "Next steps:"
+            echo "  cd talos && talhelper genconfig --env-file talenv.yaml"
+        fi
+    else
+        exit 1
     fi
 else
     # Shell export format
     if [[ -n "$OUTPUT_FILE" ]]; then
-        generate_env_vars > "$OUTPUT_FILE"
-        print_success "Environment variables written to: $OUTPUT_FILE"
-        print_warning "Source the file with: source $OUTPUT_FILE"
+        # Check for existing file and handle accordingly
+        if [[ -f "$OUTPUT_FILE" ]]; then
+            # Create backup if requested
+            if [[ "$BACKUP" == true ]]; then
+                create_backup "$OUTPUT_FILE"
+            fi
+
+            # Prompt for confirmation unless --force is used
+            if [[ "$FORCE" != true ]]; then
+                confirm_overwrite "$OUTPUT_FILE"
+            fi
+        fi
+
+        # Use atomic write to safely generate the file
+        if atomic_write "$OUTPUT_FILE"; then
+            print_success "Environment variables written to: $OUTPUT_FILE"
+            print_warning "Source the file with: source $OUTPUT_FILE"
+        else
+            exit 1
+        fi
     else
         generate_env_vars
     fi
-    
+
     if [[ "$VERBOSE" == true ]]; then
         print_success "Environment variables generated!"
         echo ""

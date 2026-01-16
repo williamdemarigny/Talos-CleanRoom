@@ -1,7 +1,7 @@
 locals {
   # Base configuration values - use reasonable defaults and derive from node data
   cluster_name  = "proxmox-talos-cluster"
-  talos_version = "v1.12.1" # Match the ISO version
+  talos_version = "v1.11.0" # Match the talconfig.yaml version
   cni_name      = "cilium"
 
   # Network configuration - using FQDN-based addressing

@@ -96,23 +96,20 @@ controlPlane:
               [plugins."io.containerd.cri.v1.runtime"]
                 [plugins."io.containerd.cri.v1.runtime".containerd]
                   default_runtime_name = "runc"
+  # Machine certificate SANs (allows connection via FQDN)
+  - |-
+    machine:
+      certSANs:
+        - ${TALOS_CONTROL_PLANE_FQDN_0}
   # Cluster configuration
   - |-
     cluster:
       controllerManager:
         extraArgs:
           bind-address: 0.0.0.0
-      proxy:
-        disabled: true
       scheduler:
         extraArgs:
           bind-address: 0.0.0.0
-  # CNI configuration
-  - |-
-    cluster:
-      network:
-        cni:
-          name: none
   # Node labels for control plane nodes that should not be load balancers
   - |-
     machine:
@@ -126,6 +123,11 @@ controlPlane:
 # Worker specific configuration
 worker:
   patches:
+  # Pin worker install image to match control plane schematic
+  - |-
+    machine:
+      install:
+        image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.11.0
   # Longhorn storage configuration
   - |-
     machine:

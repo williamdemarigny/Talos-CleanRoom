@@ -22,9 +22,9 @@ This directory contains a DNS-based version of the Infrastructure as Code, allow
 | FQDN | IP Address | Role | MAC Address |
 |------|------------|------|-------------|
 | talos-CleanRoom-master-01.knowledgeondemand.net | 10.83.3.10 | Control Plane | BC:24:21:A4:B2:97 |
-| talos-CleanRoom-worker-02.knowledgeondemand.net | 10.83.3.15 | Worker | BC:24:21:4C:99:A1 |
-| talos-CleanRoom-worker-03.knowledgeondemand.net | 10.83.3.16 | Worker | BC:24:21:4C:99:A2 |
-| talos-CleanRoom-worker-04.knowledgeondemand.net | 10.83.3.17 | Worker | BC:24:21:4C:99:A3 |
+| talos-CleanRoom-worker-01.knowledgeondemand.net | 10.83.3.15 | Worker | BC:24:21:4C:99:A1 |
+| talos-CleanRoom-worker-02.knowledgeondemand.net | 10.83.3.16 | Worker | BC:24:21:4C:99:A2 |
+| talos-CleanRoom-worker-03.knowledgeondemand.net | 10.83.3.17 | Worker | BC:24:21:4C:99:A3 |
 
 ## Key Changes from IP-based Configuration
 
@@ -60,10 +60,3 @@ The deployment workflow remains the same as the IP-based configuration:
 2. Generate Talos configuration using the updated scripts
 3. Apply Talos configs (VMs will use DHCP + DNS)
 4. Bootstrap the cluster
-
-## Benefits of DNS-based Addressing
-
-- **Portability**: Can run from any machine with DNS access (workstation or jumpbox)
-- **Flexibility**: IP addresses can change without modifying code
-- **Maintainability**: Centralized DNS management
-- **Scalability**: Easier to add/move nodes without code changes
