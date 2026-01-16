@@ -1,13 +1,3 @@
-# Talos Kubernetes Cluster on Proxmox - DNS-Based Infrastructure as Code
-
-This directory contains a DNS-based version of the Infrastructure as Code (IaC) for deploying a Talos Linux Kubernetes cluster on Proxmox, with OPNsense firewall VMs. This version uses Fully Qualified Domain Names (FQDNs) instead of IP addresses, enabling deployment from a jumpbox within the network.
-
-## Key Differences from IP-Based Configuration
-
-### Architecture
-- **IP-Based (Resources/IAC)**: Hardcoded IP addresses, designed for workstation deployment
-- **DNS-Based (Resources/IAC-DNS)**: FQDN-based addressing, designed for jumpbox deployment within the network
-
 ### Network Configuration
 - **Network**: 10.83.3.0/24
 - **Gateway**: 10.83.3.1
@@ -51,10 +41,10 @@ talos-CleanRoom-worker-03.knowledgeondemand.net → 10.83.3.17
 ### Talos Kubernetes Cluster
 | Name | VMID | Role | FQDN | MAC | Cores | Memory | Primary Disk | Additional Disk |
 |------|------|------|------|-----|-------|--------|--------------|-----------------|
-| talos-CleanRoom-master-01 | 2000 | Control Plane | talos-CleanRoom-master-01.knowledgeondemand.net | BC:24:21:A4:B2:97 | 2 | 8GB | 30G | - |
-| talos-CleanRoom-worker-01 | 3001 | Worker | talos-CleanRoom-worker-01.knowledgeondemand.net | BC:24:21:4C:99:A1 | 2 | 8GB | 30G | 30G |
-| talos-CleanRoom-worker-02 | 3002 | Worker | talos-CleanRoom-worker-02.knowledgeondemand.net | BC:24:21:4C:99:A2 | 2 | 8GB | 30G | 30G |
-| talos-CleanRoom-worker-03 | 3003 | Worker | talos-CleanRoom-worker-03.knowledgeondemand.net | BC:24:21:4C:99:A3 | 2 | 8GB | 30G | 30G |
+| talos-CleanRoom-master-01 | 2000 | Control Plane | talos-CleanRoom-master-01.knowledgeondemand.net | BC:24:21:A4:B2:97 | 4 | 8GB | 30G | - |
+| talos-CleanRoom-worker-01 | 3001 | Worker | talos-CleanRoom-worker-01.knowledgeondemand.net | BC:24:21:4C:99:A1 | 4 | 8GB | 30G | 30G |
+| talos-CleanRoom-worker-02 | 3002 | Worker | talos-CleanRoom-worker-02.knowledgeondemand.net | BC:24:21:4C:99:A2 | 4 | 8GB | 30G | 30G |
+| talos-CleanRoom-worker-03 | 3003 | Worker | talos-CleanRoom-worker-03.knowledgeondemand.net | BC:24:21:4C:99:A3 | 4 | 8GB | 30G | 30G |
 
 ## Directory Structure
 
@@ -113,6 +103,10 @@ cd Resources/IAC-DNS
 ./tfvars-to-talos-env.sh
 
 cd talos
+export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
+talhelper gensecret > talsecret.sops.yaml
+sops -e -i talsecret.sops.yaml
+export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
 talhelper genconfig --env-file talenv.yaml
 ```
 
@@ -121,12 +115,19 @@ talhelper genconfig --env-file talenv.yaml
 ```bash
 cd Resources/IAC-DNS/talos
 ./apply-configs.sh --bootstrap
+
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+talosctl kubeconfig -n talos-CleanRoom-master-01 ~/.kube/config
+
+talhelper gencommand bootstrap 
+talosctl bootstrap --talosconfig=./clusterconfig/talosconfig --nodes=talos-CleanRoom-master-01;
+
+talhelper gencommand kubeconfig 
 ```
 
 ### 4. Verify Deployment
 
 ```bash
-talosctl health
 kubectl get nodes
 kubectl get pods -A
 ```

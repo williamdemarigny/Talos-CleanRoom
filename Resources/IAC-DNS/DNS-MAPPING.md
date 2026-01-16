@@ -1,7 +1,3 @@
-# DNS Address Mapping for IAC-DNS
-
-This directory contains a DNS-based version of the Infrastructure as Code, allowing deployment from a jumpbox within the network.
-
 ## DNS to IP Address Mapping
 
 ### Proxmox Nodes
@@ -26,25 +22,6 @@ This directory contains a DNS-based version of the Infrastructure as Code, allow
 | talos-CleanRoom-worker-02.knowledgeondemand.net | 10.83.3.16 | Worker | BC:24:21:4C:99:A2 |
 | talos-CleanRoom-worker-03.knowledgeondemand.net | 10.83.3.17 | Worker | BC:24:21:4C:99:A3 |
 
-## Key Changes from IP-based Configuration
-
-### Terraform Files
-- **credentials.auto.tfvars**: Proxmox API URL changed from IP to FQDN (`pve01.knowledgeondemand.net`)
-- **cluster.auto.tfvars**: All node and VM definitions now use `fqdn` field instead of `ip`
-- **variables.tf**: Variable definitions updated to use `fqdn` instead of `ip`
-- **locals.tf**: Network configuration uses static values, FQDNs referenced for cluster endpoint
-- **main.tf**: Outputs updated to display FQDNs instead of IPs
-
-### Talos Configuration Files
-- **talconfig.yaml**:
-  - Cluster endpoint uses FQDN variable `${CONTROL_PLANE_ENDPOINT_FQDN}`
-  - Node `ipAddress` fields use FQDN variables (e.g., `${TALOS_CONTROL_PLANE_FQDN_0}`)
-  - Network interfaces set to `dhcp: true` (DNS resolution handles addressing)
-- **talenv.yaml**: All IP variables converted to FQDN variables
-
-### Scripts
-- **tfvars-to-talos-env.sh**: Updated to extract and process FQDNs instead of IPs
-
 ## Prerequisites for DNS-based Deployment
 
 1. **DNS Configuration**: All FQDNs must be resolvable in your network
@@ -52,11 +29,4 @@ This directory contains a DNS-based version of the Infrastructure as Code, allow
 3. **Network Access**: The jumpbox must have network access to all FQDNs
 4. **DHCP Configuration**: Ensure DHCP is properly configured for the 10.83.3.0/24 network
 
-## Deployment Workflow
 
-The deployment workflow remains the same as the IP-based configuration:
-
-1. Deploy infrastructure with Terraform from the jumpbox
-2. Generate Talos configuration using the updated scripts
-3. Apply Talos configs (VMs will use DHCP + DNS)
-4. Bootstrap the cluster
