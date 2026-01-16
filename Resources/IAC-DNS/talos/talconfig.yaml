@@ -128,6 +128,11 @@ worker:
     machine:
       install:
         image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.11.0
+  # Add worker role label for kubectl display
+  - |-
+    machine:
+      nodeLabels:
+        node-role.kubernetes.io/worker: ""
   # Longhorn storage configuration
   - |-
     machine:
