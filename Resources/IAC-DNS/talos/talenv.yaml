@@ -1,6 +1,6 @@
 # talenv.yaml - Talos environment variables for talhelper
 # Extracted from terraform/talos-cluster-create/cluster.auto.tfvars
-# Generated on Tue, Jan 13, 2026 10:33:22 AM
+# Generated on Thu, Jan 15, 2026 10:04:00 PM
 
 # Network Configuration
 GATEWAY_IP: "10.83.3.1"
@@ -21,14 +21,14 @@ OPNSENSE_VMID_1: "1011"
 TALOS_CONTROL_PLANE_FQDN_0: "talos-CleanRoom-master-01.knowledgeondemand.net"
 TALOS_CONTROL_PLANE_MAC_0: "BC:24:21:A4:B2:97"
 TALOS_CONTROL_PLANE_NAME_0: "talos-CleanRoom-master-01"
-TALOS_WORKER_FQDN_1: "talos-CleanRoom-worker-02.knowledgeondemand.net"
+TALOS_WORKER_FQDN_1: "talos-CleanRoom-worker-01.knowledgeondemand.net"
 TALOS_WORKER_MAC_1: "BC:24:21:4C:99:A1"
 TALOS_WORKER_NAME_1: "talos-CleanRoom-worker-01"
-TALOS_WORKER_FQDN_2: "talos-CleanRoom-worker-03.knowledgeondemand.net"
-TALOS_WORKER_MAC_2: "BC:24:21:4C:99:A3"
+TALOS_WORKER_FQDN_2: "talos-CleanRoom-worker-02.knowledgeondemand.net"
+TALOS_WORKER_MAC_2: "BC:24:21:4C:99:A2"
 TALOS_WORKER_NAME_2: "talos-CleanRoom-worker-02"
-TALOS_WORKER_FQDN_3: "talos-CleanRoom-worker-04.knowledgeondemand.net"
-TALOS_WORKER_MAC_3: "BC:24:21:4C:99:A4"
+TALOS_WORKER_FQDN_3: "talos-CleanRoom-worker-03.knowledgeondemand.net"
+TALOS_WORKER_MAC_3: "BC:24:21:4C:99:A3"
 TALOS_WORKER_NAME_3: "talos-CleanRoom-worker-03"
 
 # Usage with talhelper:

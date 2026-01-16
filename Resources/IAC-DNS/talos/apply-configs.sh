@@ -234,7 +234,7 @@ fi
 print_info "Loading VM information from $TFVARS_FILE"
 echo ""
 
-CONTROL_PLANE_STATIC_IP=""
+CONTROL_PLANE_ENDPOINT=""
 declare -a APPLIED_VMS
 
 # Extract and process nodes from tfvars
@@ -262,11 +262,20 @@ while IFS= read -r line; do
             name=$(echo "$current_node" | sed -n 's/.*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
             vmid=$(echo "$current_node" | sed -n 's/.*vmid[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p')
             role=$(echo "$current_node" | sed -n 's/.*role[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
-            static_ip=$(echo "$current_node" | sed -n 's/.*ip[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
+            # Support both IP-based and FQDN-based configurations
+            # Use negative lookbehind pattern to avoid matching 'fqdn' when looking for 'ip'
+            static_ip=$(echo "$current_node" | grep -oP '(?<!fq)ip\s*=\s*"\K[^"]+' || true)
+            fqdn=$(echo "$current_node" | sed -n 's/.*fqdn[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
+            # Use FQDN if IP is not available (DNS-based configuration)
+            target_endpoint="${static_ip:-$fqdn}"
 
             if [[ -n "$name" && -n "$vmid" ]]; then
                 print_info "Processing VM: $name (VMID: $vmid, Role: $role)"
-                print_info "  Target static IP: $static_ip"
+                if [[ -n "$fqdn" ]]; then
+                    print_info "  Target FQDN: $fqdn"
+                else
+                    print_info "  Target static IP: $static_ip"
+                fi
 
                 # Find which Proxmox node hosts this VM
                 node=$(find_vm_node "$vmid" || true)
@@ -292,9 +301,9 @@ while IFS= read -r line; do
 
                 print_success "  Current DHCP IP: $dhcp_ip"
 
-                # Save control plane info for bootstrap
+                # Save control plane info for bootstrap (use FQDN or IP)
                 if [[ "$role" == "controlplane" ]]; then
-                    CONTROL_PLANE_STATIC_IP="$static_ip"
+                    CONTROL_PLANE_ENDPOINT="$target_endpoint"
                 fi
 
                 # Find corresponding config file
@@ -315,8 +324,8 @@ while IFS= read -r line; do
                     print_info "  Applying configuration..."
                     if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
                         print_success "  Config applied successfully!"
-                        print_info "  VM will reboot and come up with static IP: $static_ip"
-                        APPLIED_VMS+=("$name:$dhcp_ip:$static_ip")
+                        print_info "  VM will reboot and come up at: $target_endpoint"
+                        APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                     else
                         print_error "  Failed to apply config"
                     fi
@@ -331,22 +340,22 @@ while IFS= read -r line; do
 done < "$TFVARS_FILE"
 
 # Bootstrap cluster if requested
-if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_STATIC_IP" ]]; then
+if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
     echo ""
-    print_info "Waiting 60 seconds for VMs to reboot with static IPs..."
+    print_info "Waiting 60 seconds for VMs to reboot and become available..."
 
     if [[ "$DRY_RUN" == true ]]; then
-        print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_STATIC_IP"
+        print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
         sleep 60
 
-        print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_STATIC_IP"
-        if talosctl bootstrap --nodes "$CONTROL_PLANE_STATIC_IP" --endpoints "$CONTROL_PLANE_STATIC_IP"; then
+        print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
+        if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
             print_success "Cluster bootstrapped successfully!"
             echo ""
             print_info "Configure talosctl context:"
-            print_info "  talosctl config endpoint $CONTROL_PLANE_STATIC_IP"
-            print_info "  talosctl config node $CONTROL_PLANE_STATIC_IP"
+            print_info "  talosctl config endpoint $CONTROL_PLANE_ENDPOINT"
+            print_info "  talosctl config node $CONTROL_PLANE_ENDPOINT"
         else
             print_error "Failed to bootstrap cluster"
         fi
@@ -360,15 +369,15 @@ if [[ "$DRY_RUN" == false && ${#APPLIED_VMS[@]} -gt 0 ]]; then
     echo ""
     print_info "Summary of applied configs:"
     for vm_info in "${APPLIED_VMS[@]}"; do
-        IFS=':' read -r name dhcp_ip static_ip <<< "$vm_info"
-        echo "  - $name: $dhcp_ip → $static_ip"
+        IFS=':' read -r name dhcp_ip target <<< "$vm_info"
+        echo "  - $name: $dhcp_ip → $target"
     done
 
     echo ""
     print_info "Next steps:"
     print_info "  1. Wait for VMs to reboot (1-2 minutes)"
-    print_info "  2. Verify connectivity: talosctl --nodes $CONTROL_PLANE_STATIC_IP health"
+    print_info "  2. Verify connectivity: talosctl --nodes $CONTROL_PLANE_ENDPOINT health"
     if [[ "$BOOTSTRAP" == false ]]; then
-        print_info "  3. Bootstrap cluster: talosctl bootstrap --nodes $CONTROL_PLANE_STATIC_IP --endpoints $CONTROL_PLANE_STATIC_IP"
+        print_info "  3. Bootstrap cluster: talosctl bootstrap --nodes $CONTROL_PLANE_ENDPOINT --endpoints $CONTROL_PLANE_ENDPOINT"
     fi
 fi
