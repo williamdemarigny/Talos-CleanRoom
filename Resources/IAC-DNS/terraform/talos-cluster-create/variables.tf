@@ -178,3 +178,28 @@ variable "opnsense_api_insecure" {
   type        = bool
   default     = false
 }
+
+# High Availability Configuration
+variable "ha_enabled" {
+  description = "Enable Proxmox High Availability for Talos VMs."
+  type        = bool
+  default     = true
+}
+
+variable "ha_group" {
+  description = "HA group name for Talos VMs. Leave empty to not assign a specific group."
+  type        = string
+  default     = ""
+}
+
+variable "ha_max_relocate" {
+  description = "Maximum number of relocations for HA resources."
+  type        = number
+  default     = 3
+}
+
+variable "ha_max_restart" {
+  description = "Maximum number of restart attempts for HA resources."
+  type        = number
+  default     = 3
+}

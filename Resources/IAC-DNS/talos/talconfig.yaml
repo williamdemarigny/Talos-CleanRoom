@@ -57,12 +57,6 @@ nodes:
 
 # Global patches
 patches:
-# Enable QEMU Guest Agent (extension is included in the Image Factory schematic)
-- |-
-  machine:
-    features:
-      qemuGuestAgent:
-        enabled: true
 # Network configuration
 - |-
   machine:
