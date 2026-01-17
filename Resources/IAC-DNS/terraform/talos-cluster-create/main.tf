@@ -158,6 +158,32 @@ resource "proxmox_virtual_environment_vm" "vm" {
   ]
 }
 
+# High Availability configuration for Talos VMs
+resource "proxmox_virtual_environment_haresource" "talos_ha" {
+  for_each = var.ha_enabled ? local.all_nodes_transformed : {}
+
+  resource_id  = "vm:${proxmox_virtual_environment_vm.vm[each.key].vm_id}"
+  state        = "started"
+  group        = var.ha_group != "" ? var.ha_group : null
+  max_relocate = var.ha_max_relocate
+  max_restart  = var.ha_max_restart
+
+  depends_on = [proxmox_virtual_environment_vm.vm]
+}
+
+# High Availability configuration for OPNSense VMs
+resource "proxmox_virtual_environment_haresource" "opnsense_ha" {
+  for_each = var.ha_enabled && var.opnsense_enabled ? local.opnsense_vms_transformed : {}
+
+  resource_id  = "vm:${proxmox_virtual_environment_vm.opnsense[each.key].vm_id}"
+  state        = "started"
+  group        = var.ha_group != "" ? var.ha_group : null
+  max_relocate = var.ha_max_relocate
+  max_restart  = var.ha_max_restart
+
+  depends_on = [proxmox_virtual_environment_vm.opnsense]
+}
+
 output "vm_mac_addresses" {
   description = "MAC addresses of the created VMs."
   value = {
@@ -254,4 +280,29 @@ output "opnsense_api_configured" {
   description = "Indicates whether OPNSense API credentials are configured."
   sensitive   = true
   value       = var.opnsense_enabled && var.opnsense_api_key != "" && var.opnsense_api_secret != ""
+}
+
+# High Availability Outputs
+output "ha_status" {
+  description = "High Availability configuration status for all VMs."
+  value = var.ha_enabled ? {
+    enabled = true
+    group   = var.ha_group != "" ? var.ha_group : "default"
+    talos_vms = {
+      for k, v in proxmox_virtual_environment_haresource.talos_ha : k => {
+        resource_id  = v.resource_id
+        state        = v.state
+        max_relocate = v.max_relocate
+        max_restart  = v.max_restart
+      }
+    }
+    opnsense_vms = var.opnsense_enabled ? {
+      for k, v in proxmox_virtual_environment_haresource.opnsense_ha : k => {
+        resource_id  = v.resource_id
+        state        = v.state
+        max_relocate = v.max_relocate
+        max_restart  = v.max_restart
+      }
+    } : {}
+  } : { enabled = false }
 }
