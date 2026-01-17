@@ -5,7 +5,7 @@
 # OPNSense Firewall Configuration
 # ============================================================================
 # Enable OPNSense firewall deployment (deployed before Talos cluster)
-opnsense_enabled = true
+opnsense_enabled = false
 
 # OPNSense template configuration (cloned from existing template VM)
 # IMPORTANT: Specify the node where template VM 1000 is located
@@ -45,10 +45,8 @@ opnsense_vms = [
 # Confirm filenames match Proxmox storage list.
 #talos_iso_file = "cephfs:iso/talos-1.12.1.iso" # Standard Talos ISO
 talos_iso_file = "cephfs:iso/nocloud-amd64.iso" # Standard Talos ISO
-#talos_gpu_iso_file = "cephfs:iso/talos-1.12.1-gpu.iso"     # GPU-enabled Talos ISO (optional)
 
 # Primary system disk datastore id (Proxmox storage ID)
-# Choices visible on node: e.g. local, local-zfs, zfs1, zfs2, zfs3
 disk_storage = "CleanRoom_Storage"
 
 # Datastore for additional data disks (if nodes define additional_disk_size)
@@ -60,7 +58,7 @@ network_bridge = "vmbr0"
 # Cluster node definitions (MACs preserved for router/DHCP reservations)
 # Fields:
 # - vmid: unique VM ID per Proxmox node
-# - role: controlplane | worker | worker-gpu (determines Talos extensions if you template later)
+# - role: controlplane | worker
 # - additional_disk_size: optional extra raw disk (size in G) for data/storage layers
 # NOTE: Ensure IPs match your network plan and do not conflict.
 
