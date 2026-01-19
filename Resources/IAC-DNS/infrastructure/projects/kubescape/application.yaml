@@ -1,0 +1,142 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubescape
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+spec:
+  project: default
+  source:
+    repoURL: https://kubescape.github.io/helm-charts
+    targetRevision: 1.19.4
+    chart: kubescape-operator
+    helm:
+      valuesObject:
+        # Global settings
+        global:
+          networkPolicy:
+            enabled: false
+
+        # Kubescape scanner configuration
+        kubescape:
+          enabled: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          serviceMonitor:
+            enabled: false
+
+        # Operator configuration
+        operator:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # Kubevuln - vulnerability scanning
+        kubevuln:
+          enabled: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+
+        # Storage configuration
+        storage:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # Kollector - runtime data collection
+        kollector:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # Gateway configuration
+        gateway:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        # Host scanner for node-level scanning
+        hostScanner:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # Grype offline DB
+        grypeOfflineDB:
+          enabled: false
+
+        # Capabilities configuration
+        capabilities:
+          configurationScan: enable
+          vulnerabilityScan: enable
+          nodeScan: enable
+          relevancy: enable
+          runtimeDetection: disable
+          networkPolicyService: disable
+          continuousScan: enable
+
+        # Scheduling settings - daily at 2 AM
+        triggerSecurityFramework:
+          schedule: "0 2 * * *"
+
+        # Tolerations for control plane nodes
+        tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+          - key: node-role.kubernetes.io/master
+            operator: Exists
+            effect: NoSchedule
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubescape
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

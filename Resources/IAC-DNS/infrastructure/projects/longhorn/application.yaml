@@ -1,0 +1,115 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: longhorn
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+spec:
+  project: default
+  source:
+    repoURL: https://charts.longhorn.io
+    targetRevision: 1.7.2
+    chart: longhorn
+    helm:
+      valuesObject:
+        # Default settings
+        defaultSettings:
+          # Default replica count for volumes
+          defaultReplicaCount: 2
+          # Default data path on nodes
+          defaultDataPath: /var/lib/longhorn
+          # Storage over-provisioning percentage
+          storageOverProvisioningPercentage: 200
+          # Storage minimal available percentage
+          storageMinimalAvailablePercentage: 15
+          # Default data locality
+          defaultDataLocality: best-effort
+          # Replica soft anti-affinity
+          replicaSoftAntiAffinity: true
+          # Node down pod deletion policy
+          nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+          # Guaranteed instance manager CPU
+          guaranteedInstanceManagerCPU: 12
+          # Auto cleanup system generated snapshot
+          autoCleanupSystemGeneratedSnapshot: true
+          # Auto delete pod when volume detached unexpectedly
+          autoDeletePodWhenVolumeDetachedUnexpectedly: true
+
+        # Persistence settings
+        persistence:
+          # Default storage class
+          defaultClass: true
+          defaultClassReplicaCount: 2
+          defaultFsType: ext4
+          reclaimPolicy: Delete
+
+        # CSI settings
+        csi:
+          attacherReplicaCount: 2
+          provisionerReplicaCount: 2
+          resizerReplicaCount: 2
+          snapshotterReplicaCount: 2
+
+        # Longhorn Manager
+        longhornManager:
+          priorityClass: ~
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+
+        # Longhorn Driver
+        longhornDriver:
+          priorityClass: ~
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+
+        # Longhorn UI
+        longhornUI:
+          replicas: 1
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+
+        # Ingress for Longhorn UI (disabled by default)
+        ingress:
+          enabled: false
+          host: longhorn.knowledgeondemand.net
+
+        # Resources
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: longhorn-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
