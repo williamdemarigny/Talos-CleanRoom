@@ -283,26 +283,31 @@ output "opnsense_api_configured" {
 }
 
 # High Availability Outputs
-output "ha_status" {
-  description = "High Availability configuration status for all VMs."
-  value = var.ha_enabled ? {
-    enabled = true
-    group   = var.ha_group != "" ? var.ha_group : "default"
-    talos_vms = {
-      for k, v in proxmox_virtual_environment_haresource.talos_ha : k => {
-        resource_id  = v.resource_id
-        state        = v.state
-        max_relocate = v.max_relocate
-        max_restart  = v.max_restart
-      }
+output "ha_enabled" {
+  description = "Whether High Availability is enabled for VMs."
+  value       = var.ha_enabled
+}
+
+output "ha_talos_vms" {
+  description = "High Availability status for Talos VMs."
+  value = {
+    for k, v in proxmox_virtual_environment_haresource.talos_ha : k => {
+      resource_id  = v.resource_id
+      state        = v.state
+      max_relocate = v.max_relocate
+      max_restart  = v.max_restart
     }
-    opnsense_vms = var.opnsense_enabled ? {
-      for k, v in proxmox_virtual_environment_haresource.opnsense_ha : k => {
-        resource_id  = v.resource_id
-        state        = v.state
-        max_relocate = v.max_relocate
-        max_restart  = v.max_restart
-      }
-    } : {}
-  } : { enabled = false }
+  }
+}
+
+output "ha_opnsense_vms" {
+  description = "High Availability status for OPNSense VMs."
+  value = {
+    for k, v in proxmox_virtual_environment_haresource.opnsense_ha : k => {
+      resource_id  = v.resource_id
+      state        = v.state
+      max_relocate = v.max_relocate
+      max_restart  = v.max_restart
+    }
+  }
 }

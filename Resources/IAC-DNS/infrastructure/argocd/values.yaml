@@ -1,0 +1,144 @@
+# ArgoCD Helm Chart Values
+# https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd
+
+global:
+  # Domain for ArgoCD (update this to your domain)
+  domain: argocd.knowledgeondemand.net
+
+# Redis HA configuration
+redis-ha:
+  enabled: false
+
+# Controller configuration
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Server configuration
+server:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  # Ingress configuration (disabled by default - enable if you have an ingress controller)
+  ingress:
+    enabled: false
+    ingressClassName: ""
+    annotations: {}
+    hosts:
+      - argocd.knowledgeondemand.net
+    tls:
+      - secretName: argocd-tls
+        hosts:
+          - argocd.knowledgeondemand.net
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    # Use LoadBalancer if you want external access without ingress
+    # type: LoadBalancer
+
+# Repo Server configuration
+repoServer:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Application Set Controller
+applicationSet:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Notifications Controller
+notifications:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Dex (SSO) - disabled by default
+dex:
+  enabled: false
+
+# ArgoCD Configs
+configs:
+  # General ArgoCD settings
+  cm:
+    # Create admin account
+    admin.enabled: "true"
+    # Allow insecure connections (set to false in production with proper TLS)
+    server.insecure: "true"
+    # Application status refresh interval
+    timeout.reconciliation: 180s
+    # Resource tracking method
+    application.resourceTrackingMethod: annotation
+
+  # ArgoCD parameters
+  params:
+    # Server settings
+    server.insecure: true
+    # Repo server parallelism
+    reposerver.parallelism.limit: 0
+
+  # RBAC configuration
+  rbac:
+    # Default policy for users
+    policy.default: role:readonly
+    # Policy rules
+    policy.csv: |
+      p, role:admin, applications, *, */*, allow
+      p, role:admin, clusters, *, *, allow
+      p, role:admin, repositories, *, *, allow
+      p, role:admin, projects, *, *, allow
+      g, admin, role:admin
+
+  # Secret configuration
+  secret:
+    # Create the argocd-secret
+    createSecret: true
+    # Annotations for the secret
+    annotations: {}
+
+  # Known hosts for SSH
+  ssh:
+    knownHosts: |
+      github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+      github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+      github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+      gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf
+      gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fVkhtj3Hw9xjLVXVYrU9QlYWrOLXBpQ6KWjbjTDTdDkoohFzgbEY=
+      gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsj2bNKTBSpIYDEGk9KxsGh3mySTRgMtXL583qmBpzeQ+jqCMRgBqB98u3z++J1sKlXHWfM9dyhSevkMwSbhoR8XIq/U0tCNyokEi/ueaBMCvbcTHhO7FcwzY92WK4 Voices18n9AQYxDSVXjj+HYDTtGJds8agSWQQeYAhrzV+K+z1e9pCpdOXLbOqNG7SOs5vAc7grv1MgyUTH
+
+  # Repository credentials (add your repos here)
+  repositories: {}
+    # Example:
+    # my-private-repo:
+    #   url: https://github.com/my-org/my-repo
+    #   password: ${GITHUB_TOKEN}
+    #   username: git

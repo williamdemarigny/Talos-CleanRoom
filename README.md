@@ -48,10 +48,16 @@ Talos-CleanRoom/
 │       ├── tfvars-to-talos-env.sh            # Generate talenv.yaml (FQDN version)
 │       ├── terraform/
 │       │   └── talos-cluster-create/         # Terraform configuration (FQDN)
-│       └── talos/                            # Talos configuration (FQDN)
-│           ├── talconfig.yaml
-│           ├── apply-configs.sh
-│           └── clusterconfig/
+│       ├── talos/                            # Talos configuration (FQDN)
+│       │   ├── talconfig.yaml
+│       │   ├── apply-configs.sh
+│       │   └── clusterconfig/
+│       └── infrastructure/                    # Kubernetes infrastructure components
+│           └── argocd/                        # ArgoCD GitOps deployment
+│               ├── namespace.yaml
+│               ├── values.yaml
+│               ├── install.sh
+│               └── uninstall.sh
 │
 ├── .gitignore                                 # Excludes credentials and state files
 └── README.md                                  # This file
@@ -134,6 +140,12 @@ Resources/IAC-DNS/
 │   ├── talenv.yaml                      # Generated environment variables (FQDNs)
 │   ├── apply-configs.sh                 # Automation script for applying configs
 │   └── clusterconfig/                   # Generated Talos machine configs
+├── infrastructure/
+│   └── argocd/
+│       ├── namespace.yaml               # ArgoCD namespace definition
+│       ├── values.yaml                  # Helm chart values
+│       ├── install.sh                   # Installation script
+│       └── uninstall.sh                 # Uninstallation script
 ├── tfvars-to-talos-env.sh              # Extract Terraform vars for Talos (FQDN support)
 ├── DNS-MAPPING.md                       # DNS to IP address mapping reference
 └── README.md                            # This file
@@ -160,7 +172,7 @@ Resources/IAC-DNS/
 ### 1. Deploy Infrastructure with Terraform
 
 ```bash
-cd Resources/IAC-DNS/terraform/talos-cluster-create
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/terraform/talos-cluster-create"
 
 terraform init
 terraform plan -out=".tfplan"
@@ -170,10 +182,10 @@ terraform apply ".tfplan"
 ### 2. Generate Talos Configuration
 
 ```bash
-cd Resources/IAC-DNS
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS"
 ./tfvars-to-talos-env.sh
 
-cd talos
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
 export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
 talhelper gensecret > talsecret.sops.yaml
 sops -e -i talsecret.sops.yaml
@@ -184,7 +196,7 @@ talhelper genconfig --env-file talenv.yaml
 ### 3. Apply Talos Configs
 
 ```bash
-cd Resources/IAC-DNS/talos
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
 ./apply-configs.sh --bootstrap
 
 export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
@@ -201,6 +213,32 @@ talhelper gencommand kubeconfig
 ```bash
 kubectl get nodes
 kubectl get pods -A
+```
+
+### 5. Install ArgoCD
+
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
+chmod +x install.sh
+./install.sh
+```
+
+**Get the admin password:**
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+**Access ArgoCD UI via port-forward:**
+```bash
+kubectl port-forward pod/$(kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server -o jsonpath='{.items[0].metadata.name}') -n argocd 8080:8080
+```
+Then open http://localhost:8080 and login with username `admin` and the password from above.
+
+**Uninstall ArgoCD (if needed):**
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
+chmod +x uninstall.sh
+./uninstall.sh
 ```
 
 ## Benefits of DNS-Based Deployment

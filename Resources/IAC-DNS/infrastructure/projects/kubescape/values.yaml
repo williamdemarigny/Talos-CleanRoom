@@ -1,0 +1,131 @@
+# Kubescape Operator Helm Values
+# https://github.com/kubescape/helm-charts/tree/main/charts/kubescape-operator
+
+# Global settings
+global:
+  # Enable/disable components
+  networkPolicy:
+    enabled: false
+
+# Kubescape scanner configuration
+kubescape:
+  # Enable vulnerability scanning
+  enabled: true
+  # Resource limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Scanning configuration
+  serviceMonitor:
+    enabled: false
+
+# Operator configuration
+operator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Kubevuln - vulnerability scanning
+kubevuln:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Storage configuration
+storage:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Kollector - runtime data collection
+kollector:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Gateway configuration
+gateway:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# Host scanner for node-level scanning
+hostScanner:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Grype adapter for vulnerability scanning
+grypeOfflineDB:
+  enabled: false
+
+# Cloud configuration (optional - for ARMO platform integration)
+# Uncomment and configure if using ARMO cloud platform
+# clusterName: proxmox-CleanRoom-cluster
+# account: ""
+# accessKey: ""
+
+# Capabilities configuration
+capabilities:
+  # Configuration scanning
+  configurationScan: enable
+  # Vulnerability scanning
+  vulnerabilityScan: enable
+  # Node scanning
+  nodeScan: enable
+  # Relevancy calculation
+  relevancy: enable
+  # Runtime detection
+  runtimeDetection: disable
+  # Network policy generation
+  networkPolicyService: disable
+  # SBOM generation
+  continuousScan: enable
+
+# Scheduling settings
+triggerSecurityFramework:
+  # Scan schedule (cron format) - daily at 2 AM
+  schedule: "0 2 * * *"
+
+# Tolerations for running on all nodes including control plane
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+  - key: node-role.kubernetes.io/master
+    operator: Exists
+    effect: NoSchedule

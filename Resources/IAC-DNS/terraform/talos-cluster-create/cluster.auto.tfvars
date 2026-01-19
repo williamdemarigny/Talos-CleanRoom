@@ -5,7 +5,7 @@
 # OPNSense Firewall Configuration
 # ============================================================================
 # Enable OPNSense firewall deployment (deployed before Talos cluster)
-opnsense_enabled = false
+opnsense_enabled = true
 
 # OPNSense template configuration (cloned from existing template VM)
 # IMPORTANT: Specify the node where template VM 1000 is located
