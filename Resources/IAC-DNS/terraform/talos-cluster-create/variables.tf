@@ -132,6 +132,7 @@ variable "opnsense_vms" {
     name        = string
     vmid        = number
     fqdn        = string
+    ip_address  = optional(string) # DHCP/static IP for initial API communication before hostname is configured
     cores       = number
     memory      = number
     disk_size   = string
