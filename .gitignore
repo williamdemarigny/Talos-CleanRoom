@@ -10,3 +10,8 @@ credentials.auto.tfvars
 *.auto.tfvars.json
 credentials.sh
 .envrc
+
+# OPNSense generated scripts and backups (contain sensitive API credentials)
+**/scripts/opnsense_*.ps1
+**/opnsense_backups/*.xml
+**/opnsense_backups/*.tar.gz
