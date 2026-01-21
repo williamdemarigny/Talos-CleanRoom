@@ -1,0 +1,52 @@
+# ArgoCD IngressRoute
+# Apply AFTER Traefik is fully deployed
+#
+# Access ArgoCD at: https://argocd.knowledgeondemand.net
+#
+# Note: ArgoCD uses gRPC for some features, so we need both HTTP and gRPC routes
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # ArgoCD Web UI
+    - match: Host(`argocd.knowledgeondemand.net`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: argocd-server
+          port: 80
+      middlewares:
+        - name: secure-headers
+          namespace: traefik
+    # ArgoCD gRPC (for CLI)
+    - match: Host(`argocd.knowledgeondemand.net`) && Headers(`Content-Type`, `application/grpc`)
+      kind: Rule
+      priority: 11
+      services:
+        - name: argocd-server
+          port: 80
+          scheme: h2c
+  tls:
+    secretName: argocd-server-tls
+---
+# Certificate for ArgoCD (requires cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-server-cert
+  namespace: argocd
+spec:
+  secretName: argocd-server-tls
+  issuerRef:
+    # Use letsencrypt-staging for testing, letsencrypt-prod for production
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: argocd.knowledgeondemand.net
+  dnsNames:
+    - argocd.knowledgeondemand.net

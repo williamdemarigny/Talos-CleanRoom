@@ -1,0 +1,32 @@
+# MetalLB IP Address Pool Configuration
+# This file should be applied AFTER MetalLB is fully deployed and running
+#
+# Apply manually with: kubectl apply -f ip-pool.yaml
+# Or create a separate ArgoCD Application for post-install configuration
+#
+# IMPORTANT: Update the IP range to match your network configuration
+# Current setting uses 10.83.3.200-10.83.3.250 based on your VLAN 3 subnet (10.83.3.0/24)
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    # Update this range to match available IPs in your network
+    # These IPs should be outside your DHCP range but within your subnet
+    - 10.83.3.200-10.83.3.250
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: default-l2-advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - default-pool
+  # Optional: limit to specific interfaces
+  # interfaces:
+  #   - eth0
