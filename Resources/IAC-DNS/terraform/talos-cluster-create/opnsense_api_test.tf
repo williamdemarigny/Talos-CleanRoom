@@ -11,8 +11,14 @@ locals {
   # Get the primary OPNSense instance (first one in the list)
   primary_opnsense = local.opnsense_api_enabled && length(var.opnsense_vms) > 0 ? var.opnsense_vms[0] : null
 
-  # Primary API URL for testing
-  primary_api_url = local.primary_opnsense != null ? "${var.opnsense_api_protocol}://${local.primary_opnsense.fqdn}:${var.opnsense_api_port}/api" : ""
+  # Primary API connection target - use IP address if available (for initial connection before hostname is configured)
+  # Falls back to FQDN if no IP address is specified
+  primary_api_host = local.primary_opnsense != null ? (
+    local.primary_opnsense.ip_address != null ? local.primary_opnsense.ip_address : local.primary_opnsense.fqdn
+  ) : ""
+
+  # Primary API URL for testing (uses IP address to avoid DNS rebind issues)
+  primary_api_url = local.primary_opnsense != null ? "${var.opnsense_api_protocol}://${local.primary_api_host}:${var.opnsense_api_port}/api" : ""
 
   # Backup output directory
   backup_output_dir = "${path.module}/opnsense_backups"
@@ -92,6 +98,9 @@ function Invoke-OPNSenseAPI {
     }
 
     try {
+        # Disable default proxy to prevent proxy configuration errors
+        [System.Net.WebRequest]::DefaultWebProxy = $null
+
         $params = @{
             Uri = $Uri
             Method = $Method
@@ -248,6 +257,9 @@ function Create-Backup {
     }
 
     try {
+        # Disable default proxy to prevent proxy configuration errors
+        [System.Net.WebRequest]::DefaultWebProxy = $null
+
         $params = @{
             Uri = $Uri
             Method = "GET"
