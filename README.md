@@ -197,15 +197,41 @@ talhelper genconfig --env-file talenv.yaml
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+
+# Apply configs and bootstrap the cluster (--bootstrap waits 180s then bootstraps automatically)
 ./apply-configs.sh --bootstrap
 
+# Set talosconfig path
 export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
-talosctl kubeconfig -n talos-CleanRoom-master-01 ~/.kube/config
 
-talhelper gencommand bootstrap 
-talosctl bootstrap --talosconfig=./clusterconfig/talosconfig --nodes=talos-CleanRoom-master-01;
+# Wait for cluster to be healthy
+talosctl health --nodes=talos-CleanRoom-master-01
 
-talhelper gencommand kubeconfig 
+# Get kubeconfig
+talosctl kubeconfig --nodes=talos-CleanRoom-master-01 ~/.kube/config
+```
+
+**Alternative: Manual Bootstrap**
+
+If you prefer to bootstrap manually, omit the `--bootstrap` flag:
+
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+
+# Apply configs only (no bootstrap)
+./apply-configs.sh
+
+# Set talosconfig path
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+
+# Wait 1-2 minutes for VMs to reboot, then bootstrap (run ONCE on ONE control plane node)
+talosctl bootstrap --nodes=talos-CleanRoom-master-01
+
+# Wait for cluster to be healthy
+talosctl health --nodes=talos-CleanRoom-master-01
+
+# Get kubeconfig
+talosctl kubeconfig --nodes=talos-CleanRoom-master-01 ~/.kube/config
 ```
 
 ### 4. Verify Deployment
@@ -228,17 +254,85 @@ chmod +x install.sh
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
-**Access ArgoCD UI via port-forward:**
+# Verify ArgoCD is running (should have 2 replicas for HA components)
 ```bash
-kubectl port-forward pod/$(kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server -o jsonpath='{.items[0].metadata.name}') -n argocd 8080:8080
+kubectl get pods -n argocd
+kubectl get deployment -n argocd
 ```
-Then open http://localhost:8080 and login with username `admin` and the password from above.
 
-**Uninstall ArgoCD (if needed):**
+### 6: Deploy the Ingress Stack
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
-chmod +x uninstall.sh
-./uninstall.sh
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
+chmod +x deploy-ingress-stack.sh
+./deploy-ingress-stack.sh
+```
+
+### 7: Get Traefik LoadBalancer IP
+### Update External DNS as needed
+```bash
+kubectl get svc traefik -n traefik
+```
+
+### 8: Create Basic Auth Secret
+```bash
+# Generate password hash (install apache2-utils if needed)
+htpasswd -nb admin YOUR_SECURE_PASSWORD
+```
+# Create the secret (replace the hash with output from above)
+```bash
+kubectl create secret generic basic-auth-secret --from-literal=users='admin:$apr1$...' -n traefik
+```
+###9: Apply IngressRoutes
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
+kubectl apply -f /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/Resources/IAC-DNS/infrastructure/projects/traefik/dashboard-ingressroute.yaml
+kubectl apply -f /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/Resources/IAC-DNS/infrastructure/projects/traefik/ingressroutes/
+
+# Traefik dashboard
+kubectl apply -f traefik/dashboard-ingressroute.yaml
+
+# ArgoCD and Longhorn
+kubectl apply -f traefik/ingressroutes/
+```
+
+### 9: Verify Deployment
+```bash
+# Check all pods are running
+kubectl get pods -n metallb-system
+kubectl get pods -n cert-manager
+kubectl get pods -n traefik
+kubectl get pods -n argocd
+
+# Verify HA - pods should be distributed across nodes
+kubectl get pods -n traefik -o wide
+kubectl get pods -n argocd -o wide
+
+# Check certificates
+kubectl get certificates -A
+
+# Check IngressRoutes
+kubectl get ingressroute -A
+```
+# Enable ArgoCD Self-Management
+# Apply the self-managing Application
+```bash
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml
+
+# Verify ArgoCD is now managing itself
+kubectl get applications -n argocd | grep argocd
+```
+
+### 10: Access Services
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth password) |
+| ArgoCD | https://argocd.knowledgeondemand.net | admin / (see below) |
+| Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth password) |
+
+**Get ArgoCD admin password:**
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
 ## Benefits of DNS-Based Deployment
