@@ -178,7 +178,7 @@ terraform init
 terraform plan -out=".tfplan"
 terraform apply ".tfplan"
 ```
-terr
+
 ### 2. Generate Talos Configuration
 
 ```bash

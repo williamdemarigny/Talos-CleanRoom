@@ -57,14 +57,14 @@ locals {
   # Node type configurations for different roles
   node_configs = {
     controlplane = {
-      cpu_type       = "host"
+      cpu_type       = "x86-64-v2-AES"
       memory_balloon = false
       bios           = "seabios"
       boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
       description    = "Talos Control Plane Node - Managed by Terraform"
     }
     worker = {
-      cpu_type       = "host"
+      cpu_type       = "x86-64-v2-AES"
       memory_balloon = false
       bios           = "seabios"
       boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
