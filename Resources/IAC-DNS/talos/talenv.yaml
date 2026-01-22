@@ -1,6 +1,6 @@
 # talenv.yaml - Talos environment variables for talhelper
 # Extracted from terraform/talos-cluster-create/cluster.auto.tfvars
-# Generated on Mon, Jan 19, 2026  2:25:15 PM
+# Generated on Thu, Jan 22, 2026  9:48:51 AM
 
 # Network Configuration
 GATEWAY_IP: "10.83.3.1"

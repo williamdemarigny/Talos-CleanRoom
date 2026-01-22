@@ -11,7 +11,7 @@ redis-ha:
 
 # Controller configuration
 controller:
-  replicas: 1
+  replicas: 2
   resources:
     requests:
       cpu: 250m
@@ -19,10 +19,19 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-application-controller
+            topologyKey: kubernetes.io/hostname
 
 # Server configuration
 server:
-  replicas: 1
+  replicas: 2
   resources:
     requests:
       cpu: 50m
@@ -30,6 +39,15 @@ server:
     limits:
       cpu: 100m
       memory: 128Mi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-server
+            topologyKey: kubernetes.io/hostname
 
   # Ingress configuration (disabled by default - enable if you have an ingress controller)
   ingress:
@@ -51,7 +69,7 @@ server:
 
 # Repo Server configuration
 repoServer:
-  replicas: 1
+  replicas: 2
   resources:
     requests:
       cpu: 100m
@@ -59,10 +77,19 @@ repoServer:
     limits:
       cpu: 200m
       memory: 256Mi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-repo-server
+            topologyKey: kubernetes.io/hostname
 
 # Application Set Controller
 applicationSet:
-  replicas: 1
+  replicas: 2
   resources:
     requests:
       cpu: 50m
