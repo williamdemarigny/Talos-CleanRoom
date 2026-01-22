@@ -43,7 +43,7 @@ locals {
       onboot                  = true
       sockets                 = 1
       network_bridge          = local.network_bridge
-      network_model           = "virtio"
+      network_model           = "e1000e"
       mac_address             = node.mac_address
       vlan_id                 = coalesce(node.vlan_id, var.vlan_id)
       tags                    = lookup(node, "tags", [node.role])
@@ -84,7 +84,7 @@ locals {
       disk_size      = vm.disk_size
       disk_storage   = local.disk_storage
       network_bridge = local.network_bridge
-      network_model  = "virtio"
+      network_model  = "e1000e"
       mac_address    = vm.mac_address
       vlan_id        = local.vlan_id
       tags           = lookup(vm, "tags", ["opnsense", "firewall"])
@@ -92,7 +92,7 @@ locals {
   } : {}
 
   opnsense_config = {
-    cpu_type       = "host"
+    cpu_type       = "x86-64-v2-AES"
     memory_balloon = false
     bios           = "seabios"
     description    = "OPNSense Firewall Appliance (cloned from template) - Managed by Terraform"

@@ -95,8 +95,7 @@ spec:
           enabled: true
           type: LoadBalancer
           annotations:
-            # MetalLB specific annotations (optional)
-            # metallb.universe.tf/loadBalancerIPs: "10.83.3.200"
+            metallb.universe.tf/loadBalancerIPs: "10.83.3.200"
           spec: {}
 
         # TLS configuration

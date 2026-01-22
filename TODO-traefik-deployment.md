@@ -18,14 +18,18 @@ kubectl get nodes
 
 ### Step 2: Ensure ArgoCD is Running
 ```bash
-# If not already installed
-cd Resources/IAC-DNS/infrastructure/argocd
-./install.sh
+# If not already installed, bootstrap with Helm
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+helm install argocd argo/argo-cd -n argocd --create-namespace \
+    -f Resources/IAC-DNS/infrastructure/argocd/values.yaml
 
-# Verify ArgoCD is running
+# Verify ArgoCD is running (should have 2 replicas for HA components)
 kubectl get pods -n argocd
+kubectl get deployment -n argocd
 ```
 - [ ] ArgoCD pods are running
+- [ ] HA components show 2/2 replicas (controller, server, repo-server, applicationset)
 
 ### Step 3: Deploy the Ingress Stack
 
@@ -114,6 +118,11 @@ kubectl apply -f traefik/ingressroutes/
 kubectl get pods -n metallb-system
 kubectl get pods -n cert-manager
 kubectl get pods -n traefik
+kubectl get pods -n argocd
+
+# Verify HA - pods should be distributed across nodes
+kubectl get pods -n traefik -o wide
+kubectl get pods -n argocd -o wide
 
 # Check certificates
 kubectl get certificates -A
@@ -121,9 +130,10 @@ kubectl get certificates -A
 # Check IngressRoutes
 kubectl get ingressroute -A
 ```
-- [ ] All MetalLB pods running
+- [ ] All MetalLB pods running (controller + speaker daemonset)
 - [ ] All cert-manager pods running
-- [ ] All Traefik pods running
+- [ ] All Traefik pods running (2 replicas on different nodes)
+- [ ] All ArgoCD pods running (2 replicas for HA components)
 - [ ] Certificates created
 
 ### Step 9: Access Services
@@ -146,6 +156,26 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 ---
 
 ## Post-Deployment (Optional)
+
+### Enable ArgoCD Self-Management
+
+After initial Helm bootstrap, enable ArgoCD to manage itself via GitOps:
+
+```bash
+# Commit and push argocd values.yaml changes first
+git add Resources/IAC-DNS/infrastructure/argocd/
+git commit -m "ArgoCD HA configuration and self-management"
+git push
+
+# Apply the self-managing Application
+kubectl apply -f Resources/IAC-DNS/infrastructure/argocd/application.yaml
+
+# Verify ArgoCD is now managing itself
+kubectl get applications -n argocd | grep argocd
+```
+
+- [ ] ArgoCD self-management Application applied
+- [ ] Future changes to values.yaml auto-sync via GitOps
 
 ### Switch to Let's Encrypt Certificates
 
@@ -185,6 +215,10 @@ kubectl logs -n traefik -l app.kubernetes.io/name=traefik -f
 # Check MetalLB speaker logs
 kubectl logs -n metallb-system -l app.kubernetes.io/component=speaker
 
+# Check MetalLB speaker pods (should be running on each node)
+kubectl get pods -n metallb-system
+kubectl get daemonset -n metallb-system
+
 # Check cert-manager logs
 kubectl logs -n cert-manager -l app=cert-manager
 
@@ -193,27 +227,50 @@ kubectl describe certificate -A
 
 # Check ArgoCD application sync status
 kubectl get applications -n argocd
+
+# Check node status
+kubectl get nodes -o wide
 ```
+
+### MetalLB Speaker Pods Not Starting
+
+If MetalLB speaker pods fail with PodSecurity errors, verify namespace labels:
+```bash
+kubectl get namespace metallb-system -o yaml | grep pod-security
+
+# If labels are missing (should be set automatically by ArgoCD):
+kubectl label namespace metallb-system pod-security.kubernetes.io/enforce=privileged --overwrite
+kubectl label namespace metallb-system pod-security.kubernetes.io/audit=privileged --overwrite
+kubectl label namespace metallb-system pod-security.kubernetes.io/warn=privileged --overwrite
+kubectl rollout restart daemonset metallb-speaker -n metallb-system
+```
+
+**Note:** The MetalLB application.yaml now includes `managedNamespaceMetadata` to automatically apply these labels.
 
 ---
 
 ## Files Reference
 
 ```
-Resources/IAC-DNS/infrastructure/projects/
-├── deploy-ingress-stack.sh          # Automated deployment script
-├── metallb/
-│   ├── application.yaml             # MetalLB ArgoCD app
-│   └── ip-pool.yaml                 # IP pool: 10.83.3.200-250
-├── cert-manager/
-│   ├── application.yaml             # cert-manager ArgoCD app
-│   └── cluster-issuers.yaml         # Self-signed + Let's Encrypt
-└── traefik/
-    ├── application.yaml             # Traefik ArgoCD app
-    ├── middlewares.yaml             # Security middlewares
-    ├── dashboard-ingressroute.yaml  # Dashboard access
-    ├── README.md                    # Documentation
-    └── ingressroutes/
-        ├── argocd-ingressroute.yaml
-        └── longhorn-ingressroute.yaml
+Resources/IAC-DNS/infrastructure/
+├── argocd/
+│   ├── namespace.yaml               # ArgoCD namespace
+│   ├── values.yaml                  # ArgoCD Helm values (HA config)
+│   └── application.yaml             # ArgoCD self-management Application
+└── projects/
+    ├── deploy-ingress-stack.sh      # Automated deployment script
+    ├── metallb/
+    │   ├── application.yaml         # MetalLB ArgoCD app (includes pod security labels)
+    │   └── ip-pool.yaml             # IP pool: 10.83.3.200-250
+    ├── cert-manager/
+    │   ├── application.yaml         # cert-manager ArgoCD app
+    │   └── cluster-issuers.yaml     # Self-signed + Let's Encrypt
+    └── traefik/
+        ├── application.yaml         # Traefik ArgoCD app (2 replicas, HA)
+        ├── middlewares.yaml         # Security middlewares
+        ├── dashboard-ingressroute.yaml  # Dashboard access
+        ├── README.md                # Documentation
+        └── ingressroutes/
+            ├── argocd-ingressroute.yaml
+            └── longhorn-ingressroute.yaml
 ```
