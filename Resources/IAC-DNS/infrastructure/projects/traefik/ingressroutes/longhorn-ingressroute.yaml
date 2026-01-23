@@ -1,0 +1,45 @@
+# Longhorn UI IngressRoute
+# Apply AFTER Traefik is fully deployed
+#
+# Access Longhorn UI at: https://longhorn.knowledgeondemand.net
+#
+# WARNING: Longhorn UI does not have built-in authentication
+# Basic auth middleware is applied for security
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: longhorn-ui
+  namespace: longhorn-system
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`longhorn.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: longhorn-frontend
+          port: 80
+      middlewares:
+        - name: basic-auth
+          namespace: traefik
+        - name: secure-headers
+          namespace: traefik
+  tls:
+    secretName: longhorn-ui-tls
+---
+# Certificate for Longhorn (requires cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: longhorn-ui-cert
+  namespace: longhorn-system
+spec:
+  secretName: longhorn-ui-tls
+  issuerRef:
+    # Use letsencrypt-staging for testing, letsencrypt-prod for production
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: longhorn.knowledgeondemand.net
+  dnsNames:
+    - longhorn.knowledgeondemand.net
