@@ -60,14 +60,14 @@ locals {
       cpu_type       = "host"
       memory_balloon = false
       bios           = "seabios"
-      boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
+      boot_order     = ["virtio0", "ide2"] # Boot from VirtIO disk first, then ISO
       description    = "Talos Control Plane Node - Managed by Terraform"
     }
     worker = {
       cpu_type       = "host"
       memory_balloon = false
       bios           = "seabios"
-      boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
+      boot_order     = ["virtio0", "ide2"] # Boot from VirtIO disk first, then ISO
       description    = "Talos Worker Node - Managed by Terraform"
     }
   }

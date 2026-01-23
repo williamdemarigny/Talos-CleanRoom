@@ -15,45 +15,57 @@ nodes:
 - hostname: ${TALOS_CONTROL_PLANE_NAME_0}
   controlPlane: true
   ipAddress: ${TALOS_CONTROL_PLANE_FQDN_0}
-  installDisk: /dev/sda
+  installDisk: /dev/vda
   networkInterfaces:
   - deviceSelector:
       hardwareAddr: "${TALOS_CONTROL_PLANE_MAC_0}"
     dhcp: true
+  certSANs:
+    - ${TALOS_CONTROL_PLANE_NAME_0}
+    - ${TALOS_CONTROL_PLANE_FQDN_0}
 
 # Worker nodes (from Terraform)
 - hostname: ${TALOS_WORKER_NAME_1}
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_1}
-  installDisk: /dev/sda
+  installDisk: /dev/vda
   networkInterfaces:
   - deviceSelector:
       hardwareAddr: "${TALOS_WORKER_MAC_1}"
     dhcp: true
   nodeLabels:
     node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_1}
+    - ${TALOS_WORKER_FQDN_1}
 
 - hostname: ${TALOS_WORKER_NAME_2}
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_2}
-  installDisk: /dev/sda
+  installDisk: /dev/vda
   networkInterfaces:
   - deviceSelector:
       hardwareAddr: "${TALOS_WORKER_MAC_2}"
     dhcp: true
   nodeLabels:
     node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_2}
+    - ${TALOS_WORKER_FQDN_2}
 
 - hostname: ${TALOS_WORKER_NAME_3}
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_3}
-  installDisk: /dev/sda
+  installDisk: /dev/vda
   networkInterfaces:
   - deviceSelector:
       hardwareAddr: "${TALOS_WORKER_MAC_3}"
     dhcp: true
   nodeLabels:
-    node-type: worker    
+    node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_3}
+    - ${TALOS_WORKER_FQDN_3}    
 
 # Global patches
 patches:
@@ -96,10 +108,11 @@ controlPlane:
               [plugins."io.containerd.cri.v1.runtime"]
                 [plugins."io.containerd.cri.v1.runtime".containerd]
                   default_runtime_name = "runc"
-  # Machine certificate SANs (allows connection via FQDN)
+  # Machine certificate SANs (allows connection via both shortname and FQDN)
   - |-
     machine:
       certSANs:
+        - ${TALOS_CONTROL_PLANE_NAME_0}
         - ${TALOS_CONTROL_PLANE_FQDN_0}
   # Cluster configuration
   - |-
@@ -146,7 +159,7 @@ worker:
               - rshared
               - rw
       disks:
-        - device: /dev/sdb
+        - device: /dev/vdb
           partitions:
-            - mountpoint: /var/mnt/longhorn_sdb
+            - mountpoint: /var/mnt/longhorn_vdb
 
