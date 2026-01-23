@@ -90,6 +90,14 @@ spec:
             exposedPort: 9100
             protocol: TCP
 
+          # ClamAV TCP entrypoint for virus scanning
+          clamav:
+            port: 3310
+            expose:
+              default: true
+            exposedPort: 3310
+            protocol: TCP
+
         # Service configuration
         service:
           enabled: true
