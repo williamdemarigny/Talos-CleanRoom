@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Traefik Ingress Stack Deployment Script
-# Deploys: MetalLB -> cert-manager -> Traefik
+# Kubernetes Infrastructure Stack Deployment Script
+# Deploys: MetalLB -> cert-manager -> Traefik -> Longhorn
 #
 # Prerequisites:
 # - Kubernetes cluster is running (Talos)
@@ -12,12 +12,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=============================================="
-echo "  Traefik Ingress Stack Deployment"
+echo "  Kubernetes Infrastructure Stack Deployment"
 echo "=============================================="
 echo ""
 
 # Check prerequisites
-echo "[1/8] Checking prerequisites..."
+echo "[1/10] Checking prerequisites..."
 
 if ! command -v kubectl &> /dev/null; then
     echo "Error: kubectl is not installed or not in PATH"
@@ -40,7 +40,7 @@ echo "✓ Prerequisites met"
 echo ""
 
 # Deploy MetalLB
-echo "[2/8] Deploying MetalLB..."
+echo "[2/10] Deploying MetalLB..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/application.yaml"
 
 echo "Waiting for MetalLB to be ready..."
@@ -61,13 +61,13 @@ echo "✓ MetalLB deployed"
 echo ""
 
 # Configure MetalLB IP Pool
-echo "[3/8] Configuring MetalLB IP Pool..."
+echo "[3/10] Configuring MetalLB IP Pool..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/ip-pool.yaml"
 echo "✓ MetalLB IP Pool configured (10.83.3.200-10.83.3.250)"
 echo ""
 
 # Deploy cert-manager
-echo "[4/8] Deploying cert-manager..."
+echo "[4/10] Deploying cert-manager..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/application.yaml"
 
 echo "Waiting for cert-manager to be ready..."
@@ -92,14 +92,14 @@ echo "✓ cert-manager deployed"
 echo ""
 
 # Configure ClusterIssuers
-echo "[5/8] Configuring ClusterIssuers..."
+echo "[5/10] Configuring ClusterIssuers..."
 sleep 5  # Give webhook time to fully initialize
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/cluster-issuers.yaml"
 echo "✓ ClusterIssuers configured"
 echo ""
 
 # Deploy Traefik
-echo "[6/8] Deploying Traefik..."
+echo "[6/10] Deploying Traefik..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 
 echo "Waiting for Traefik to be ready..."
@@ -119,15 +119,42 @@ echo "✓ Traefik deployed"
 echo ""
 
 # Apply Middlewares
-echo "[7/8] Configuring Traefik Middlewares..."
+echo "[7/10] Configuring Traefik Middlewares..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/middlewares.yaml"
 echo "✓ Middlewares configured"
 echo ""
 
+# Deploy Longhorn
+echo "[8/10] Deploying Longhorn..."
+kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
+
+echo "Waiting for Longhorn to be ready..."
+sleep 15  # Give ArgoCD time to create namespace and resources
+
+kubectl wait --for=condition=available deployment/longhorn-driver-deployer \
+    -n longhorn-system \
+    --timeout=300s 2>/dev/null || {
+    echo "Waiting for Longhorn deployment to be created..."
+    sleep 45
+    kubectl wait --for=condition=available deployment/longhorn-driver-deployer \
+        -n longhorn-system \
+        --timeout=300s
+}
+
+echo "✓ Longhorn deployed"
+echo ""
+
 # Get LoadBalancer IP
-echo "[8/8] Retrieving Traefik LoadBalancer IP..."
+echo "[9/10] Retrieving Traefik LoadBalancer IP..."
 sleep 5
 TRAEFIK_IP=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+
+# Apply IngressRoutes
+echo "[10/10] Applying IngressRoutes..."
+kubectl apply -f "${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
+kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/"
+echo "✓ IngressRoutes applied"
+echo ""
 
 echo ""
 echo "=============================================="
@@ -150,13 +177,10 @@ echo "   kubectl create secret generic basic-auth-secret \\"
 echo "       --from-literal=users='admin:\$apr1\$...' \\"
 echo "       -n traefik"
 echo ""
-echo "3. Apply IngressRoutes for services:"
-echo "   kubectl apply -f ${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
-echo "   kubectl apply -f ${SCRIPT_DIR}/traefik/ingressroutes/"
-echo ""
-echo "4. Verify deployment:"
+echo "3. Verify deployment:"
 echo "   kubectl get pods -n metallb-system"
 echo "   kubectl get pods -n cert-manager"
 echo "   kubectl get pods -n traefik"
+echo "   kubectl get pods -n longhorn-system"
 echo "   kubectl get svc -n traefik"
 echo ""

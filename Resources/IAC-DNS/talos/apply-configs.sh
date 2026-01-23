@@ -219,8 +219,14 @@ find_vm_node() {
     return 1
 }
 
+# Auto-set TALOSCONFIG if not already set
+if [[ -z "${TALOSCONFIG:-}" ]]; then
+    export TALOSCONFIG="$CONFIG_DIR/talosconfig"
+fi
+
 # Main execution
 print_info "Starting Talos config application process"
+print_info "Using TALOSCONFIG: $TALOSCONFIG"
 echo ""
 
 # Check if config directory exists

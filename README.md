@@ -256,28 +256,28 @@ talhelper genconfig --env-file talenv.yaml
 ```
 
 ### Step 3: Apply Talos Configs and Bootstrap
-
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
 
 # Apply configs and bootstrap (waits 180s then bootstraps automatically)
 ./apply-configs.sh --bootstrap
 
-# Set talosconfig path
-export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
-
 # Wait for cluster health
-talosctl health --nodes=talos-CleanRoom-master-01
+talosctl health --nodes=talos-CleanRoom-master-01.knowledgeondemand.net
 
 # Get kubeconfig
-talosctl kubeconfig --nodes=talos-CleanRoom-master-01 ~/.kube/config
+talosctl kubeconfig --nodes=talos-CleanRoom-master-01.knowledgeondemand.net ~/.kube/config
 ```
 
 **Alternative: Manual Bootstrap**
 ```bash
-./apply-configs.sh                                      # Apply configs only
-sleep 180                                               # Wait for VMs to reboot
-talosctl bootstrap --nodes=talos-CleanRoom-master-01    # Bootstrap (run ONCE)
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+
+./apply-configs.sh                                                            # Apply configs only
+sleep 180                                                                     # Wait for VMs to reboot
+talosctl bootstrap --nodes=talos-CleanRoom-master-01.knowledgeondemand.net    # Bootstrap (run ONCE)
 ```
 
 ### Step 4: Verify Cluster
@@ -301,7 +301,9 @@ kubectl get pods -n argocd
 kubectl get deployment -n argocd
 ```
 
-### Step 6: Deploy Ingress Stack
+### Step 6: Deploy Infrastructure Stack
+
+Deploys MetalLB, cert-manager, Traefik, Longhorn, and applies all IngressRoutes automatically.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
@@ -322,29 +324,17 @@ kubectl get svc traefik -n traefik
 htpasswd -nb admin YOUR_SECURE_PASSWORD
 
 # Create the secret (replace hash with output from above)
-kubectl create secret generic basic-auth-secret \
-  --from-literal=users='admin:$apr1$...' -n traefik
+kubectl create secret generic basic-auth-secret --from-literal=users='admin:$2y$10$rwQHL/MIWgJz6eXZWPvz4.gbYZUkBiuLQWKfVW0Z8Jh1LxavPC/ze' -n traefik
 ```
 
-### Step 9: Apply IngressRoutes
-
-```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
-
-# Traefik dashboard
-kubectl apply -f traefik/dashboard-ingressroute.yaml
-
-# ArgoCD and Longhorn
-kubectl apply -f traefik/ingressroutes/
-```
-
-### Step 10: Verify Deployment
+### Step 9: Verify Deployment
 
 ```bash
 # Check all pods
 kubectl get pods -n metallb-system
 kubectl get pods -n cert-manager
 kubectl get pods -n traefik
+kubectl get pods -n longhorn-system
 kubectl get pods -n argocd
 
 # Verify HA distribution
@@ -356,7 +346,7 @@ kubectl get certificates -A
 kubectl get ingressroute -A
 ```
 
-### Step 11: Enable ArgoCD Self-Management
+### Step 10: Enable ArgoCD Self-Management
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
