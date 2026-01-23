@@ -276,7 +276,7 @@ talosctl kubeconfig --nodes=talos-CleanRoom-master-01 ~/.kube/config
 **Alternative: Manual Bootstrap**
 ```bash
 ./apply-configs.sh                                      # Apply configs only
-sleep 120                                               # Wait for VMs to reboot
+sleep 180                                               # Wait for VMs to reboot
 talosctl bootstrap --nodes=talos-CleanRoom-master-01    # Bootstrap (run ONCE)
 ```
 

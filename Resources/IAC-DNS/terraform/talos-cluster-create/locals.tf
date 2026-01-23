@@ -57,14 +57,14 @@ locals {
   # Node type configurations for different roles
   node_configs = {
     controlplane = {
-      cpu_type       = "x86-64-v2-AES"
+      cpu_type       = "host"
       memory_balloon = false
       bios           = "seabios"
       boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
       description    = "Talos Control Plane Node - Managed by Terraform"
     }
     worker = {
-      cpu_type       = "x86-64-v2-AES"
+      cpu_type       = "host"
       memory_balloon = false
       bios           = "seabios"
       boot_order     = ["scsi0", "ide2"] # Boot from disk first, then ISO
@@ -92,7 +92,7 @@ locals {
   } : {}
 
   opnsense_config = {
-    cpu_type       = "x86-64-v2-AES"
+    cpu_type       = "host"
     memory_balloon = false
     bios           = "seabios"
     description    = "OPNSense Firewall Appliance (cloned from template) - Managed by Terraform"
