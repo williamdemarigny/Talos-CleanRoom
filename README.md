@@ -14,231 +14,359 @@ This project provides automated deployment and lifecycle management of a Talos K
 - **Automatic Node Discovery**: Discovers available Proxmox nodes and distributes VMs using round-robin scheduling
 - **Talos Configuration Management**: Automated config generation with talhelper and SOPS-encrypted secrets
 - **Bootstrap Automation**: Scripts to discover VM IPs and apply Talos configurations automatically
-- **Flexible Configuration**: Support for control plane and worker nodes
-- **Ordered Deployment**: OPNSense firewalls deploy first, followed by Talos cluster nodes
+- **GitOps Ready**: ArgoCD-based application deployment with ingress stack included
+
+## Environment Architecture
+
+```
+                                   ┌─────────────────────────────────────────────────────────────────┐
+                                   │                       PROXMOX CLUSTER                           │
+                                   │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐│
+                                   │  │   pve01     │ │   pve02     │ │   pve03     │ │   pve04     ││
+                                   │  │ 10.83.2.20  │ │ 10.83.2.21  │ │ 10.83.2.22  │ │ 10.83.2.23  ││
+                                   │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘│
+                                   └─────────────────────────────────────────────────────────────────┘
+                                                               │
+                          ┌────────────────────────────────────┴────────────────────────────────────┐
+                          │                         VLAN 3 - 10.83.3.0/24                           │
+                          │                           Gateway: 10.83.3.1                            │
+                          └────────────────────────────────────┬────────────────────────────────────┘
+                                                               │
+         ┌─────────────────────────────────────────────────────┼─────────────────────────────────────────────────────┐
+         │                                                     │                                                     │
+┌────────┴────────┐                              ┌─────────────┴─────────────┐                     ┌─────────────────┴─────────────────┐
+│ OPNSENSE FW     │                              │     TALOS KUBERNETES      │                     │      METALLB IP POOL              │
+├─────────────────┤                              │         CLUSTER           │                     │    10.83.3.200 - 10.83.3.250      │
+│ opnsense-fw-01  │                              ├───────────────────────────┤                     └───────────────────────────────────┘
+│ VMID: 1010      │                              │                           │
+│ IP: 10.83.3.5   │                              │  ┌─────────────────────┐  │
+├─────────────────┤                              │  │   CONTROL PLANE     │  │
+│ opnsense-fw-02  │                              │  │   master-01         │  │
+│ VMID: 1011      │                              │  │   VMID: 2000        │  │
+│ IP: 10.83.3.6   │                              │  │   IP: 10.83.3.10    │  │
+└─────────────────┘                              │  │   4 CPU / 8GB RAM   │  │
+                                                 │  └─────────────────────┘  │
+                                                 │                           │
+                                                 │  ┌─────────────────────┐  │
+                                                 │  │    WORKER NODES     │  │
+                                                 │  ├─────────────────────┤  │
+                                                 │  │ worker-01           │  │
+                                                 │  │ VMID: 3001          │  │
+                                                 │  │ IP: 10.83.3.15      │  │
+                                                 │  │ 4 CPU / 8GB / +30G  │  │
+                                                 │  ├─────────────────────┤  │
+                                                 │  │ worker-02           │  │
+                                                 │  │ VMID: 3002          │  │
+                                                 │  │ IP: 10.83.3.16      │  │
+                                                 │  │ 4 CPU / 8GB / +30G  │  │
+                                                 │  ├─────────────────────┤  │
+                                                 │  │ worker-03           │  │
+                                                 │  │ VMID: 3003          │  │
+                                                 │  │ IP: 10.83.3.17      │  │
+                                                 │  │ 4 CPU / 8GB / +30G  │  │
+                                                 │  └─────────────────────┘  │
+                                                 └───────────────────────────┘
+
+                             ┌──────────────────────────────────────────────────────────┐
+                             │                 KUBERNETES NETWORK                       │
+                             │  Pod Network:     10.14.0.0/16                           │
+                             │  Service Network: 10.15.0.0/16                           │
+                             └──────────────────────────────────────────────────────────┘
+
+                             ┌──────────────────────────────────────────────────────────┐
+                             │                 DEPLOYED SERVICES                        │
+                             ├──────────────────────────────────────────────────────────┤
+                             │  ArgoCD       → https://argocd.knowledgeondemand.net     │
+                             │  Traefik      → https://traefik.knowledgeondemand.net    │
+                             │  Longhorn     → https://longhorn.knowledgeondemand.net   │
+                             │  MetalLB      → Load Balancer (L2 Mode)                  │
+                             │  cert-manager → TLS Certificate Management               │
+                             └──────────────────────────────────────────────────────────┘
+```
 
 ## Project Structure
 
 ```
 Talos-CleanRoom/
-├── Resources/
-│   ├── IAC/                                    # IP-based deployment (primary)
-│   │   ├── README.md                           # IAC-specific documentation
-│   │   ├── tfvars-to-talos-env.sh             # Generate talenv.yaml from Terraform vars
-│   │   ├── Terraform/
-│   │   │   └── Talos-Cluster-Create/          # Terraform configuration
-│   │   │       ├── main.tf                    # VM provisioning resources
-│   │   │       ├── variables.tf               # Variable declarations
-│   │   │       ├── locals.tf                  # Local value definitions
-│   │   │       ├── cluster.auto.tfvars        # Cluster configuration
-│   │   │       ├── credentials.auto.tfvars    # Proxmox credentials (gitignored)
-│   │   │       └── opnsense-configs/          # OPNSense configuration & guides
-│   │   │           ├── README.md
-│   │   │           └── QUICK-START.md
-│   │   └── talos/                             # Talos configuration
-│   │       ├── talconfig.yaml                 # Talos cluster blueprint
-│   │       ├── talsecret.sops.yaml            # SOPS-encrypted secrets
-│   │       ├── talenv.yaml                    # Generated environment variables
-│   │       ├── apply-configs.sh               # Auto-apply configs to VMs
-│   │       └── clusterconfig/                 # Generated machine configs
-│   │
-│   └── IAC-DNS/                               # DNS/FQDN-based deployment (alternative)
-│       ├── README.md                          # DNS deployment documentation
-│       ├── DNS-MAPPING.md                     # DNS to IP reference table
-│       ├── tfvars-to-talos-env.sh            # Generate talenv.yaml (FQDN version)
-│       ├── terraform/
-│       │   └── talos-cluster-create/         # Terraform configuration (FQDN)
-│       ├── talos/                            # Talos configuration (FQDN)
-│       │   ├── talconfig.yaml
-│       │   ├── apply-configs.sh
-│       │   └── clusterconfig/
-│       └── infrastructure/                    # Kubernetes infrastructure components
-│           └── argocd/                        # ArgoCD GitOps deployment
-│               ├── namespace.yaml
-│               ├── values.yaml
-│               ├── install.sh
-│               └── uninstall.sh
+├── README.md                           # This file
+├── LICENSE                             # Project license
+├── TODO-traefik-deployment.md          # Traefik deployment checklist
 │
-├── .gitignore                                 # Excludes credentials and state files
-└── README.md                                  # This file
-```
-
-## Prerequisites
-
-- **Terraform** >= 1.0
-- **Proxmox VE** cluster with API access
-- **Talos ISO** uploaded to Proxmox storage (e.g., `nocloud-amd64.iso`)
-- **OPNSense Template VM** (optional, for firewall deployment)
-- **talhelper** (v3.0.45+) - Talos configuration generator
-- **talosctl** (v1.11.6+) - Talos CLI tool
-- **SOPS** (v3.11.0+) with Age encryption for secrets management
-- **jq** (v1.8.1+) - JSON processor for scripts
-- Valid Proxmox API token with VM management permissions
-
-### Network Configuration
-- **Network**: 10.83.3.0/24
-- **Gateway**: 10.83.3.1
-- **VLAN**: 3
-- **Addressing**: DNS resolution via FQDNs
-
-## DNS Records Required
-
-Before deploying, ensure the following DNS A records are configured:
-
-### Proxmox Cluster Nodes
-```
-pve01.knowledgeondemand.net    → 10.83.2.20
-pve02.knowledgeondemand.net    → 10.83.2.21
-pve03.knowledgeondemand.net    → 10.83.2.22
-pve04.knowledgeondemand.net    → 10.83.2.23
-```
-
-### OPNsense Firewall VMs
-```
-opnsense-fw-01.knowledgeondemand.net → 10.83.3.5
-opnsense-fw-02.knowledgeondemand.net → 10.83.3.6
-```
-
-### Talos Kubernetes Cluster
-```
-talos-CleanRoom-master-01.knowledgeondemand.net → 10.83.3.10
-talos-CleanRoom-worker-01.knowledgeondemand.net → 10.83.3.15
-talos-CleanRoom-worker-02.knowledgeondemand.net → 10.83.3.16
-talos-CleanRoom-worker-03.knowledgeondemand.net → 10.83.3.17
-```
-
-## Virtual Machines
-
-### OPNsense Firewall VMs
-| Name | VMID | FQDN | MAC | Cores | Memory | Disk |
-|------|------|------|-----|-------|--------|------|
-| opnsense-fw-01 | 1010 | opnsense-fw-01.knowledgeondemand.net | BC:24:21:F1:00:01 | 2 | 8GB | 30G |
-| opnsense-fw-02 | 1011 | opnsense-fw-02.knowledgeondemand.net | BC:24:21:F1:00:02 | 2 | 8GB | 30G |
-
-### Talos Kubernetes Cluster
-| Name | VMID | Role | FQDN | MAC | Cores | Memory | Primary Disk | Additional Disk |
-|------|------|------|------|-----|-------|--------|--------------|-----------------|
-| talos-CleanRoom-master-01 | 2000 | Control Plane | talos-CleanRoom-master-01.knowledgeondemand.net | BC:24:21:A4:B2:97 | 4 | 8GB | 30G | - |
-| talos-CleanRoom-worker-01 | 3001 | Worker | talos-CleanRoom-worker-01.knowledgeondemand.net | BC:24:21:4C:99:A1 | 4 | 8GB | 30G | 30G |
-| talos-CleanRoom-worker-02 | 3002 | Worker | talos-CleanRoom-worker-02.knowledgeondemand.net | BC:24:21:4C:99:A2 | 4 | 8GB | 30G | 30G |
-| talos-CleanRoom-worker-03 | 3003 | Worker | talos-CleanRoom-worker-03.knowledgeondemand.net | BC:24:21:4C:99:A3 | 4 | 8GB | 30G | 30G |
-
-## Directory Structure
-
-```
-Resources/IAC-DNS/
-├── terraform/
-│   └── talos-cluster-create/
-│       ├── main.tf                      # Main Terraform configuration (FQDN-based)
-│       ├── variables.tf                 # Variable definitions (FQDN fields)
-│       ├── locals.tf                    # Local values (FQDN references)
-│       ├── cluster.auto.tfvars          # Cluster configuration (FQDNs)
-│       └── credentials.auto.tfvars      # Proxmox credentials (FQDN API URL)
-├── talos/
-│   ├── talconfig.yaml                   # Talos cluster configuration (FQDN-based)
-│   ├── talsecret.sops.yaml             # SOPS-encrypted secrets
-│   ├── talenv.yaml                      # Generated environment variables (FQDNs)
-│   ├── apply-configs.sh                 # Automation script for applying configs
-│   └── clusterconfig/                   # Generated Talos machine configs
-├── infrastructure/
-│   └── argocd/
-│       ├── namespace.yaml               # ArgoCD namespace definition
-│       ├── values.yaml                  # Helm chart values
-│       ├── install.sh                   # Installation script
-│       └── uninstall.sh                 # Uninstallation script
-├── tfvars-to-talos-env.sh              # Extract Terraform vars for Talos (FQDN support)
-├── DNS-MAPPING.md                       # DNS to IP address mapping reference
-└── README.md                            # This file
+└── Resources/
+    ├── IAC/                            # IP-based deployment
+    │   ├── README.md
+    │   ├── .sops.yaml                  # SOPS encryption config
+    │   ├── tfvars-to-talos-env.sh      # Terraform to Talos env converter
+    │   ├── Terraform/
+    │   │   └── Talos-Cluster-Create/
+    │   │       ├── main.tf
+    │   │       ├── variables.tf
+    │   │       ├── locals.tf
+    │   │       ├── cluster.auto.tfvars
+    │   │       └── opnsense-configs/
+    │   └── talos/
+    │       ├── talconfig.yaml
+    │       ├── talsecret.sops.yaml
+    │       ├── talenv.yaml
+    │       ├── apply-configs.sh
+    │       └── clusterconfig/
+    │
+    └── IAC-DNS/                        # DNS/FQDN-based deployment (recommended)
+        ├── README.md
+        ├── DNS-MAPPING.md              # DNS to IP reference
+        ├── .sops.yaml
+        ├── tfvars-to-talos-env.sh
+        │
+        ├── terraform/
+        │   └── talos-cluster-create/
+        │       ├── main.tf
+        │       ├── variables.tf
+        │       ├── locals.tf
+        │       ├── cluster.auto.tfvars
+        │       └── credentials.auto.tfvars   # (gitignored)
+        │
+        ├── talos/
+        │   ├── talconfig.yaml
+        │   ├── talsecret.sops.yaml
+        │   ├── talenv.yaml
+        │   ├── apply-configs.sh
+        │   └── clusterconfig/          # Generated machine configs
+        │
+        └── infrastructure/
+            ├── argocd/                 # ArgoCD GitOps
+            │   ├── namespace.yaml
+            │   ├── values.yaml
+            │   ├── application.yaml
+            │   ├── install.sh
+            │   └── uninstall.sh
+            │
+            └── projects/               # ArgoCD Applications
+                ├── deploy-ingress-stack.sh
+                ├── argocd/
+                │   └── application.yaml
+                ├── metallb/
+                │   ├── application.yaml
+                │   └── ip-pool.yaml
+                ├── cert-manager/
+                │   ├── application.yaml
+                │   └── cluster-issuers.yaml
+                ├── longhorn/
+                │   ├── application.yaml
+                │   ├── namespace.yaml
+                │   └── values.yaml
+                ├── kubescape/
+                │   ├── application.yaml
+                │   ├── namespace.yaml
+                │   └── values.yaml
+                └── traefik/
+                    ├── application.yaml
+                    ├── dashboard-ingressroute.yaml
+                    ├── middlewares.yaml
+                    ├── README.md
+                    └── ingressroutes/
+                        ├── argocd-ingressroute.yaml
+                        └── longhorn-ingressroute.yaml
 ```
 
 ## Prerequisites
 
 ### Required Tools
-- Terraform (v1.x+)
-- talhelper (v3.0.45)
-- talosctl (v1.11.6)
-- sops (v3.11.0)
-- jq (v1.8.1)
-- curl
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Terraform | >= 1.0 | Infrastructure provisioning |
+| talhelper | v3.0.45+ | Talos configuration generator |
+| talosctl | v1.11.6+ | Talos CLI tool |
+| SOPS | v3.11.0+ | Secrets encryption (with Age) |
+| jq | v1.8.1+ | JSON processor for scripts |
+| curl | - | HTTP requests |
+
+### Infrastructure Requirements
+- **Proxmox VE** cluster with API access and valid API token
+- **Talos ISO** uploaded to Proxmox storage (`nocloud-amd64.iso`)
+- **OPNSense Template VM** (optional, for firewall deployment)
 
 ### Network Prerequisites
-1. **DNS Server**: Configured with all required A records
-2. **Network Access**: Jumpbox must be able to resolve and reach all FQDNs
-3. **DHCP**: Configured for 10.83.3.0/24 network
-4. **Firewall**: Network access from jumpbox to Proxmox cluster and VMs
+- **Network**: 10.83.3.0/24 (VLAN 3)
+- **Gateway**: 10.83.3.1
+- **DNS Server**: Configured with all required A records
+- **Network Access**: Workstation must resolve and reach all FQDNs
+
+## DNS Records Required
+
+### Proxmox Cluster Nodes
+| FQDN | IP Address |
+|------|------------|
+| pve01.knowledgeondemand.net | 10.83.2.20 |
+| pve02.knowledgeondemand.net | 10.83.2.21 |
+| pve03.knowledgeondemand.net | 10.83.2.22 |
+| pve04.knowledgeondemand.net | 10.83.2.23 |
+
+### OPNsense Firewall VMs
+| FQDN | IP Address |
+|------|------------|
+| opnsense-fw-01.knowledgeondemand.net | 10.83.3.5 |
+| opnsense-fw-02.knowledgeondemand.net | 10.83.3.6 |
+
+### Talos Kubernetes Cluster
+| FQDN | IP Address |
+|------|------------|
+| talos-CleanRoom-master-01.knowledgeondemand.net | 10.83.3.10 |
+| talos-CleanRoom-worker-01.knowledgeondemand.net | 10.83.3.15 |
+| talos-CleanRoom-worker-02.knowledgeondemand.net | 10.83.3.16 |
+| talos-CleanRoom-worker-03.knowledgeondemand.net | 10.83.3.17 |
+
+## Virtual Machines
+
+### OPNsense Firewall VMs
+| Name | VMID | MAC | Cores | Memory | Disk |
+|------|------|-----|-------|--------|------|
+| opnsense-fw-01 | 1010 | BC:24:21:F1:00:01 | 2 | 8GB | 30G |
+| opnsense-fw-02 | 1011 | BC:24:21:F1:00:02 | 2 | 8GB | 30G |
+
+### Talos Kubernetes Cluster
+| Name | VMID | Role | MAC | Cores | Memory | Disks |
+|------|------|------|-----|-------|--------|-------|
+| talos-CleanRoom-master-01 | 2000 | Control Plane | BC:24:21:A4:B2:97 | 4 | 8GB | 30G |
+| talos-CleanRoom-worker-01 | 3001 | Worker | BC:24:21:4C:99:A1 | 4 | 8GB | 30G + 30G |
+| talos-CleanRoom-worker-02 | 3002 | Worker | BC:24:21:4C:99:A2 | 4 | 8GB | 30G + 30G |
+| talos-CleanRoom-worker-03 | 3003 | Worker | BC:24:21:4C:99:A3 | 4 | 8GB | 30G + 30G |
 
 ## Deployment Workflow
 
-### 1. Deploy Infrastructure with Terraform
+### Step 1: Deploy Infrastructure with Terraform
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/terraform/talos-cluster-create"
-
 terraform init
 terraform plan -out=".tfplan"
 terraform apply ".tfplan"
 ```
 
-### 2. Generate Talos Configuration
+### Step 2: Generate Talos Configuration
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS"
 ./tfvars-to-talos-env.sh
 
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+cd talos
 export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
 talhelper gensecret > talsecret.sops.yaml
 sops -e -i talsecret.sops.yaml
-export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
 talhelper genconfig --env-file talenv.yaml
 ```
 
-### 3. Apply Talos Configs
-
+### Step 3: Apply Talos Configs and Bootstrap
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+
+# Apply configs and bootstrap (waits 180s then bootstraps automatically)
 ./apply-configs.sh --bootstrap
 
-export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
-talosctl kubeconfig -n talos-CleanRoom-master-01 ~/.kube/config
+# Wait for cluster health
+talosctl health --nodes=talos-CleanRoom-master-01.knowledgeondemand.net
 
-talhelper gencommand bootstrap 
-talosctl bootstrap --talosconfig=./clusterconfig/talosconfig --nodes=talos-CleanRoom-master-01;
-
-talhelper gencommand kubeconfig 
+# Get kubeconfig
+talosctl kubeconfig --nodes=talos-CleanRoom-master-01.knowledgeondemand.net ~/.kube/config
 ```
 
-### 4. Verify Deployment
+**Alternative: Manual Bootstrap**
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
+
+./apply-configs.sh                                                            # Apply configs only
+sleep 180                                                                     # Wait for VMs to reboot
+talosctl bootstrap --nodes=talos-CleanRoom-master-01.knowledgeondemand.net    # Bootstrap (run ONCE)
+```
+
+### Step 4: Verify Cluster
 
 ```bash
 kubectl get nodes
 kubectl get pods -A
 ```
 
-### 5. Install ArgoCD
+### Step 5: Install ArgoCD
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
-chmod +x install.sh
-./install.sh
+chmod +x install.sh && ./install.sh
+
+# Get admin password
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+# Verify ArgoCD is running (should have 2 replicas for HA components)
+kubectl get pods -n argocd
+kubectl get deployment -n argocd
 ```
 
-**Get the admin password:**
+### Step 6: Deploy Infrastructure Stack
+
+Deploys MetalLB, cert-manager, Traefik, Longhorn, and applies all IngressRoutes automatically.
+
+```bash
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
+chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh
+```
+
+### Step 7: Configure Load Balancer IP
+
+```bash
+# Get Traefik LoadBalancer IP and update external DNS as needed
+kubectl get svc traefik -n traefik
+```
+
+### Step 8: Create Basic Auth Secret
+
+```bash
+# Generate password hash (install apache2-utils if needed)
+htpasswd -nb admin YOUR_SECURE_PASSWORD
+
+# Create the secret (replace hash with output from above)
+kubectl create secret generic basic-auth-secret --from-literal=users='admin:$2y$10$rwQHL/MIWgJz6eXZWPvz4.gbYZUkBiuLQWKfVW0Z8Jh1LxavPC/ze' -n traefik
+```
+
+### Step 9: Verify Deployment
+
+```bash
+# Check all pods
+kubectl get pods -n metallb-system
+kubectl get pods -n cert-manager
+kubectl get pods -n traefik
+kubectl get pods -n longhorn-system
+kubectl get pods -n argocd
+
+# Verify HA distribution
+kubectl get pods -n traefik -o wide
+kubectl get pods -n argocd -o wide
+
+# Check certificates and ingress routes
+kubectl get certificates -A
+kubectl get ingressroute -A
+```
+
+### Step 10: Enable ArgoCD Self-Management
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml
+
+# Verify ArgoCD is managing itself
+kubectl get applications -n argocd | grep argocd
+```
+
+## Accessing Services
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth) |
+| ArgoCD | https://argocd.knowledgeondemand.net | admin / (see below) |
+| Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth) |
+
+**Get ArgoCD admin password:**
 ```bash
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-```
-
-**Access ArgoCD UI via port-forward:**
-```bash
-kubectl port-forward pod/$(kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server -o jsonpath='{.items[0].metadata.name}') -n argocd 8080:8080
-```
-Then open http://localhost:8080 and login with username `admin` and the password from above.
-
-**Uninstall ArgoCD (if needed):**
-```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
-chmod +x uninstall.sh
-./uninstall.sh
 ```
 
 ## Benefits of DNS-Based Deployment
@@ -251,12 +379,12 @@ chmod +x uninstall.sh
 
 ## Troubleshooting
 
-See [DNS-MAPPING.md](DNS-MAPPING.md) for complete DNS to IP address mappings.
+See [DNS-MAPPING.md](Resources/IAC-DNS/DNS-MAPPING.md) for complete DNS to IP address mappings.
 
 ### Common Issues
 
 - **DNS Resolution**: Verify all FQDNs resolve correctly with `nslookup`
-- **Network Access**: Ensure jumpbox can reach all hosts
+- **Network Access**: Ensure workstation can reach all hosts
 - **Credentials**: Update `credentials.auto.tfvars` with correct Proxmox API URL
 
 ## References

@@ -1,0 +1,46 @@
+# Traefik Dashboard IngressRoute
+# Apply AFTER Traefik is fully deployed
+#
+# Access the dashboard at: https://traefik.knowledgeondemand.net
+#
+# IMPORTANT: This exposes the Traefik dashboard with basic auth protection
+# Create the basic-auth-secret first (see middlewares.yaml for instructions)
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: traefik-dashboard
+  namespace: traefik
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`traefik.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: api@internal
+          kind: TraefikService
+      middlewares:
+        - name: basic-auth
+          namespace: traefik
+        - name: secure-headers
+          namespace: traefik
+  tls:
+    # Use cert-manager to generate certificate
+    secretName: traefik-dashboard-tls
+---
+# Certificate for the dashboard (requires cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: traefik-dashboard-cert
+  namespace: traefik
+spec:
+  secretName: traefik-dashboard-tls
+  issuerRef:
+    # Use letsencrypt-staging for testing, letsencrypt-prod for production
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: traefik.knowledgeondemand.net
+  dnsNames:
+    - traefik.knowledgeondemand.net
