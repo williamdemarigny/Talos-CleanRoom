@@ -1,0 +1,49 @@
+# Cert-Manager Cluster Issuers
+# Apply AFTER cert-manager is fully deployed and running
+#
+# Apply manually with: kubectl apply -f cluster-issuers.yaml
+# Or create a separate ArgoCD Application for post-install configuration
+#
+# IMPORTANT: Update the email address for Let's Encrypt notifications
+---
+# Self-signed issuer for internal/development certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+# Let's Encrypt Staging (for testing - higher rate limits, untrusted certs)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    # Update this email to receive certificate expiration notifications
+    email: admin@knowledgeondemand.net
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+# Let's Encrypt Production (trusted certificates - lower rate limits)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    # Update this email to receive certificate expiration notifications
+    email: admin@knowledgeondemand.net
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik

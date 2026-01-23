@@ -82,6 +82,16 @@ resource "proxmox_virtual_environment_vm" "opnsense" {
     vlan_id     = each.value.vlan_id
   }
 
+  # Primary disk (override cloned disk settings - must match or exceed template size of 32GB)
+  disk {
+    interface    = "scsi0"
+    datastore_id = each.value.disk_storage
+    size         = 32
+    cache        = "writeback"
+    discard      = "ignore"
+    ssd          = true
+  }
+
   # Assign to resource pool for organization
   pool_id = var.proxmox_pool != "" ? var.proxmox_pool : null
 
@@ -127,28 +137,23 @@ resource "proxmox_virtual_environment_vm" "vm" {
     vlan_id     = each.value.vlan_id
   }
 
-  # Primary disk
+  # Primary disk (VirtIO Block for maximum performance)
   disk {
-    interface    = "scsi0"
+    interface    = "virtio0"
     datastore_id = each.value.disk_storage
     size         = tonumber(trimsuffix(each.value.disk_size, "G"))
-    cache        = "none"
+    cache        = "writeback"
     discard      = "ignore"
-    ssd          = false
   }
 
-  # Additional disk for storage (worker nodes with additional_disk_size)
-  dynamic "disk" {
-    for_each = each.value.additional_disk_size != null ? [1] : []
-    content {
-      interface    = "scsi1"
-      datastore_id = each.value.additional_disk_storage
-      size         = tonumber(trimsuffix(each.value.additional_disk_size, "G"))
-      cache        = "none"
-      discard      = "ignore"
-      ssd          = false
-      file_format  = "raw"
-    }
+  # Additional disk for Longhorn storage (VirtIO Block device)
+  disk {
+    interface    = "virtio1"
+    datastore_id = "local-lvm"
+    size         = 75
+    cache        = "writeback"
+    discard      = "ignore"
+    file_format  = "raw"
   }
 
   # Assign to resource pool for cluster-level organization

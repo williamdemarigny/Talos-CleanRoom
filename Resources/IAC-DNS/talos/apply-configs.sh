@@ -219,8 +219,14 @@ find_vm_node() {
     return 1
 }
 
+# Auto-set TALOSCONFIG if not already set
+if [[ -z "${TALOSCONFIG:-}" ]]; then
+    export TALOSCONFIG="$CONFIG_DIR/talosconfig"
+fi
+
 # Main execution
 print_info "Starting Talos config application process"
+print_info "Using TALOSCONFIG: $TALOSCONFIG"
 echo ""
 
 # Check if config directory exists
@@ -342,12 +348,12 @@ done < "$TFVARS_FILE"
 # Bootstrap cluster if requested
 if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
     echo ""
-    print_info "Waiting 60 seconds for VMs to reboot and become available..."
+    print_info "Waiting 180 seconds for VMs to reboot and become available..."
 
     if [[ "$DRY_RUN" == true ]]; then
         print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
-        sleep 60
+        sleep 180
 
         print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
         if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
