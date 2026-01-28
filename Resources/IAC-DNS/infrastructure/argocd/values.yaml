@@ -1,5 +1,17 @@
 # ArgoCD Helm Chart Values
 # https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd
+#
+# =============================================================================
+# WARNING: DEFAULT CREDENTIALS - CHANGE IN PRODUCTION!
+# =============================================================================
+# Admin username: admin
+# Admin password: admin
+#
+# To change the password, generate a new bcrypt hash:
+#   htpasswd -nbBC 10 "" YOUR_PASSWORD | tr -d ':\n' | sed 's/$2y/$2a/'
+# Or use: python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt()).decode())"
+# Then update configs.secret.argocdServerAdminPassword below
+# =============================================================================
 
 global:
   # Domain for ArgoCD (update this to your domain)
@@ -146,11 +158,15 @@ configs:
       g, admin, role:admin
 
   # Secret configuration
+  # WARNING: Default password is 'admin' - CHANGE IN PRODUCTION!
   secret:
     # Create the argocd-secret
     createSecret: true
     # Annotations for the secret
     annotations: {}
+    # Admin password (bcrypt hash of 'admin')
+    # Generate new hash: htpasswd -nbBC 10 "" YOUR_PASSWORD | tr -d ':\n' | sed 's/$2y/$2a/'
+    argocdServerAdminPassword: "$2a$10$rRyBsGSHK6.uc8fntPwVIuLVHgsAhAX7TcdrqW/RADU0ez4OxyBy4"
 
   # Known hosts for SSH
   ssh:

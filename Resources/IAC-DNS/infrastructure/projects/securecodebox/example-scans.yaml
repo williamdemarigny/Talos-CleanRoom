@@ -1,0 +1,63 @@
+# SecureCodeBox Nmap Example Scans
+# Apply these after the operator and nmap scanner are deployed
+#
+# Usage:
+#   kubectl apply -f example-scans.yaml
+#
+# Check results:
+#   kubectl get scans -n securecodebox-system
+#   kubectl get findings -n securecodebox-system
+---
+# Quick scan of a single host
+apiVersion: "execution.securecodebox.io/v1"
+kind: Scan
+metadata:
+  name: nmap-quick-scan
+  namespace: securecodebox-system
+spec:
+  scanType: "nmap"
+  parameters:
+    - "-T4"           # Aggressive timing
+    - "-F"            # Fast mode (top 100 ports)
+    - "10.83.3.1"     # Target (adjust to your network)
+---
+# Service version detection scan
+apiVersion: "execution.securecodebox.io/v1"
+kind: Scan
+metadata:
+  name: nmap-service-scan
+  namespace: securecodebox-system
+spec:
+  scanType: "nmap"
+  parameters:
+    - "-sV"                    # Service version detection
+    - "-p"
+    - "22,80,443,8080,8443"    # Common ports
+    - "10.83.3.1"
+---
+# Network range scan (use carefully)
+apiVersion: "execution.securecodebox.io/v1"
+kind: Scan
+metadata:
+  name: nmap-network-scan
+  namespace: securecodebox-system
+spec:
+  scanType: "nmap"
+  parameters:
+    - "-sn"               # Ping scan (host discovery only)
+    - "10.83.3.0/24"      # Subnet range
+---
+# Scheduled scan (runs daily at 3 AM)
+apiVersion: "execution.securecodebox.io/v1"
+kind: ScheduledScan
+metadata:
+  name: nmap-daily-scan
+  namespace: securecodebox-system
+spec:
+  interval: 24h
+  scanSpec:
+    scanType: "nmap"
+    parameters:
+      - "-sV"
+      - "-T4"
+      - "10.83.3.1"
