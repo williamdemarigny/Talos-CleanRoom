@@ -1,0 +1,17 @@
+# Threat Dragon Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: threat-dragon
+  namespace: threat-dragon
+  labels:
+    app: threat-dragon
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: threat-dragon

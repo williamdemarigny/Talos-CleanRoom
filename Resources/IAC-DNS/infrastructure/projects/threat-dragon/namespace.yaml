@@ -1,0 +1,8 @@
+# Threat Dragon Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: threat-dragon
+  labels:
+    app.kubernetes.io/name: threat-dragon
+    app.kubernetes.io/component: threat-modeling

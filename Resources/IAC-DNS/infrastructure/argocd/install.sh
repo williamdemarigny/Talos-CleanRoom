@@ -34,6 +34,18 @@ fi
 echo "Creating namespace: ${NAMESPACE}..."
 kubectl apply -f "${SCRIPT_DIR}/namespace.yaml"
 
+# Apply repository credentials if encrypted file exists
+SOPS_CREDS="${SCRIPT_DIR}/repo-credentials.sops.yaml"
+if [[ -f "${SOPS_CREDS}" ]]; then
+    if command -v sops &> /dev/null; then
+        echo "Applying repository credentials..."
+        sops --decrypt "${SOPS_CREDS}" | kubectl apply -f -
+    else
+        echo "Warning: sops not found, skipping repository credentials"
+        echo "Install sops to apply private repo credentials"
+    fi
+fi
+
 # Add ArgoCD Helm repository
 echo "Adding ArgoCD Helm repository..."
 helm repo add argo https://argoproj.github.io/argo-helm
