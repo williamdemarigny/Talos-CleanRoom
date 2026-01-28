@@ -1,0 +1,163 @@
+# Greenbone Community Edition - Persistent Volume Claims
+# Converted from docker-compose.yml at https://greenbone.github.io/docs/latest/_static/docker-compose.yml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gpg-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scap-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cert-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-objects
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gvmd-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: gvmd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: psql-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: postgresql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # 40Gi required for full SCAP/CVE database import
+      storage: 40Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vt-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notus-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openvas-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: openvas
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openvas-log-data
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: openvas
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: longhorn

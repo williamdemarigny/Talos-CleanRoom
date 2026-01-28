@@ -5,7 +5,7 @@
 # OPNSense Firewall Configuration
 # ============================================================================
 # Enable OPNSense firewall deployment (deployed before Talos cluster)
-opnsense_enabled = true
+opnsense_enabled = false
 
 # OPNSense template configuration (cloned from existing template VM)
 # IMPORTANT: Specify the node where template VM 1000 is located
@@ -70,7 +70,7 @@ nodes = [
     role        = "controlplane",
     fqdn        = "talos-CleanRoom-master-01.knowledgeondemand.net",
     cores       = 4,
-    memory      = 8192,
+    memory      = 16384,
     disk_size   = "30G",
     mac_address = "BC:24:21:A4:B2:97",
     tags        = ["talos", "controlplane"]
@@ -84,7 +84,7 @@ nodes = [
     role        = "worker",
     fqdn        = "talos-CleanRoom-worker-01.knowledgeondemand.net",
     cores       = 4,
-    memory      = 8192,
+    memory      = 16384,
     disk_size   = "30G",
     mac_address = "BC:24:21:4C:99:A1",
     tags        = ["talos", "worker"]
@@ -98,7 +98,7 @@ nodes = [
     role        = "worker",
     fqdn        = "talos-CleanRoom-worker-02.knowledgeondemand.net",
     cores       = 4,
-    memory      = 8192,
+    memory      = 16384,
     disk_size   = "30G",
     mac_address = "BC:24:21:4C:99:A2",
     tags        = ["talos", "worker"]
@@ -112,7 +112,7 @@ nodes = [
     role        = "worker",
     fqdn        = "talos-CleanRoom-worker-03.knowledgeondemand.net",
     cores       = 4,
-    memory      = 8192,
+    memory      = 16384,
     disk_size   = "30G",
     mac_address = "BC:24:21:4C:99:A3",
     tags        = ["talos", "worker"]

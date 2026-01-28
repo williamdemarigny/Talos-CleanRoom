@@ -8,6 +8,9 @@ set -euo pipefail
 # - Kubernetes cluster is running (Talos)
 # - ArgoCD is installed and running
 # - kubectl is configured to access the cluster
+#
+# Note: OpenVAS is deployed separately via deploy-openvas.sh
+# after the cluster is stable
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -149,10 +152,11 @@ echo "[9/10] Retrieving Traefik LoadBalancer IP..."
 sleep 5
 TRAEFIK_IP=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
 
-# Apply IngressRoutes
+# Apply IngressRoutes (excluding OpenVAS which will be added later)
 echo "[10/10] Applying IngressRoutes..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
-kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/"
+kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/argocd-ingressroute.yaml"
+kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/longhorn-ingressroute.yaml"
 echo "✓ IngressRoutes applied"
 echo ""
 
@@ -170,12 +174,10 @@ echo "   - traefik.knowledgeondemand.net"
 echo "   - argocd.knowledgeondemand.net"
 echo "   - longhorn.knowledgeondemand.net"
 echo ""
-echo "2. Create basic-auth secret for protected services:"
-echo "   # Install htpasswd if needed: apt-get install apache2-utils"
-echo "   htpasswd -nb admin YOUR_PASSWORD"
-echo "   kubectl create secret generic basic-auth-secret \\"
-echo "       --from-literal=users='admin:\$apr1\$...' \\"
-echo "       -n traefik"
+echo "2. Default credentials (CHANGE IN PRODUCTION!):"
+echo "   All UIs use: admin / admin"
+echo "   - Traefik/Longhorn: update traefik/middlewares.yaml"
+echo "   - ArgoCD: update infrastructure/argocd/values.yaml"
 echo ""
 echo "3. Verify deployment:"
 echo "   kubectl get pods -n metallb-system"
@@ -183,4 +185,13 @@ echo "   kubectl get pods -n cert-manager"
 echo "   kubectl get pods -n traefik"
 echo "   kubectl get pods -n longhorn-system"
 echo "   kubectl get svc -n traefik"
+echo ""
+echo "4. Access UIs (credentials: admin/admin):"
+echo "   - https://traefik.knowledgeondemand.net (Traefik Dashboard)"
+echo "   - https://longhorn.knowledgeondemand.net (Longhorn Storage)"
+echo "   - https://argocd.knowledgeondemand.net (ArgoCD)"
+echo ""
+echo "5. Deploy OpenVAS (optional, resource-intensive):"
+echo "   After the cluster is stable, run:"
+echo "   ./deploy-openvas.sh"
 echo ""

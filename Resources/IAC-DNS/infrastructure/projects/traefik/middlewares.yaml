@@ -68,10 +68,19 @@ spec:
     scheme: https
     permanent: true
 ---
-# Basic auth middleware template (create secrets separately)
-# To create the secret:
-# htpasswd -nb admin password | base64
-# kubectl create secret generic basic-auth-secret --from-literal=users='admin:$apr1$...' -n traefik
+# Basic auth secret for UI access
+# Default credentials: admin / admin (CHANGE IN PRODUCTION!)
+# To regenerate: python -c "import hashlib; import base64; print('admin:' + '{SHA}' + base64.b64encode(hashlib.sha1(b'YOUR_PASSWORD'.encode()).digest()).decode())"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: basic-auth-secret
+  namespace: traefik
+type: Opaque
+stringData:
+  users: "admin:{SHA}0DPiKuNIrrVmD8IUCuw1hQxNqZc="
+---
+# Basic auth middleware - references the secret above
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:

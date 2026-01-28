@@ -1,0 +1,548 @@
+# Greenbone Community Edition - Main Deployment
+# Converted from docker-compose.yml at https://greenbone.github.io/docs/latest/_static/docker-compose.yml
+#
+# All services are in a single pod because they communicate via Unix sockets.
+# This matches the docker-compose architecture where containers share socket volumes.
+#
+# Architecture:
+# - Init containers: Data feed synchronization (vulnerability-tests, notus-data, scap-data, etc.)
+# - Init containers: PostgreSQL migration, OpenVAS configuration
+# - Main containers: redis, postgresql, gvmd, gsa, ospd-openvas, openvasd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greenbone
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: vulnerability-scanner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO PVCs
+  selector:
+    matchLabels:
+      app: greenbone
+  template:
+    metadata:
+      labels:
+        app: greenbone
+    spec:
+      # ============================================================
+      # INIT CONTAINERS - Data feeds and configuration
+      # ============================================================
+      initContainers:
+      # 1. Vulnerability Tests Data Feed
+      - name: vulnerability-tests
+        image: registry.community.greenbone.net/community/vulnerability-tests
+        env:
+        - name: FEED_RELEASE
+          value: "24.10"
+        volumeMounts:
+        - name: vt-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 2. Notus Data Feed
+      - name: notus-data
+        image: registry.community.greenbone.net/community/notus-data
+        volumeMounts:
+        - name: notus-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 3. SCAP Data Feed
+      - name: scap-data
+        image: registry.community.greenbone.net/community/scap-data
+        volumeMounts:
+        - name: scap-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 4. CERT-Bund Data Feed
+      - name: cert-bund-data
+        image: registry.community.greenbone.net/community/cert-bund-data
+        volumeMounts:
+        - name: cert-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 5. DFN-CERT Data Feed (runs after cert-bund-data)
+      - name: dfn-cert-data
+        image: registry.community.greenbone.net/community/dfn-cert-data
+        volumeMounts:
+        - name: cert-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 6. Data Objects
+      - name: data-objects
+        image: registry.community.greenbone.net/community/data-objects
+        env:
+        - name: FEED_RELEASE
+          value: "24.10"
+        volumeMounts:
+        - name: data-objects
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 7. Report Formats (runs after data-objects)
+      - name: report-formats
+        image: registry.community.greenbone.net/community/report-formats
+        env:
+        - name: FEED_RELEASE
+          value: "24.10"
+        volumeMounts:
+        - name: data-objects
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 8. GPG Data
+      - name: gpg-data
+        image: registry.community.greenbone.net/community/gpg-data
+        volumeMounts:
+        - name: gpg-data
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 9. PostgreSQL Data Directory Setup
+      # Initialize PostgreSQL data directory with proper structure for pg-gvm
+      - name: psql-data-setup
+        image: registry.community.greenbone.net/community/pg-gvm:stable
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+            echo "Setting up PostgreSQL data directory..."
+
+            # Set ownership first
+            chown -R postgres:postgres /var/lib/postgresql
+            chmod 700 /var/lib/postgresql
+
+            # Check if cluster already initialized
+            if [ -f /var/lib/postgresql/17/main/PG_VERSION ]; then
+              echo "PostgreSQL cluster already exists."
+              exit 0
+            fi
+
+            echo "Initializing PostgreSQL 17 cluster..."
+            mkdir -p /var/lib/postgresql/17/main
+            chown -R postgres:postgres /var/lib/postgresql/17
+            chmod 700 /var/lib/postgresql/17/main
+
+            # Run initdb as postgres user
+            su postgres -c "/usr/lib/postgresql/17/bin/initdb -D /var/lib/postgresql/17/main"
+
+            echo "PostgreSQL data directory ready."
+        volumeMounts:
+        - name: psql-data
+          mountPath: /var/lib/postgresql
+        securityContext:
+          runAsUser: 0
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      # 10. GVMD Data Directory Setup
+      # Initialize GVMD data directory with proper structure and permissions
+      - name: gvmd-data-setup
+        image: registry.community.greenbone.net/community/gvmd:stable
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "Setting up GVMD data directory..."
+
+            # Create required directories
+            mkdir -p /var/lib/gvm/gvmd
+
+            # Set ownership to gvmd user (UID 1001)
+            chown -R 1001:1001 /var/lib/gvm
+            chmod 755 /var/lib/gvm
+            chmod 755 /var/lib/gvm/gvmd
+
+            echo "GVMD data directory ready."
+        volumeMounts:
+        - name: gvmd-data
+          mountPath: /var/lib/gvm
+        securityContext:
+          runAsUser: 0
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+
+      # 11. Configure OpenVAS
+      - name: configure-openvas
+        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            printf "table_driven_lsc = yes\nopenvasd_server = http://127.0.0.1:8090\n" > /mnt/openvas.conf
+            sed "s/127/128/" /etc/openvas/openvas_log.conf | sed 's/gvm/openvas/' > /mnt/openvas_log.conf
+            chmod 644 /mnt/openvas.conf
+            chmod 644 /mnt/openvas_log.conf
+            touch /var/log/openvas/openvas.log
+            chmod 666 /var/log/openvas/openvas.log
+        volumeMounts:
+        - name: openvas-data
+          mountPath: /mnt
+        - name: openvas-log-data
+          mountPath: /var/log/openvas
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+
+      # ============================================================
+      # MAIN CONTAINERS
+      # ============================================================
+      containers:
+      # 1. Redis Server (must start first - other services depend on it)
+      - name: redis-server
+        image: registry.community.greenbone.net/community/redis-server
+        volumeMounts:
+        - name: redis-socket
+          mountPath: /run/redis/
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        startupProbe:
+          exec:
+            command: ["redis-cli", "-s", "/run/redis/redis.sock", "ping"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 12
+        readinessProbe:
+          exec:
+            command: ["redis-cli", "-s", "/run/redis/redis.sock", "ping"]
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+      # 2. PostgreSQL with GVM extensions
+      - name: pg-gvm
+        image: registry.community.greenbone.net/community/pg-gvm:stable
+        volumeMounts:
+        - name: psql-data
+          mountPath: /var/lib/postgresql
+        - name: psql-socket
+          mountPath: /var/run/postgresql
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "100m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        startupProbe:
+          exec:
+            command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "postgres"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "postgres"]
+          initialDelaySeconds: 60
+          periodSeconds: 10
+
+      # 3. OpenVAS Scanner Daemon (Notus mode)
+      - name: openvasd
+        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        env:
+        - name: OPENVASD_MODE
+          value: service_notus
+        - name: GNUPGHOME
+          value: /etc/openvas/gnupg
+        - name: LISTENING
+          value: "0.0.0.0:8090"
+        ports:
+        - containerPort: 8090
+          name: openvasd
+        volumeMounts:
+        - name: openvas-data
+          mountPath: /etc/openvas
+        - name: openvas-log-data
+          mountPath: /var/log/openvas
+        - name: gpg-data
+          mountPath: /etc/openvas/gnupg
+        - name: notus-data
+          mountPath: /var/lib/notus
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "50m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        startupProbe:
+          httpGet:
+            path: /health/ready
+            port: 8090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+      # 4. OSPD-OpenVAS (Scanner Protocol Daemon)
+      - name: ospd-openvas
+        image: registry.community.greenbone.net/community/ospd-openvas:stable
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Waiting for Redis socket..."
+            while [ ! -S /run/redis/redis.sock ]; do sleep 2; done
+            echo "Redis ready. Starting OSPD-OpenVAS..."
+            exec ospd-openvas -f --config /etc/gvm/ospd-openvas.conf --notus-feed-dir /var/lib/notus/advisories -m 666
+        securityContext:
+          capabilities:
+            add:
+              - NET_ADMIN
+              - NET_RAW
+        volumeMounts:
+        - name: gpg-data
+          mountPath: /etc/openvas/gnupg
+        - name: vt-data
+          mountPath: /var/lib/openvas/plugins
+        - name: notus-data
+          mountPath: /var/lib/notus
+        - name: ospd-socket
+          mountPath: /run/ospd
+        - name: redis-socket
+          mountPath: /run/redis/
+        - name: openvas-data
+          mountPath: /etc/openvas/
+        - name: openvas-log-data
+          mountPath: /var/log/openvas
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "2Gi"
+            cpu: "2"
+        startupProbe:
+          exec:
+            command: ["test", "-S", "/run/ospd/ospd-openvas.sock"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          exec:
+            command: ["test", "-S", "/run/ospd/ospd-openvas.sock"]
+          initialDelaySeconds: 60
+          periodSeconds: 10
+
+      # 5. GVMD (Greenbone Vulnerability Manager Daemon)
+      - name: gvmd
+        image: registry.community.greenbone.net/community/gvmd:stable
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Waiting for PostgreSQL socket..."
+            while [ ! -S /var/run/postgresql/.s.PGSQL.5432 ]; do sleep 2; done
+            echo "PostgreSQL ready. Waiting for OSPD socket..."
+            while [ ! -S /run/ospd/ospd-openvas.sock ]; do sleep 2; done
+            echo "OSPD ready."
+
+            # Create admin user if it doesn't exist (first run only)
+            # Run as gvmd user via gosu to connect to PostgreSQL properly
+            if ! gosu gvmd gvmd --get-users 2>/dev/null | grep -q "^admin$"; then
+              echo "Creating admin user..."
+              gosu gvmd gvmd --create-user=admin --password=admin || echo "User creation failed or already exists"
+            else
+              echo "Admin user already exists."
+            fi
+
+            echo "Starting GVMD..."
+            # Note: --listen-group removed as gvm group doesn't exist in container
+            # Socket permissions handled via emptyDir shared volume
+            exec /usr/local/bin/entrypoint gvmd -f
+        volumeMounts:
+        - name: gvmd-data
+          mountPath: /var/lib/gvm
+        - name: scap-data
+          mountPath: /var/lib/gvm/scap-data/
+        - name: cert-data
+          mountPath: /var/lib/gvm/cert-data
+        - name: data-objects
+          mountPath: /var/lib/gvm/data-objects/gvmd
+        - name: vt-data
+          mountPath: /var/lib/openvas/plugins
+        - name: gvmd-socket
+          mountPath: /run/gvmd
+        - name: ospd-socket
+          mountPath: /run/ospd
+        - name: psql-socket
+          mountPath: /var/run/postgresql
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "200m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        # GVMD takes significant time to sync feeds on first start
+        startupProbe:
+          exec:
+            command: ["test", "-S", "/run/gvmd/gvmd.sock"]
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 60
+        readinessProbe:
+          exec:
+            command: ["test", "-S", "/run/gvmd/gvmd.sock"]
+          initialDelaySeconds: 120
+          periodSeconds: 10
+
+      # 6. GSA (Greenbone Security Assistant - Web UI)
+      - name: gsa
+        image: registry.community.greenbone.net/community/gsa:stable
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Waiting for GVMD socket..."
+            while [ ! -S /run/gvmd/gvmd.sock ]; do sleep 2; done
+            echo "GVMD ready. Starting GSA..."
+            # Run gsad in HTTP-only mode (Traefik handles TLS termination)
+            exec gsad --foreground --http-only --drop-privileges=gsad
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: gvmd-socket
+          mountPath: /run/gvmd
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "1"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 30
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          failureThreshold: 10
+
+      # ============================================================
+      # VOLUMES
+      # ============================================================
+      volumes:
+      # Persistent Volume Claims (data that persists)
+      - name: gpg-data
+        persistentVolumeClaim:
+          claimName: gpg-data
+      - name: scap-data
+        persistentVolumeClaim:
+          claimName: scap-data
+      - name: cert-data
+        persistentVolumeClaim:
+          claimName: cert-data
+      - name: data-objects
+        persistentVolumeClaim:
+          claimName: data-objects
+      - name: gvmd-data
+        persistentVolumeClaim:
+          claimName: gvmd-data
+      - name: psql-data
+        persistentVolumeClaim:
+          claimName: psql-data
+      - name: vt-data
+        persistentVolumeClaim:
+          claimName: vt-data
+      - name: notus-data
+        persistentVolumeClaim:
+          claimName: notus-data
+      - name: openvas-data
+        persistentVolumeClaim:
+          claimName: openvas-data
+      - name: openvas-log-data
+        persistentVolumeClaim:
+          claimName: openvas-log-data
+      # EmptyDir volumes for socket communication (ephemeral)
+      - name: redis-socket
+        emptyDir: {}
+      - name: psql-socket
+        emptyDir: {}
+      - name: gvmd-socket
+        emptyDir: {}
+      - name: ospd-socket
+        emptyDir: {}

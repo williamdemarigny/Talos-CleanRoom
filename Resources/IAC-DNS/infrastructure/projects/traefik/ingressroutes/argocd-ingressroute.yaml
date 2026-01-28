@@ -25,7 +25,8 @@ spec:
         - name: secure-headers
           namespace: traefik
     # ArgoCD gRPC (for CLI)
-    - match: Host(`argocd.knowledgeondemand.net`) && Headers(`Content-Type`, `application/grpc`)
+    # Note: Traefik v3 renamed HeadersRegexp to HeaderRegexp (singular)
+    - match: Host(`argocd.knowledgeondemand.net`) && HeaderRegexp(`Content-Type`, `^application/grpc.*`)
       kind: Rule
       priority: 11
       services:
