@@ -15,3 +15,8 @@ credentials.sh
 **/scripts/opnsense_*.ps1
 **/opnsense_backups/*.xml
 **/opnsense_backups/*.tar.gz
+
+# Unencrypted secrets (must be encrypted with SOPS before committing)
+# Keep the .sops.yaml versions, ignore plaintext
+**/repo-credentials.yaml
+!**/repo-credentials.sops.yaml

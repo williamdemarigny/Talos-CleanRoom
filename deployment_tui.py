@@ -78,20 +78,39 @@ class DeploymentTUI:
         return False
 
     def run_command(self, cmd: list, cwd: Optional[Path] = None,
-                    env: Optional[dict] = None, stream_output: bool = True) -> Tuple[bool, str]:
-        """Run a command and optionally stream output."""
+                    env: Optional[dict] = None, stream_output: bool = True,
+                    auto_confirm: bool = True) -> Tuple[bool, str]:
+        """Run a command and optionally stream output.
+
+        Args:
+            cmd: Command and arguments to run
+            cwd: Working directory
+            env: Environment variables to add
+            stream_output: Whether to stream output to console
+            auto_confirm: If True, automatically respond 'y' to prompts
+        """
         try:
             merged_env = os.environ.copy()
             if env:
                 merged_env.update(env)
 
+            # Prepare stdin - provide 'y' responses for auto-confirm, otherwise close stdin
+            stdin_input = "y\n" * 10 if auto_confirm else None
+
             if stream_output:
                 process = subprocess.Popen(
                     cmd, cwd=cwd, env=merged_env,
+                    stdin=subprocess.PIPE if auto_confirm else subprocess.DEVNULL,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1
                 )
                 output_lines = []
+                if auto_confirm and process.stdin:
+                    try:
+                        process.stdin.write("y\n" * 10)
+                        process.stdin.close()
+                    except (BrokenPipeError, OSError):
+                        pass  # Command may not need input
                 for line in iter(process.stdout.readline, ''):
                     line = line.rstrip()
                     if line:
@@ -102,6 +121,7 @@ class DeploymentTUI:
             else:
                 result = subprocess.run(
                     cmd, cwd=cwd, env=merged_env,
+                    input=stdin_input,
                     capture_output=True, text=True
                 )
                 return (result.returncode == 0, result.stdout + result.stderr)
@@ -263,7 +283,7 @@ class DeploymentTUI:
         # Generate Talos secret
         console.print("  [cyan]Generating Talos secret...[/cyan]")
         success, output = self.run_command(
-            ["talhelper", "gensecret"], cwd=talos_dir, stream_output=False
+            ["talhelper", "gensecret"], cwd=talos_dir, stream_output=False, auto_confirm=True
         )
         if not success:
             console.print("  [red]Error: Failed to generate Talos secret[/red]")
@@ -277,7 +297,7 @@ class DeploymentTUI:
         console.print("  [cyan]Encrypting secret with SOPS...[/cyan]")
         success, _ = self.run_command(
             ["sops", "-e", "-i", "talsecret.sops.yaml"],
-            cwd=talos_dir, env=env
+            cwd=talos_dir, env=env, auto_confirm=True
         )
         if not success:
             console.print("  [red]Error: Failed to encrypt Talos secret[/red]")
@@ -292,7 +312,7 @@ class DeploymentTUI:
         console.print("  [cyan]Generating Talos config...[/cyan]")
         success, _ = self.run_command(
             ["talhelper", "genconfig", "--env-file", "talenv.yaml"],
-            cwd=talos_dir, env=env
+            cwd=talos_dir, env=env, auto_confirm=True
         )
         if not success:
             console.print("  [red]Error: Failed to generate Talos config[/red]")

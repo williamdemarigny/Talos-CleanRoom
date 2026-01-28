@@ -1,0 +1,43 @@
+# Greenbone Security Assistant IngressRoute
+# Apply AFTER Traefik is fully deployed
+#
+# Access Greenbone Security Assistant at: https://openvas.knowledgeondemand.net
+#
+# Default credentials: admin / admin (created by running gvmd --create-user)
+#
+# Note: GSA serves HTTP internally (port 80), Traefik handles TLS termination
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: greenbone-gsa
+  namespace: openvas
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`openvas.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: greenbone
+          port: 80
+      middlewares:
+        - name: secure-headers
+          namespace: traefik
+  tls:
+    secretName: openvas-tls
+---
+# Certificate for OpenVAS (requires cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openvas-cert
+  namespace: openvas
+spec:
+  secretName: openvas-tls
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: openvas.knowledgeondemand.net
+  dnsNames:
+    - openvas.knowledgeondemand.net
