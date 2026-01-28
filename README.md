@@ -136,14 +136,15 @@ Talos-CleanRoom/
             ├── argocd/                 # ArgoCD GitOps
             │   ├── namespace.yaml
             │   ├── values.yaml
-            │   ├── application.yaml
             │   ├── install.sh
-            │   └── uninstall.sh
+            │   ├── uninstall.sh
+            │   ├── apply-repo-credentials.sh
+            │   └── repo-credentials.sops.yaml  # Encrypted GitHub deploy key
             │
             └── projects/               # ArgoCD Applications
                 ├── deploy-ingress-stack.sh
                 ├── argocd/
-                │   └── application.yaml
+                │   └── application.yaml    # ArgoCD self-management
                 ├── metallb/
                 │   ├── application.yaml
                 │   └── ip-pool.yaml
@@ -158,6 +159,12 @@ Talos-CleanRoom/
                 │   ├── application.yaml
                 │   ├── namespace.yaml
                 │   └── values.yaml
+                ├── openvas/                # OpenVAS vulnerability scanner
+                │   └── application.yaml
+                ├── securecodebox/          # SecureCodeBox security scanning
+                │   └── application.yaml
+                ├── threat-dragon/          # OWASP Threat Dragon
+                │   └── application.yaml
                 └── traefik/
                     ├── application.yaml
                     ├── dashboard-ingressroute.yaml
@@ -287,7 +294,27 @@ kubectl get nodes
 kubectl get pods -A
 ```
 
-### Step 5: Install ArgoCD
+### Step 5: Configure Private Repository Access (Optional)
+
+If your repository is private, configure ArgoCD with SSH deploy key credentials:
+
+```bash
+# Generate SSH deploy key
+ssh-keygen -t ed25519 -C "argocd-deploy-key" -f ~/.ssh/argocd_deploy_key -N ""
+
+# Add public key to GitHub: Repo → Settings → Deploy keys
+cat ~/.ssh/argocd_deploy_key.pub
+
+# Edit credentials template with your private key
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
+# Edit repo-credentials.yaml - paste private key from: cat ~/.ssh/argocd_deploy_key
+
+# Encrypt with SOPS
+sops --config ../../talos/.sops.yaml --encrypt repo-credentials.yaml > repo-credentials.sops.yaml
+rm repo-credentials.yaml  # Delete unencrypted file
+```
+
+### Step 6: Install ArgoCD
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
@@ -299,9 +326,12 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 # Verify ArgoCD is running (should have 2 replicas for HA components)
 kubectl get pods -n argocd
 kubectl get deployment -n argocd
+
+# Verify repository credentials (if configured)
+kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
 ```
 
-### Step 6: Deploy Infrastructure Stack
+### Step 7: Deploy Infrastructure Stack
 
 Deploys MetalLB, cert-manager, Traefik, Longhorn, and applies all IngressRoutes automatically.
 
@@ -310,14 +340,14 @@ cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
 chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh
 ```
 
-### Step 7: Configure Load Balancer IP
+### Step 8: Configure Load Balancer IP
 
 ```bash
 # Get Traefik LoadBalancer IP and update external DNS as needed
 kubectl get svc traefik -n traefik
 ```
 
-### Step 8: Create Basic Auth Secret
+### Step 9: Create Basic Auth Secret
 
 ```bash
 # Generate password hash (install apache2-utils if needed)
@@ -327,7 +357,7 @@ htpasswd -nb admin YOUR_SECURE_PASSWORD
 kubectl create secret generic basic-auth-secret --from-literal=users='admin:$2y$10$rwQHL/MIWgJz6eXZWPvz4.gbYZUkBiuLQWKfVW0Z8Jh1LxavPC/ze' -n traefik
 ```
 
-### Step 9: Verify Deployment
+### Step 10: Verify Deployment
 
 ```bash
 # Check all pods
@@ -346,7 +376,7 @@ kubectl get certificates -A
 kubectl get ingressroute -A
 ```
 
-### Step 10: Enable ArgoCD Self-Management
+### Step 11: Enable ArgoCD Self-Management
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -355,6 +385,11 @@ kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.ya
 # Verify ArgoCD is managing itself
 kubectl get applications -n argocd | grep argocd
 ```
+
+Once enabled, ArgoCD will:
+- **Self-manage its own configuration** from `values.yaml` in git
+- **Auto-sync all applications** when you push changes to the repository
+- **Automatically deploy** OpenVAS, Threat Dragon, and other applications defined in `infrastructure/projects/`
 
 ## Accessing Services
 
