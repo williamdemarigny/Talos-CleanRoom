@@ -32,7 +32,7 @@ if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
 fi
 
 # Step 0.1: Dependency Validation
-dependencies=("terraform" "talhelper" "talosctl" "sops" "jq" "curl" "kubectl")
+dependencies=("terraform" "talhelper" "talosctl" "sops" "jq" "curl" "kubectl" "helm")
 
 for cmd in "${dependencies[@]}"; do
     if ! command_exists "$cmd"; then
@@ -95,8 +95,8 @@ echo "Installing ArgoCD..."
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd" || { echo "Error: Could not change directory to ArgoCD installation directory."; cleanup; exit 1; }
 chmod +x install.sh && ./install.sh || { echo "Error: Failed to install ArgoCD."; cleanup; exit 1; }
 
-export ARGO_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
-echo "ArgoCD admin password: $ARGO_PASSWORD"
+# ArgoCD password is preconfigured in values.yaml (admin/admin)
+echo "ArgoCD installed with default credentials: admin / admin"
 
 # Step 7: Deploy Infrastructure Stack
 echo "Deploying infrastructure stack..."
@@ -117,17 +117,42 @@ else
     echo "Warning: ArgoCD self-management application not found. You may need to apply it manually."
 fi
 
+# Step 9: Deploy OpenVAS (vulnerability scanner)
+echo "Deploying OpenVAS..."
+cd "$(git rev-parse --show-toplevel)" || { echo "Error: Could not change directory to repository root."; exit 1; }
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/openvas/application.yaml || echo "Warning: Failed to deploy OpenVAS application. You may need to apply it manually."
+
+# Step 10: Deploy Threat Dragon (threat modeling)
+echo "Deploying Threat Dragon..."
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/threat-dragon/application.yaml || echo "Warning: Failed to deploy Threat Dragon application. You may need to apply it manually."
+
+# Wait for applications to sync
+echo "Waiting for applications to sync..."
+sleep 30
+
+# Final status check
+echo ""
+echo "Checking deployment status..."
+kubectl get applications -n argocd
+
 echo ""
 echo "=========================================="
 echo "Deployment complete!"
 echo "=========================================="
 echo ""
-echo "ArgoCD admin password: $ARGO_PASSWORD"
+echo "Default Credentials (CHANGE IN PRODUCTION!):"
+echo "  - ArgoCD:  admin / admin"
+echo "  - OpenVAS: admin / admin"
+echo "  - Traefik/Longhorn: Uses basic-auth-secret (create with htpasswd)"
 echo ""
 echo "Access services at:"
-echo "  - ArgoCD:  https://argocd.knowledgeondemand.net"
-echo "  - Traefik: https://traefik.knowledgeondemand.net"
-echo "  - Longhorn: https://longhorn.knowledgeondemand.net"
+echo "  - ArgoCD:       https://argocd.knowledgeondemand.net"
+echo "  - Traefik:      https://traefik.knowledgeondemand.net"
+echo "  - Longhorn:     https://longhorn.knowledgeondemand.net"
+echo "  - OpenVAS:      https://openvas.knowledgeondemand.net"
+echo "  - Threat Dragon: https://threatdragon.knowledgeondemand.net"
 echo ""
 echo "ArgoCD is now self-managing. Push changes to git and they will auto-sync."
+echo ""
+echo "Note: OpenVAS feed synchronization takes 30-60 minutes on first deployment."
 echo "=========================================="

@@ -192,6 +192,8 @@ Talos-CleanRoom/
 | SOPS | v3.11.0+ | Secrets encryption (with Age) |
 | jq | v1.8.1+ | JSON processor for scripts |
 | curl | - | HTTP requests |
+| helm | v3.0+ | Kubernetes package manager |
+| kubectl | v1.28+ | Kubernetes CLI |
 
 ### Infrastructure Requirements
 - **Proxmox VE** cluster with API access and valid API token
