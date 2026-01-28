@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: threat-dragon
-        image: owasp/threat-dragon:v1.6.1
+        image: owasp/threat-dragon:v2.5.0
         ports:
         - containerPort: 3000
           name: http
@@ -31,11 +31,7 @@ spec:
         - name: NODE_ENV
           value: "production"
         - name: SERVER_API_PROTOCOL
-          value: "https"
-        # Trust proxy configuration for express-rate-limit
-        # Set to number of proxies between client and app (1 for traefik)
-        - name: TRUST_PROXY
-          value: "1"
+          value: "http"
         # Encryption key for session (generate with: openssl rand -hex 16)
         - name: ENCRYPTION_KEYS
           valueFrom:
