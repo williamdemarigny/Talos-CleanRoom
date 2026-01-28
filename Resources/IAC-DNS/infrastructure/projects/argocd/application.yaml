@@ -25,6 +25,15 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
+  ignoreDifferences:
+    # Ignore argocd-secret data which is managed externally (passwords)
+    - group: ""
+      kind: Secret
+      name: argocd-secret
+      jsonPointers:
+        - /data/admin.password
+        - /data/admin.passwordMtime
+        - /stringData
   syncPolicy:
     automated:
       prune: true

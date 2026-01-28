@@ -422,6 +422,17 @@ spec:
               echo "Admin user already exists."
             fi
 
+            # Set Feed Import Owner to admin user (required for feed synchronization)
+            # The setting UUID 78eceaec-3385-11ea-b237-28d24461215b is the Feed Import Owner setting
+            echo "Setting Feed Import Owner..."
+            ADMIN_UUID=$(gosu gvmd gvmd --get-users --verbose 2>/dev/null | grep "^admin " | awk '{print $2}')
+            if [ -n "$ADMIN_UUID" ]; then
+              gosu gvmd gvmd --modify-setting 78eceaec-3385-11ea-b237-28d24461215b --value "$ADMIN_UUID" 2>/dev/null || echo "Feed owner setting may already be configured"
+              echo "Feed Import Owner set to admin ($ADMIN_UUID)"
+            else
+              echo "Warning: Could not determine admin UUID for Feed Import Owner"
+            fi
+
             echo "Starting GVMD..."
             # Note: --listen-group removed as gvm group doesn't exist in container
             # Socket permissions handled via emptyDir shared volume

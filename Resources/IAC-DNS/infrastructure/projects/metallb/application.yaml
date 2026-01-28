@@ -59,6 +59,18 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: metallb-system
+  ignoreDifferences:
+    # Ignore CRD differences
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jqPathExpressions:
+        - .spec.conversion
+        - .metadata.annotations
+    # Ignore webhook caBundle injected by cert-manager
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
   syncPolicy:
     managedNamespaceMetadata:
       labels:
