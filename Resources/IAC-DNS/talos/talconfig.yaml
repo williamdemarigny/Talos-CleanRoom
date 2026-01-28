@@ -146,7 +146,7 @@ worker:
     machine:
       nodeLabels:
         node-role.kubernetes.io/worker: ""
-  # Longhorn storage configuration
+  # Longhorn storage configuration - mount secondary disk for Longhorn
   - |-
     machine:
       kubelet:
@@ -161,5 +161,5 @@ worker:
       disks:
         - device: /dev/vdb
           partitions:
-            - mountpoint: /var/mnt/longhorn_vdb
+            - mountpoint: /var/lib/longhorn
 

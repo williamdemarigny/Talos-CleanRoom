@@ -1,0 +1,64 @@
+# SecureCodeBox Operator
+# https://www.securecodebox.io/docs/getting-started/installation
+#
+# The operator must be installed before any scan types (nmap, trivy, etc.)
+# It manages CRDs for Scan, ScheduledScan, ScanType, etc.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: securecodebox-operator
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+spec:
+  project: default
+  source:
+    repoURL: ghcr.io/securecodebox/helm
+    targetRevision: 4.9.0
+    chart: operator
+    helm:
+      valuesObject:
+        # Resource limits for the operator
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+        # Webhook configuration
+        webhooks:
+          enabled: true
+
+        # Telemetry (disabled for privacy)
+        telemetry:
+          enabled: false
+
+        # Disable minio - scan results stored as Kubernetes CRDs
+        # Minio only needed for persistence hooks storing raw scan files
+        minio:
+          enabled: false
+
+        # Disable S3 persistence hooks since minio is disabled
+        s3:
+          enabled: false
+
+        # Disable persistence provider
+        persistenceProvider: ""
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: securecodebox-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
