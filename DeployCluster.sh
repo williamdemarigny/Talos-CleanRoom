@@ -103,4 +103,31 @@ echo "Deploying infrastructure stack..."
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects" || { echo "Error: Could not change directory to infrastructure projects directory."; cleanup; exit 1; }
 chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh || { echo "Error: Failed to deploy infrastructure stack."; cleanup; exit 1; }
 
+# Step 8: Enable ArgoCD Self-Management
+echo "Enabling ArgoCD self-management..."
+cd "$(git rev-parse --show-toplevel)" || { echo "Error: Could not change directory to repository root."; cleanup; exit 1; }
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml || { echo "Error: Failed to enable ArgoCD self-management."; cleanup; exit 1; }
+
+# Verify ArgoCD self-management
+echo "Verifying ArgoCD self-management..."
+sleep 10
+if kubectl get applications -n argocd argocd &>/dev/null; then
+    echo "ArgoCD is now self-managing."
+else
+    echo "Warning: ArgoCD self-management application not found. You may need to apply it manually."
+fi
+
+echo ""
+echo "=========================================="
 echo "Deployment complete!"
+echo "=========================================="
+echo ""
+echo "ArgoCD admin password: $ARGO_PASSWORD"
+echo ""
+echo "Access services at:"
+echo "  - ArgoCD:  https://argocd.knowledgeondemand.net"
+echo "  - Traefik: https://traefik.knowledgeondemand.net"
+echo "  - Longhorn: https://longhorn.knowledgeondemand.net"
+echo ""
+echo "ArgoCD is now self-managing. Push changes to git and they will auto-sync."
+echo "=========================================="
