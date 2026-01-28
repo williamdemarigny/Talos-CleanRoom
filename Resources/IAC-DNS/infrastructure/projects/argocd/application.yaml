@@ -19,7 +19,7 @@ spec:
         valueFiles:
           - $values/Resources/IAC-DNS/infrastructure/argocd/values.yaml
     # Git repo containing values.yaml
-    - repoURL: https://github.com/williamdemarigny/Talos-CleanRoom.git
+    - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
       targetRevision: main
       ref: values
   destination:

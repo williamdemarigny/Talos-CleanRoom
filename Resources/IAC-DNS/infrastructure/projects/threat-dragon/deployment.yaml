@@ -1,0 +1,81 @@
+# OWASP Threat Dragon Deployment
+# Threat modeling tool for secure development lifecycle
+# https://owasp.org/www-project-threat-dragon/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threat-dragon
+  namespace: threat-dragon
+  labels:
+    app: threat-dragon
+    app.kubernetes.io/name: threat-dragon
+    app.kubernetes.io/component: threat-modeling
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: threat-dragon
+  template:
+    metadata:
+      labels:
+        app: threat-dragon
+    spec:
+      containers:
+      - name: threat-dragon
+        image: owasp/threat-dragon:v1.6.1
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        # Server configuration
+        - name: NODE_ENV
+          value: "production"
+        - name: SERVER_API_PROTOCOL
+          value: "https"
+        # Trust proxy configuration for express-rate-limit
+        # Set to number of proxies between client and app (1 for traefik)
+        - name: TRUST_PROXY
+          value: "1"
+        # Encryption key for session (generate with: openssl rand -hex 16)
+        - name: ENCRYPTION_KEYS
+          valueFrom:
+            secretKeyRef:
+              name: threat-dragon-secrets
+              key: encryption-keys
+        # JWT signing key (generate with: openssl rand -hex 16)
+        - name: ENCRYPTION_JWT_SIGNING_KEY
+          valueFrom:
+            secretKeyRef:
+              name: threat-dragon-secrets
+              key: jwt-signing-key
+        # JWT refresh key (generate with: openssl rand -hex 16)
+        - name: ENCRYPTION_JWT_REFRESH_SIGNING_KEY
+          valueFrom:
+            secretKeyRef:
+              name: threat-dragon-secrets
+              key: jwt-refresh-signing-key
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false

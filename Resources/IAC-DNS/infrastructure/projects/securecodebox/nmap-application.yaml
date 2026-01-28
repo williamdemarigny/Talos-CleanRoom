@@ -1,0 +1,68 @@
+# SecureCodeBox Nmap Scanner
+# https://www.securecodebox.io/docs/scanners/nmap
+#
+# Requires: securecodebox-operator to be installed first
+# This creates the ScanType CRD for nmap scanning
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: securecodebox-nmap
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+  annotations:
+    # Ensure operator is synced first
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: ghcr.io/securecodebox/helm
+    targetRevision: 4.9.0
+    chart: nmap
+    helm:
+      valuesObject:
+        # Scanner configuration
+        scanner:
+          image:
+            # Use specific version for reproducibility
+            tag: "4.9.0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          # Security context for scanning
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+
+        # Parser configuration (processes scan results)
+        parser:
+          image:
+            tag: "4.9.0"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: securecodebox-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

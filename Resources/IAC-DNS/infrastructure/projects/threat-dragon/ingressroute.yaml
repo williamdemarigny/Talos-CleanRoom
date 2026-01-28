@@ -1,0 +1,38 @@
+# Threat Dragon IngressRoute
+# Access via: https://threatdragon.knowledgeondemand.net
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: threat-dragon
+  namespace: threat-dragon
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`threatdragon.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: threat-dragon
+          port: 80
+      middlewares:
+        - name: basic-auth
+          namespace: traefik
+        - name: secure-headers
+          namespace: traefik
+  tls:
+    secretName: threat-dragon-tls
+---
+# TLS Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: threat-dragon-cert
+  namespace: threat-dragon
+spec:
+  secretName: threat-dragon-tls
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: threatdragon.knowledgeondemand.net
+  dnsNames:
+    - threatdragon.knowledgeondemand.net
