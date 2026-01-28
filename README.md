@@ -79,6 +79,7 @@ This project provides automated deployment and lifecycle management of a Talos K
                              │  ArgoCD       → https://argocd.knowledgeondemand.net     │
                              │  Traefik      → https://traefik.knowledgeondemand.net    │
                              │  Longhorn     → https://longhorn.knowledgeondemand.net   │
+                             │  OpenVAS      → https://openvas.knowledgeondemand.net    │
                              │  MetalLB      → Load Balancer (L2 Mode)                  │
                              │  cert-manager → TLS Certificate Management               │
                              └──────────────────────────────────────────────────────────┘
@@ -160,7 +161,12 @@ Talos-CleanRoom/
                 │   ├── namespace.yaml
                 │   └── values.yaml
                 ├── openvas/                # OpenVAS vulnerability scanner
-                │   └── application.yaml
+                │   ├── application.yaml
+                │   ├── greenbone-deployment.yaml
+                │   ├── greenbone-ingressroute.yaml
+                │   ├── namespace.yaml
+                │   ├── pvc.yaml
+                │   └── service.yaml
                 ├── securecodebox/          # SecureCodeBox security scanning
                 │   └── application.yaml
                 ├── threat-dragon/          # OWASP Threat Dragon
@@ -320,9 +326,6 @@ rm repo-credentials.yaml  # Delete unencrypted file
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
 chmod +x install.sh && ./install.sh
 
-# Get admin password
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-
 # Verify ArgoCD is running (should have 2 replicas for HA components)
 kubectl get pods -n argocd
 kubectl get deployment -n argocd
@@ -330,6 +333,8 @@ kubectl get deployment -n argocd
 # Verify repository credentials (if configured)
 kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
 ```
+
+**Default ArgoCD Credentials:** `admin` / `admin` (configured in `values.yaml`)
 
 ### Step 7: Deploy Infrastructure Stack
 
@@ -393,16 +398,19 @@ Once enabled, ArgoCD will:
 
 ## Accessing Services
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth) |
-| ArgoCD | https://argocd.knowledgeondemand.net | admin / (see below) |
-| Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth) |
+| Service | URL | Default Credentials |
+|---------|-----|---------------------|
+| ArgoCD | https://argocd.knowledgeondemand.net | admin / admin |
+| Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth secret) |
+| Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth secret) |
+| OpenVAS | https://openvas.knowledgeondemand.net | admin / admin |
 
-**Get ArgoCD admin password:**
-```bash
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-```
+**Default Credentials:**
+- **ArgoCD**: Username `admin`, password `admin` (configured in `values.yaml`)
+- **OpenVAS**: Username `admin`, password `admin` (auto-created on first deployment)
+- **Traefik/Longhorn**: Uses basic-auth-secret created in Step 9
+
+> **Warning**: Change default passwords in production! Update ArgoCD password in `infrastructure/argocd/values.yaml` and regenerate the bcrypt hash.
 
 ## Benefits of DNS-Based Deployment
 
