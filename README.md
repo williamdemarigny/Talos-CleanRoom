@@ -80,7 +80,8 @@ This project provides automated deployment and lifecycle management of a Talos K
                              │  Traefik      → https://traefik.knowledgeondemand.net    │
                              │  Longhorn     → https://longhorn.knowledgeondemand.net   │
                              │  OpenVAS      → https://openvas.knowledgeondemand.net    │
-                             │  Metasploit   → https://metasploit.knowledgeondemand.net │
+                             │  Faraday      → https://faraday.knowledgeondemand.net    │
+                             │  Metasploit   → kubectl exec (msfconsole)                │
                              │  MetalLB      → Load Balancer (L2 Mode)                  │
                              │  cert-manager → TLS Certificate Management               │
                              └──────────────────────────────────────────────────────────┘
@@ -143,10 +144,16 @@ Talos-CleanRoom/
                 │   ├── application.yaml
                 │   ├── namespace.yaml
                 │   └── values.yaml
-                ├── metasploit/             # Metasploit Framework
+                ├── faraday/                # Faraday security platform (Web UI)
                 │   ├── application.yaml
                 │   ├── deployment.yaml
-                │   ├── metasploit-ingressroute.yaml
+                │   ├── faraday-ingressroute.yaml
+                │   ├── namespace.yaml
+                │   ├── pvc.yaml
+                │   └── service.yaml
+                ├── metasploit/             # Metasploit Framework (CLI)
+                │   ├── application.yaml
+                │   ├── deployment.yaml
                 │   ├── namespace.yaml
                 │   ├── pvc.yaml
                 │   └── service.yaml
@@ -398,6 +405,9 @@ cd "$(git rev-parse --show-toplevel)"
 # Deploy OpenVAS (vulnerability scanner)
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/openvas/application.yaml
 
+# Deploy Faraday (security platform with web UI)
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/faraday/application.yaml
+
 # Deploy Metasploit Framework (penetration testing)
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/metasploit/application.yaml
 
@@ -418,12 +428,14 @@ kubectl get applications -n argocd
 | Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth secret) |
 | Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth secret) |
 | OpenVAS | https://openvas.knowledgeondemand.net | admin / admin |
-| Metasploit | https://metasploit.knowledgeondemand.net | admin / admin (RPC) + basic auth |
+| Faraday | https://faraday.knowledgeondemand.net | admin / admin |
+| Metasploit | `kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole` | N/A (CLI) |
 
 **Default Credentials:**
 - **ArgoCD**: Username `admin`, password `admin` (configured in `values.yaml`)
 - **OpenVAS**: Username `admin`, password `admin` (auto-created on first deployment)
-- **Metasploit**: RPC username `admin`, password `admin` (also protected by Traefik basic-auth)
+- **Faraday**: Username `admin`, password `admin` (web UI for security management)
+- **Metasploit**: Access via `kubectl exec` for msfconsole (no web UI)
 - **Traefik/Longhorn**: Uses basic-auth-secret created in Step 9
 
 > **Warning**: Change default passwords in production! Update ArgoCD password in `infrastructure/argocd/values.yaml` and regenerate the bcrypt hash.

@@ -1,0 +1,189 @@
+# Faraday - Vulnerability Management Platform
+# Web-based security platform that integrates with Metasploit, Nmap, and 80+ tools
+#
+# Architecture:
+# - PostgreSQL container: Database backend
+# - Faraday Server: Web UI and API
+#
+# Default credentials: admin / admin (set via environment variable)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faraday
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: security-platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: faraday
+  template:
+    metadata:
+      labels:
+        app: faraday
+    spec:
+      # ============================================================
+      # INIT CONTAINERS
+      # ============================================================
+      initContainers:
+      - name: init-postgres
+        image: postgres:15-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "Setting up PostgreSQL data directory..."
+            if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+              echo "Initializing PostgreSQL database..."
+              chown -R postgres:postgres /var/lib/postgresql/data
+              chmod 700 /var/lib/postgresql/data
+            else
+              echo "PostgreSQL data directory already initialized."
+            fi
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        securityContext:
+          runAsUser: 0
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+      # ============================================================
+      # MAIN CONTAINERS
+      # ============================================================
+      containers:
+      # 1. PostgreSQL Database
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: "faraday"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: faraday-db-credentials
+              key: password
+        - name: POSTGRES_DB
+          value: "faraday"
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        ports:
+        - containerPort: 5432
+          name: postgres
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "faraday", "-d", "faraday"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "faraday", "-d", "faraday"]
+          initialDelaySeconds: 30
+          periodSeconds: 30
+
+      # 2. Faraday Server
+      - name: faraday
+        image: faradaysec/faraday:latest
+        env:
+        - name: PGSQL_HOST
+          value: "127.0.0.1"
+        - name: PGSQL_PORT
+          value: "5432"
+        - name: PGSQL_USER
+          value: "faraday"
+        - name: PGSQL_PASSWD
+          valueFrom:
+            secretKeyRef:
+              name: faraday-db-credentials
+              key: password
+        - name: PGSQL_DBNAME
+          value: "faraday"
+        - name: FARADAY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: faraday-admin-credentials
+              key: password
+        volumeMounts:
+        - name: faraday-data
+          mountPath: /home/faraday/.faraday
+        ports:
+        - containerPort: 5985
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        readinessProbe:
+          httpGet:
+            path: /_api/v3/info
+            port: 5985
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        livenessProbe:
+          httpGet:
+            path: /_api/v3/info
+            port: 5985
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          failureThreshold: 5
+
+      # ============================================================
+      # VOLUMES
+      # ============================================================
+      volumes:
+      - name: faraday-data
+        persistentVolumeClaim:
+          claimName: faraday-data
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: faraday-db
+---
+# Database credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: faraday-db-credentials
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: credentials
+type: Opaque
+stringData:
+  password: "admin"
+---
+# Admin credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: faraday-admin-credentials
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: credentials
+type: Opaque
+stringData:
+  password: "admin"
