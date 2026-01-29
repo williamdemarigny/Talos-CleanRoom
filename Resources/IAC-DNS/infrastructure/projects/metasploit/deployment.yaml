@@ -109,13 +109,16 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
           - |
-            echo "Waiting for PostgreSQL..."
-            while ! pg_isready -h 127.0.0.1 -U msf -d msf; do
+            echo "Waiting for PostgreSQL on port 5432..."
+            while ! (echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null; do
+              echo "PostgreSQL not ready, waiting..."
               sleep 2
             done
-            echo "PostgreSQL ready."
+            echo "PostgreSQL port is open. Waiting additional 5s for full initialization..."
+            sleep 5
 
             # Configure database connection
+            mkdir -p /home/msf/.msf4
             cat > /home/msf/.msf4/database.yml << EOF
             production:
               adapter: postgresql
@@ -129,10 +132,9 @@ spec:
             EOF
             chmod 600 /home/msf/.msf4/database.yml
 
-            # Initialize database schema
-            echo "Initializing Metasploit database..."
+            # Initialize database schema using msfconsole db_connect
+            echo "Connecting Metasploit to database..."
             cd /opt/metasploit-framework
-            ./msfdb init --component database || true
 
             # Start msfrpcd (RPC daemon for web/API access)
             echo "Starting msfrpcd on port 55553..."
@@ -177,13 +179,15 @@ spec:
         readinessProbe:
           tcpSocket:
             port: 55553
-          initialDelaySeconds: 60
+          initialDelaySeconds: 90
           periodSeconds: 10
+          failureThreshold: 10
         livenessProbe:
           tcpSocket:
             port: 55553
-          initialDelaySeconds: 120
+          initialDelaySeconds: 180
           periodSeconds: 30
+          failureThreshold: 5
 
       # ============================================================
       # VOLUMES
