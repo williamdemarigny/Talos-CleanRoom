@@ -1,0 +1,33 @@
+# Faraday - Persistent Volume Claims
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: faraday-data
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: faraday-db
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: postgresql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: longhorn

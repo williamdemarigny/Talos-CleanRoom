@@ -3,10 +3,14 @@
 #
 # Architecture:
 # - PostgreSQL container: Database backend for workspaces, hosts, services, vulns
-# - Metasploit container: Main framework with msfrpcd for web API access
+# - Metasploit container: Main framework with msfrpcd for RPC API access
 #
-# Web UI Access: Uses msfrpcd REST API which can be accessed via Metasploit Web UI
-# Default credentials: admin / admin (change in production!)
+# Access Methods:
+# 1. msfconsole (interactive): kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole
+# 2. RPC API (programmatic):   Port 55553 for msfrpcd MessagePack-RPC protocol
+# 3. Web UI:                   Use Faraday (https://faraday.knowledgeondemand.net) which integrates with Metasploit
+#
+# Default RPC credentials: admin / admin (change in production!)
 ---
 apiVersion: apps/v1
 kind: Deployment

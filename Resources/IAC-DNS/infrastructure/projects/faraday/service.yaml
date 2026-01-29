@@ -1,0 +1,17 @@
+# Faraday - Service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faraday
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: security-platform
+spec:
+  selector:
+    app: faraday
+  ports:
+  - port: 5985
+    targetPort: 5985
+    name: http
