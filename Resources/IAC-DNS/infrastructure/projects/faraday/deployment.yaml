@@ -3,9 +3,10 @@
 #
 # Architecture:
 # - PostgreSQL container: Database backend
+# - Redis container: Cache and message broker
 # - Faraday Server: Web UI and API
 #
-# Default credentials: admin / admin (set via environment variable)
+# Default credentials: faraday / admin (change in production!)
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -69,10 +70,7 @@ spec:
         - name: POSTGRES_USER
           value: "faraday"
         - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: faraday-db-credentials
-              key: password
+          value: "admin"
         - name: POSTGRES_DB
           value: "faraday"
         - name: PGDATA
@@ -101,9 +99,52 @@ spec:
           initialDelaySeconds: 30
           periodSeconds: 30
 
-      # 2. Faraday Server
+      # 2. Redis Cache
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+      # 3. Faraday Server
       - name: faraday
         image: faradaysec/faraday:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Waiting for PostgreSQL on port 5432..."
+            while ! (echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null; do
+              echo "PostgreSQL not ready, waiting..."
+              sleep 2
+            done
+            echo "PostgreSQL ready."
+
+            echo "Waiting for Redis on port 6379..."
+            while ! (echo > /dev/tcp/127.0.0.1/6379) 2>/dev/null; do
+              echo "Redis not ready, waiting..."
+              sleep 2
+            done
+            echo "Redis ready."
+
+            # Start Faraday
+            exec /entrypoint.sh
         env:
         - name: PGSQL_HOST
           value: "127.0.0.1"
@@ -112,17 +153,11 @@ spec:
         - name: PGSQL_USER
           value: "faraday"
         - name: PGSQL_PASSWD
-          valueFrom:
-            secretKeyRef:
-              name: faraday-db-credentials
-              key: password
+          value: "admin"
         - name: PGSQL_DBNAME
           value: "faraday"
-        - name: FARADAY_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: faraday-admin-credentials
-              key: password
+        - name: REDIS_SERVER
+          value: "127.0.0.1"
         volumeMounts:
         - name: faraday-data
           mountPath: /home/faraday/.faraday
@@ -140,16 +175,16 @@ spec:
           httpGet:
             path: /_api/v3/info
             port: 5985
-          initialDelaySeconds: 60
+          initialDelaySeconds: 90
           periodSeconds: 10
-          failureThreshold: 10
+          failureThreshold: 15
         livenessProbe:
           httpGet:
             path: /_api/v3/info
             port: 5985
-          initialDelaySeconds: 120
+          initialDelaySeconds: 180
           periodSeconds: 30
-          failureThreshold: 5
+          failureThreshold: 10
 
       # ============================================================
       # VOLUMES
@@ -162,7 +197,7 @@ spec:
         persistentVolumeClaim:
           claimName: faraday-db
 ---
-# Database credentials
+# Database credentials secret (kept for reference, values now inline)
 apiVersion: v1
 kind: Secret
 metadata:
@@ -175,7 +210,7 @@ type: Opaque
 stringData:
   password: "admin"
 ---
-# Admin credentials
+# Admin credentials secret
 apiVersion: v1
 kind: Secret
 metadata:
