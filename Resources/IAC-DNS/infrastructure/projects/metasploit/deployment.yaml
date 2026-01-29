@@ -1,0 +1,225 @@
+# Metasploit Framework - Deployment
+# Uses official Rapid7 Metasploit Docker image with PostgreSQL database
+#
+# Architecture:
+# - PostgreSQL container: Database backend for workspaces, hosts, services, vulns
+# - Metasploit container: Main framework with msfrpcd for web API access
+#
+# Web UI Access: Uses msfrpcd REST API which can be accessed via Metasploit Web UI
+# Default credentials: admin / admin (change in production!)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metasploit
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: penetration-testing
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Required for RWO PVCs
+  selector:
+    matchLabels:
+      app: metasploit
+  template:
+    metadata:
+      labels:
+        app: metasploit
+    spec:
+      # ============================================================
+      # INIT CONTAINERS
+      # ============================================================
+      initContainers:
+      # Initialize PostgreSQL data directory
+      - name: init-postgres
+        image: postgres:15-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "Setting up PostgreSQL data directory..."
+            if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+              echo "Initializing PostgreSQL database..."
+              chown -R postgres:postgres /var/lib/postgresql/data
+              chmod 700 /var/lib/postgresql/data
+            else
+              echo "PostgreSQL data directory already initialized."
+            fi
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        securityContext:
+          runAsUser: 0
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+      # ============================================================
+      # MAIN CONTAINERS
+      # ============================================================
+      containers:
+      # 1. PostgreSQL Database
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: "msf"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: metasploit-db-credentials
+              key: password
+        - name: POSTGRES_DB
+          value: "msf"
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        ports:
+        - containerPort: 5432
+          name: postgres
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "msf", "-d", "msf"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "msf", "-d", "msf"]
+          initialDelaySeconds: 30
+          periodSeconds: 30
+
+      # 2. Metasploit Framework
+      - name: metasploit
+        image: metasploitframework/metasploit-framework:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            echo "Waiting for PostgreSQL..."
+            while ! pg_isready -h 127.0.0.1 -U msf -d msf; do
+              sleep 2
+            done
+            echo "PostgreSQL ready."
+
+            # Configure database connection
+            cat > /home/msf/.msf4/database.yml << EOF
+            production:
+              adapter: postgresql
+              database: msf
+              username: msf
+              password: ${DB_PASSWORD}
+              host: 127.0.0.1
+              port: 5432
+              pool: 75
+              timeout: 5
+            EOF
+            chmod 600 /home/msf/.msf4/database.yml
+
+            # Initialize database schema
+            echo "Initializing Metasploit database..."
+            cd /opt/metasploit-framework
+            ./msfdb init --component database || true
+
+            # Start msfrpcd (RPC daemon for web/API access)
+            echo "Starting msfrpcd on port 55553..."
+            ./msfrpcd -U admin -P "${MSFRPC_PASSWORD}" -S -a 0.0.0.0 -p 55553 -n &
+
+            # Keep container running and allow msfconsole access
+            echo "Metasploit Framework ready. Starting infinite loop..."
+            tail -f /dev/null
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: metasploit-db-credentials
+              key: password
+        - name: MSFRPC_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: metasploit-rpc-credentials
+              key: password
+        - name: HOME
+          value: "/home/msf"
+        securityContext:
+          capabilities:
+            add:
+              - NET_ADMIN
+              - NET_RAW
+        volumeMounts:
+        - name: metasploit-data
+          mountPath: /home/msf/.msf4
+        ports:
+        - containerPort: 55553
+          name: msfrpc
+        - containerPort: 4444
+          name: handler
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        readinessProbe:
+          tcpSocket:
+            port: 55553
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 55553
+          initialDelaySeconds: 120
+          periodSeconds: 30
+
+      # ============================================================
+      # VOLUMES
+      # ============================================================
+      volumes:
+      - name: metasploit-data
+        persistentVolumeClaim:
+          claimName: metasploit-data
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: metasploit-db
+---
+# Database credentials secret
+# Default password: admin (CHANGE IN PRODUCTION!)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metasploit-db-credentials
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: credentials
+type: Opaque
+stringData:
+  password: "admin"
+---
+# RPC credentials secret for msfrpcd
+# Default password: admin (CHANGE IN PRODUCTION!)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metasploit-rpc-credentials
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: credentials
+type: Opaque
+stringData:
+  password: "admin"

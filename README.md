@@ -8,7 +8,7 @@ This project provides automated deployment and lifecycle management of a Talos K
 
 **Key Features:**
 
-- **Dual Deployment Strategies**: IP-based (`IAC/`) or DNS/FQDN-based (`IAC-DNS/`) infrastructure configuration
+- **DNS/FQDN-Based Deployment**: Infrastructure configuration using DNS names for portability and flexibility
 - **OPNSense Firewall Deployment**: Optional deployment of OPNSense firewall appliances (deployed first)
 - **Cluster Provisioning**: Deploy Talos VMs across your Proxmox cluster with automatic node distribution
 - **Automatic Node Discovery**: Discovers available Proxmox nodes and distributes VMs using round-robin scheduling
@@ -80,6 +80,7 @@ This project provides automated deployment and lifecycle management of a Talos K
                              │  Traefik      → https://traefik.knowledgeondemand.net    │
                              │  Longhorn     → https://longhorn.knowledgeondemand.net   │
                              │  OpenVAS      → https://openvas.knowledgeondemand.net    │
+                             │  Metasploit   → https://metasploit.knowledgeondemand.net │
                              │  MetalLB      → Load Balancer (L2 Mode)                  │
                              │  cert-manager → TLS Certificate Management               │
                              └──────────────────────────────────────────────────────────┘
@@ -94,25 +95,7 @@ Talos-CleanRoom/
 ├── TODO-traefik-deployment.md          # Traefik deployment checklist
 │
 └── Resources/
-    ├── IAC/                            # IP-based deployment
-    │   ├── README.md
-    │   ├── .sops.yaml                  # SOPS encryption config
-    │   ├── tfvars-to-talos-env.sh      # Terraform to Talos env converter
-    │   ├── Terraform/
-    │   │   └── Talos-Cluster-Create/
-    │   │       ├── main.tf
-    │   │       ├── variables.tf
-    │   │       ├── locals.tf
-    │   │       ├── cluster.auto.tfvars
-    │   │       └── opnsense-configs/
-    │   └── talos/
-    │       ├── talconfig.yaml
-    │       ├── talsecret.sops.yaml
-    │       ├── talenv.yaml
-    │       ├── apply-configs.sh
-    │       └── clusterconfig/
-    │
-    └── IAC-DNS/                        # DNS/FQDN-based deployment (recommended)
+    └── IAC-DNS/                        # DNS/FQDN-based deployment
         ├── README.md
         ├── DNS-MAPPING.md              # DNS to IP reference
         ├── .sops.yaml
@@ -160,6 +143,13 @@ Talos-CleanRoom/
                 │   ├── application.yaml
                 │   ├── namespace.yaml
                 │   └── values.yaml
+                ├── metasploit/             # Metasploit Framework
+                │   ├── application.yaml
+                │   ├── deployment.yaml
+                │   ├── metasploit-ingressroute.yaml
+                │   ├── namespace.yaml
+                │   ├── pvc.yaml
+                │   └── service.yaml
                 ├── openvas/                # OpenVAS vulnerability scanner
                 │   ├── application.yaml
                 │   ├── greenbone-deployment.yaml
@@ -396,7 +386,29 @@ kubectl get applications -n argocd | grep argocd
 Once enabled, ArgoCD will:
 - **Self-manage its own configuration** from `values.yaml` in git
 - **Auto-sync all applications** when you push changes to the repository
-- **Automatically deploy** OpenVAS, Threat Dragon, and other applications defined in `infrastructure/projects/`
+- **Automatically deploy** OpenVAS, Metasploit, Threat Dragon, and other applications defined in `infrastructure/projects/`
+
+### Step 12: Deploy Security Tools (Manual)
+
+If not using ArgoCD auto-sync, manually deploy the security applications:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+
+# Deploy OpenVAS (vulnerability scanner)
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/openvas/application.yaml
+
+# Deploy Metasploit Framework (penetration testing)
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/metasploit/application.yaml
+
+# Deploy Threat Dragon (threat modeling)
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/threat-dragon/application.yaml
+
+# Verify applications are syncing
+kubectl get applications -n argocd
+```
+
+**Note:** OpenVAS feed synchronization takes 30-60 minutes on first deployment.
 
 ## Accessing Services
 
@@ -406,10 +418,12 @@ Once enabled, ArgoCD will:
 | Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth secret) |
 | Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth secret) |
 | OpenVAS | https://openvas.knowledgeondemand.net | admin / admin |
+| Metasploit | https://metasploit.knowledgeondemand.net | admin / admin (RPC) + basic auth |
 
 **Default Credentials:**
 - **ArgoCD**: Username `admin`, password `admin` (configured in `values.yaml`)
 - **OpenVAS**: Username `admin`, password `admin` (auto-created on first deployment)
+- **Metasploit**: RPC username `admin`, password `admin` (also protected by Traefik basic-auth)
 - **Traefik/Longhorn**: Uses basic-auth-secret created in Step 9
 
 > **Warning**: Change default passwords in production! Update ArgoCD password in `infrastructure/argocd/values.yaml` and regenerate the bcrypt hash.

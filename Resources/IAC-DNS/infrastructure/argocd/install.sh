@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="argocd"
 RELEASE_NAME="argocd"
-CHART_VERSION="7.7.16"  # Update to latest stable version as needed
+CHART_VERSION="9.3.4"  # ArgoCD v3.2.5 - matches application.yaml
 
 echo "=== ArgoCD Installation ==="
 
@@ -67,15 +67,25 @@ kubectl wait --for=condition=ready pod \
     -n "${NAMESPACE}" \
     --timeout=300s
 
-# Get initial admin password
+# Set admin password to 'admin' using ArgoCD's bcrypt tool
+# This ensures the password works regardless of Helm chart version
+echo "Setting admin password..."
+ADMIN_HASH=$(kubectl -n "${NAMESPACE}" exec deployment/argocd-server -- argocd account bcrypt --password admin 2>/dev/null)
+if [[ -n "${ADMIN_HASH}" ]]; then
+    kubectl -n "${NAMESPACE}" patch secret argocd-secret \
+        -p "{\"stringData\": {\"admin.password\": \"${ADMIN_HASH}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+    echo "Admin password set to: admin"
+else
+    echo "Warning: Could not set admin password automatically"
+    echo "The password from values.yaml may still work, or set it manually"
+fi
+
 echo ""
 echo "=== ArgoCD Installation Complete ==="
 echo ""
-echo "To get the initial admin password, run:"
-echo "  kubectl -n ${NAMESPACE} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo"
+echo "Default credentials: admin / admin"
 echo ""
 echo "To access ArgoCD UI via port-forward:"
 echo "  kubectl port-forward svc/argocd-server -n ${NAMESPACE} 8080:443"
 echo "  Then open: https://localhost:8080"
 echo ""
-echo "Default login: admin / <password from above>"
