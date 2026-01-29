@@ -1,0 +1,35 @@
+# Metasploit Framework - Persistent Volume Claims
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metasploit-data
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # Storage for loot, reports, captured data
+      storage: 10Gi
+  storageClassName: longhorn
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metasploit-db
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: postgresql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      # PostgreSQL database for workspace data
+      storage: 20Gi
+  storageClassName: longhorn

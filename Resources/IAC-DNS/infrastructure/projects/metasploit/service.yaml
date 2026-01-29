@@ -1,0 +1,22 @@
+# Metasploit Framework - Services
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metasploit
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: penetration-testing
+spec:
+  selector:
+    app: metasploit
+  ports:
+  # msfrpcd RPC API (for web UI and remote access)
+  - port: 55553
+    targetPort: 55553
+    name: msfrpc
+  # Default reverse handler port (optional, for external access)
+  - port: 4444
+    targetPort: 4444
+    name: handler
