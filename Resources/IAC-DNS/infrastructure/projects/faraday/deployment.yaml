@@ -172,15 +172,13 @@ spec:
             memory: "2Gi"
             cpu: "1"
         readinessProbe:
-          httpGet:
-            path: /_api/v3/info
+          tcpSocket:
             port: 5985
           initialDelaySeconds: 90
           periodSeconds: 10
           failureThreshold: 15
         livenessProbe:
-          httpGet:
-            path: /_api/v3/info
+          tcpSocket:
             port: 5985
           initialDelaySeconds: 180
           periodSeconds: 30
