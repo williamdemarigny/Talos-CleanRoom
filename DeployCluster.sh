@@ -122,11 +122,15 @@ echo "Deploying OpenVAS..."
 cd "$(git rev-parse --show-toplevel)" || { echo "Error: Could not change directory to repository root."; exit 1; }
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/openvas/application.yaml || echo "Warning: Failed to deploy OpenVAS application. You may need to apply it manually."
 
-# Step 10: Deploy Metasploit Framework (penetration testing)
+# Step 10: Deploy Faraday (security platform with web UI)
+echo "Deploying Faraday..."
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/faraday/application.yaml || echo "Warning: Failed to deploy Faraday application. You may need to apply it manually."
+
+# Step 11: Deploy Metasploit Framework (penetration testing)
 echo "Deploying Metasploit Framework..."
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/metasploit/application.yaml || echo "Warning: Failed to deploy Metasploit application. You may need to apply it manually."
 
-# Step 11: Deploy Threat Dragon (threat modeling)
+# Step 12: Deploy Threat Dragon (threat modeling)
 echo "Deploying Threat Dragon..."
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/threat-dragon/application.yaml || echo "Warning: Failed to deploy Threat Dragon application. You may need to apply it manually."
 
@@ -147,16 +151,19 @@ echo ""
 echo "Default Credentials (CHANGE IN PRODUCTION!):"
 echo "  - ArgoCD:     admin / admin"
 echo "  - OpenVAS:    admin / admin"
-echo "  - Metasploit: admin / admin (RPC)"
+echo "  - Faraday:    admin / admin"
 echo "  - Traefik/Longhorn: Uses basic-auth-secret (create with htpasswd)"
 echo ""
 echo "Access services at:"
-echo "  - ArgoCD:       https://argocd.knowledgeondemand.net"
-echo "  - Traefik:      https://traefik.knowledgeondemand.net"
-echo "  - Longhorn:     https://longhorn.knowledgeondemand.net"
-echo "  - OpenVAS:      https://openvas.knowledgeondemand.net"
-echo "  - Metasploit:   https://metasploit.knowledgeondemand.net"
+echo "  - ArgoCD:        https://argocd.knowledgeondemand.net"
+echo "  - Traefik:       https://traefik.knowledgeondemand.net"
+echo "  - Longhorn:      https://longhorn.knowledgeondemand.net"
+echo "  - OpenVAS:       https://openvas.knowledgeondemand.net"
+echo "  - Faraday:       https://faraday.knowledgeondemand.net"
 echo "  - Threat Dragon: https://threatdragon.knowledgeondemand.net"
+echo ""
+echo "Metasploit access (CLI only - no web UI):"
+echo "  kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole"
 echo ""
 echo "ArgoCD is now self-managing. Push changes to git and they will auto-sync."
 echo ""
