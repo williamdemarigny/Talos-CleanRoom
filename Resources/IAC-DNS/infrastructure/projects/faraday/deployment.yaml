@@ -143,15 +143,26 @@ spec:
             done
             echo "Redis ready."
 
-            # Remove stale server.ini to force full initialization
-            # This ensures create-tables runs on fresh database
-            if [ -f /home/faraday/.faraday/config/server.ini ]; then
-              echo "Removing stale server.ini to force re-initialization..."
-              rm -f /home/faraday/.faraday/config/server.ini
-            fi
+            # Create required directories
+            mkdir -p /home/faraday/.faraday/storage
+            mkdir -p /home/faraday/.faraday/logs
+            mkdir -p /home/faraday/.faraday/session
 
-            # Start Faraday
-            exec /entrypoint.sh
+            # Initialize database tables (idempotent - safe to run multiple times)
+            echo "Creating database tables..."
+            faraday-manage create-tables || echo "Tables may already exist"
+
+            # Create admin user if not exists
+            echo "Creating admin user..."
+            faraday-manage create-superuser --username faraday --password admin --email admin@localhost 2>/dev/null || echo "User may already exist"
+
+            # Run migrations
+            echo "Running migrations..."
+            faraday-manage migrate
+
+            # Start Faraday server
+            echo "Starting Faraday server..."
+            exec faraday-server --bind 0.0.0.0
         env:
         - name: PGSQL_HOST
           value: "127.0.0.1"
@@ -168,6 +179,8 @@ spec:
         volumeMounts:
         - name: faraday-data
           mountPath: /home/faraday/.faraday
+        - name: faraday-config
+          mountPath: /home/faraday/.faraday/config
         ports:
         - containerPort: 5985
           name: http
@@ -207,6 +220,35 @@ spec:
       - name: postgres-data
         persistentVolumeClaim:
           claimName: faraday-db
+      - name: faraday-config
+        configMap:
+          name: faraday-server-config
+---
+# Faraday server.ini configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faraday-server-config
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: config
+data:
+  server.ini: |
+    [database]
+    connection_string = postgresql+psycopg2://faraday:admin@127.0.0.1/faraday
+
+    [faraday_server]
+    bind_address = 0.0.0.0
+    port = 5985
+    websocket_port = 9000
+    secret_key = changeme_in_production
+
+    [storage]
+    path = /home/faraday/.faraday/storage
+
+    [logger]
+    level = INFO
 ---
 # Database credentials secret (kept for reference, values now inline)
 apiVersion: v1
