@@ -428,13 +428,13 @@ kubectl get applications -n argocd
 | Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth secret) |
 | Longhorn | https://longhorn.knowledgeondemand.net | admin / (basic auth secret) |
 | OpenVAS | https://openvas.knowledgeondemand.net | admin / admin |
-| Faraday | https://faraday.knowledgeondemand.net | admin / admin |
+| Faraday | https://faraday.knowledgeondemand.net | faraday / admin |
 | Metasploit | `kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole` | N/A (CLI) |
 
 **Default Credentials:**
 - **ArgoCD**: Username `admin`, password `admin` (configured in `values.yaml`)
 - **OpenVAS**: Username `admin`, password `admin` (auto-created on first deployment)
-- **Faraday**: Username `admin`, password `admin` (web UI for security management)
+- **Faraday**: Username `faraday`, password `admin` (web UI for security management)
 - **Metasploit**: Access via `kubectl exec` for msfconsole (no web UI)
 - **Traefik/Longhorn**: Uses basic-auth-secret created in Step 9
 
