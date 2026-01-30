@@ -1,0 +1,47 @@
+# Proxmox Connection Configuration
+# Copy this file to terraform.tfvars and fill in your values
+
+proxmox_api_url      = "https://your-proxmox-host:8006"
+proxmox_api_token    = "user@pam!tokenid=your-token-secret"
+proxmox_ssh_user     = "root"
+proxmox_ssh_password = "your-ssh-password"
+
+# Optional: Specify node and resource pool
+proxmox_node = ""  # Leave empty to auto-select first available node
+proxmox_pool = ""  # Optional resource pool
+
+# LXC Container Configuration
+lxc_vmid     = 200
+lxc_hostname = "deployment-webui"
+lxc_cores    = 2
+lxc_memory   = 2048  # MB
+lxc_swap     = 512   # MB
+lxc_disk_size = 20   # GB
+lxc_storage  = "local-lvm"
+lxc_tags     = ["deployment", "webui", "management"]
+
+# Template Configuration
+# Download template first with: pveam download cephfs debian-12-standard_12.12-1_amd64.tar.zst
+template_storage      = "cephfs"
+lxc_template_filename = "debian-12-standard_12.12-1_amd64.tar.zst"
+
+# Network Configuration
+network_bridge  = "vmbr0"
+vlan_id         = 0  # Set to your VLAN ID if needed
+lxc_ip_address  = "192.168.1.200/24"  # Change to your network
+lxc_gateway     = "192.168.1.1"        # Change to your gateway
+lxc_mac_address = ""                   # Optional: Leave empty for auto-generated
+
+# DNS Configuration
+dns_domain  = "knowledgeondemand.net"
+dns_servers = ["8.8.8.8", "8.8.4.4"]
+
+# Container Authentication
+lxc_root_password = "change-this-password"
+ssh_public_keys   = [
+  # "ssh-rsa AAAA... user@host"
+]
+
+# Web UI Authentication
+webui_admin_username = "admin"
+webui_admin_password = "admin"  # Change in production!
