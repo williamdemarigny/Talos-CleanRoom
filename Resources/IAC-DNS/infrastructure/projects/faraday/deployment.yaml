@@ -125,7 +125,7 @@ spec:
 
       # 3. Faraday Server
       - name: faraday
-        image: faradaysec/faraday:5.7.1
+        image: faradaysec/faraday:5.19.0
         command: ["/bin/bash", "-c"]
         args:
           - |
