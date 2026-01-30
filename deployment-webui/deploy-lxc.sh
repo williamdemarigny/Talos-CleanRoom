@@ -358,8 +358,10 @@ echo \"=== Testing GitHub connectivity ===\"
 su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
 echo \"=== Cloning repository ===\"
+# Create /opt/Talos-CleanRoom with correct ownership before cloning
+mkdir -p /opt/Talos-CleanRoom
+chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
 su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
-chown -R ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
 
 echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
