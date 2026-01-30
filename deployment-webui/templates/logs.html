@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Talos CleanRoom{% endblock %}
+
+{% block content %}
+<div x-data="logsViewer()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Deployment Logs</h1>
+            <p class="text-gray-400">View and search deployment logs</p>
+        </div>
+        <div class="flex gap-4">
+            <button
+                @click="downloadLogs"
+                class="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600"
+            >
+                Download Logs
+            </button>
+            <button
+                @click="refreshLogs"
+                :disabled="loading"
+                class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 disabled:opacity-50"
+            >
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-800 rounded-lg p-4 mb-6">
+        <div class="flex flex-wrap gap-4 items-center">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Filter by Step</label>
+                <select
+                    x-model="filterStep"
+                    @change="applyFilter"
+                    class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                >
+                    <option value="">All Steps</option>
+                    <option value="0">Step 0: Validate Git</option>
+                    <option value="1">Step 1: Check Dependencies</option>
+                    <option value="2">Step 2: Terraform Deploy</option>
+                    <option value="3">Step 3: Generate Talos Config</option>
+                    <option value="4">Step 4: Apply Talos Configs</option>
+                    <option value="5">Step 5: Verify Health</option>
+                    <option value="6">Step 6: Get Kubeconfig</option>
+                    <option value="7">Step 7: Install ArgoCD</option>
+                    <option value="8">Step 8: Deploy Infrastructure</option>
+                    <option value="9">Step 9: ArgoCD Self-Management</option>
+                    <option value="10">Step 10: Deploy OpenVAS</option>
+                    <option value="11">Step 11: Deploy Faraday</option>
+                    <option value="12">Step 12: Deploy Metasploit</option>
+                    <option value="13">Step 13: Deploy Threat Dragon</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Filter by Level</label>
+                <select
+                    x-model="filterLevel"
+                    @change="applyFilter"
+                    class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                >
+                    <option value="">All Levels</option>
+                    <option value="info">Info</option>
+                    <option value="warn">Warning</option>
+                    <option value="error">Error</option>
+                </select>
+            </div>
+            <div class="flex-grow">
+                <label class="block text-sm text-gray-400 mb-1">Search</label>
+                <input
+                    type="text"
+                    x-model="searchTerm"
+                    @input="applyFilter"
+                    placeholder="Search logs..."
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-400"
+                >
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-gray-800 rounded-lg p-4">
+            <div class="text-2xl font-bold text-white" x-text="totalLogs"></div>
+            <div class="text-sm text-gray-400">Total Entries</div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4">
+            <div class="text-2xl font-bold text-blue-400" x-text="infoCount"></div>
+            <div class="text-sm text-gray-400">Info</div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4">
+            <div class="text-2xl font-bold text-yellow-400" x-text="warnCount"></div>
+            <div class="text-sm text-gray-400">Warnings</div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4">
+            <div class="text-2xl font-bold text-red-400" x-text="errorCount"></div>
+            <div class="text-sm text-gray-400">Errors</div>
+        </div>
+    </div>
+
+    <!-- Log Entries -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div x-show="loading" class="flex justify-center py-8">
+            <svg class="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+        </div>
+
+        <div x-show="!loading && filteredLogs.length === 0" class="text-center py-8 text-gray-400">
+            No logs found.
+        </div>
+
+        <div x-show="!loading && filteredLogs.length > 0" class="space-y-1 font-mono text-sm">
+            <template x-for="log in filteredLogs" :key="log.timestamp + log.message">
+                <div class="flex items-start py-1 hover:bg-gray-700 rounded px-2" :class="logRowClass(log)">
+                    <span class="text-gray-500 w-24 flex-shrink-0" x-text="formatTime(log.timestamp)"></span>
+                    <span class="w-16 flex-shrink-0" :class="levelClass(log.level)">
+                        [<span x-text="log.level.toUpperCase()"></span>]
+                    </span>
+                    <span class="text-gray-400 w-12 flex-shrink-0" x-text="'[' + log.step_id + ']'"></span>
+                    <span class="flex-grow" :class="messageClass(log.level)" x-text="log.message"></span>
+                </div>
+            </template>
+        </div>
+
+        <!-- Pagination -->
+        <div x-show="totalLogs > pageSize" class="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+            <div class="text-sm text-gray-400">
+                Showing <span x-text="offset + 1"></span> to <span x-text="Math.min(offset + pageSize, totalLogs)"></span> of <span x-text="totalLogs"></span> entries
+            </div>
+            <div class="flex gap-2">
+                <button
+                    @click="prevPage"
+                    :disabled="offset === 0"
+                    class="px-3 py-1 bg-gray-700 text-white rounded disabled:opacity-50"
+                >
+                    Previous
+                </button>
+                <button
+                    @click="nextPage"
+                    :disabled="offset + pageSize >= totalLogs"
+                    class="px-3 py-1 bg-gray-700 text-white rounded disabled:opacity-50"
+                >
+                    Next
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function logsViewer() {
+    return {
+        logs: [],
+        filteredLogs: [],
+        loading: true,
+        filterStep: '',
+        filterLevel: '',
+        searchTerm: '',
+        offset: 0,
+        pageSize: 100,
+        totalLogs: 0,
+
+        get infoCount() {
+            return this.logs.filter(l => l.level === 'info').length;
+        },
+        get warnCount() {
+            return this.logs.filter(l => l.level === 'warn').length;
+        },
+        get errorCount() {
+            return this.logs.filter(l => l.level === 'error').length;
+        },
+
+        async init() {
+            await this.loadLogs();
+        },
+
+        async loadLogs() {
+            this.loading = true;
+            try {
+                let url = `/api/deployment/logs?limit=1000`;
+                if (this.filterStep !== '') {
+                    url += `&step_id=${this.filterStep}`;
+                }
+                const response = await fetch(url);
+                const data = await response.json();
+                this.logs = data.logs;
+                this.totalLogs = data.total;
+                this.applyFilter();
+            } catch (e) {
+                console.error('Failed to load logs:', e);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        applyFilter() {
+            let filtered = this.logs;
+
+            if (this.filterStep !== '') {
+                filtered = filtered.filter(l => l.step_id === parseInt(this.filterStep));
+            }
+
+            if (this.filterLevel !== '') {
+                filtered = filtered.filter(l => l.level === this.filterLevel);
+            }
+
+            if (this.searchTerm) {
+                const term = this.searchTerm.toLowerCase();
+                filtered = filtered.filter(l => l.message.toLowerCase().includes(term));
+            }
+
+            this.filteredLogs = filtered.slice(this.offset, this.offset + this.pageSize);
+        },
+
+        async refreshLogs() {
+            await this.loadLogs();
+        },
+
+        formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString();
+        },
+
+        levelClass(level) {
+            switch(level) {
+                case 'error': return 'text-red-400';
+                case 'warn': return 'text-yellow-400';
+                default: return 'text-blue-400';
+            }
+        },
+
+        messageClass(level) {
+            switch(level) {
+                case 'error': return 'text-red-300';
+                case 'warn': return 'text-yellow-300';
+                default: return 'text-gray-300';
+            }
+        },
+
+        logRowClass(log) {
+            switch(log.level) {
+                case 'error': return 'bg-red-900/20';
+                case 'warn': return 'bg-yellow-900/20';
+                default: return '';
+            }
+        },
+
+        prevPage() {
+            this.offset = Math.max(0, this.offset - this.pageSize);
+            this.applyFilter();
+        },
+
+        nextPage() {
+            this.offset = Math.min(this.totalLogs - this.pageSize, this.offset + this.pageSize);
+            this.applyFilter();
+        },
+
+        downloadLogs() {
+            const content = this.logs.map(l =>
+                `${l.timestamp} [${l.level.toUpperCase()}] [Step ${l.step_id}] ${l.message}`
+            ).join('\n');
+
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `deployment-logs-${new Date().toISOString().split('T')[0]}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    }
+}
+</script>
+{% endblock %}

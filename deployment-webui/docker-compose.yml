@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  deployment-webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: talos-deployment-ui
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the repository root for deployment scripts
+      - ..:/repo:rw
+      # Mount kubeconfig for kubectl access
+      - ~/.kube:/root/.kube:rw
+      # Mount SOPS age keys for secret encryption
+      - ~/.config/sops:/root/.config/sops:ro
+    environment:
+      # Authentication
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-$$2b$$12$$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4xL4FXvQsZI5EjBi}
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - ACCESS_TOKEN_EXPIRE_HOURS=${ACCESS_TOKEN_EXPIRE_HOURS:-8}
+      # Repository
+      - REPO_ROOT=/repo
+      # Deployment
+      - MASTER_NODE=${MASTER_NODE:-talos-CleanRoom-master-01.knowledgeondemand.net}
+      - HEALTH_CHECK_RETRIES=${HEALTH_CHECK_RETRIES:-30}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-10}
+    restart: unless-stopped
+    networks:
+      - deployment-net
+
+networks:
+  deployment-net:
+    driver: bridge
