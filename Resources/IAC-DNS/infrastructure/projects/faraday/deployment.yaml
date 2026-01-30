@@ -59,6 +59,34 @@ spec:
             memory: "256Mi"
             cpu: "200m"
 
+      - name: init-faraday-config
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "Setting up Faraday config directory..."
+            mkdir -p /home/faraday/.faraday/config
+            mkdir -p /home/faraday/.faraday/storage
+            mkdir -p /home/faraday/.faraday/logs
+            mkdir -p /home/faraday/.faraday/session
+            # Copy ConfigMap server.ini to writable volume (if not exists or force refresh)
+            cp /config-source/server.ini /home/faraday/.faraday/config/server.ini
+            chmod 644 /home/faraday/.faraday/config/server.ini
+            echo "Faraday config initialized."
+        volumeMounts:
+        - name: faraday-data
+          mountPath: /home/faraday/.faraday
+        - name: faraday-config
+          mountPath: /config-source
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+
       # ============================================================
       # MAIN CONTAINERS
       # ============================================================
@@ -179,8 +207,6 @@ spec:
         volumeMounts:
         - name: faraday-data
           mountPath: /home/faraday/.faraday
-        - name: faraday-config
-          mountPath: /home/faraday/.faraday/config
         ports:
         - containerPort: 5985
           name: http
