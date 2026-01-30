@@ -69,7 +69,11 @@ apt-get install -y kubectl
 
 # Install Helm
 echo "[4/10] Installing Helm..."
+# Ensure /usr/local/bin is in PATH for helm installer verification
+export PATH="/usr/local/bin:$PATH"
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# Verify helm installation
+/usr/local/bin/helm version --short || { echo "Helm installation failed"; exit 1; }
 
 # Install Terraform
 echo "[5/10] Installing Terraform..."
@@ -98,6 +102,14 @@ SOPS_VERSION="3.8.1"
 curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" -o /usr/local/bin/sops
 chmod +x /usr/local/bin/sops
 sops --version
+
+# Create symlinks in /usr/bin for tools installed to /usr/local/bin
+echo "Creating symlinks for CLI tools..."
+for tool in helm terraform talosctl talhelper sops; do
+    if [ -f "/usr/local/bin/$tool" ] && [ ! -f "/usr/bin/$tool" ]; then
+        ln -sf "/usr/local/bin/$tool" "/usr/bin/$tool"
+    fi
+done
 
 # Clone or setup repository
 echo "[9/10] Setting up repository..."
@@ -128,6 +140,8 @@ source venv/bin/activate
 if [ -f "requirements.txt" ]; then
     pip install --upgrade pip
     pip install -r requirements.txt
+    # Fix bcrypt version compatibility with passlib
+    pip install bcrypt==4.0.1
 else
     echo "Warning: requirements.txt not found. Installing dependencies manually..."
     pip install --upgrade pip
@@ -136,6 +150,7 @@ else
         uvicorn[standard]==0.27.0 \
         python-jose[cryptography]==3.3.0 \
         passlib[bcrypt]==1.7.4 \
+        bcrypt==4.0.1 \
         python-multipart==0.0.6 \
         pydantic==2.5.3 \
         pydantic-settings==2.1.0 \
@@ -146,12 +161,10 @@ else
         python-hcl2==4.3.2
 fi
 
-deactivate
-
-# Generate password hash
+# Generate password hash (use venv python which has passlib installed)
 echo ""
 echo "Generating password hash for web UI..."
-PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
+PASSWORD_HASH=$("$APP_DIR/venv/bin/python3" -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
 
 # Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
