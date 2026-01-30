@@ -30,6 +30,10 @@ DNS_SERVERS='["8.8.8.8", "8.8.4.4"]'
 WEBUI_USER="admin"
 WEBUI_PASSWORD="admin"           # Change this!
 
+# SSH User Settings (non-root user for SSH access)
+SSH_USER="deploy"                # Non-root user for SSH access
+SSH_USER_GROUPS="sudo"           # Groups for the SSH user
+
 # GitHub SSH Settings (for private repository access)
 GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
 GITHUB_REPO_URL="git@github.com:williamdemarigny/Talos-CleanRoom.git"
@@ -72,6 +76,12 @@ fi
 if [ -z "$LXC_ROOT_PASSWORD" ]; then
     echo -e "${YELLOW}Enter password for LXC container root user:${NC}"
     read -rs LXC_ROOT_PASSWORD
+    echo ""
+fi
+
+if [ -z "$SSH_USER_PASSWORD" ]; then
+    echo -e "${YELLOW}Enter password for SSH user '${SSH_USER}':${NC}"
+    read -rs SSH_USER_PASSWORD
     echo ""
 fi
 
@@ -175,6 +185,11 @@ dns_servers = ${DNS_SERVERS}
 lxc_root_password = "${LXC_ROOT_PASSWORD}"
 ssh_public_keys   = []
 
+# SSH User Configuration (non-root user for secure access)
+ssh_user          = "${SSH_USER}"
+ssh_user_password = "${SSH_USER_PASSWORD}"
+ssh_user_groups   = "${SSH_USER_GROUPS}"
+
 # Web UI Configuration
 webui_admin_username = "${WEBUI_USER}"
 webui_admin_password = "${WEBUI_PASSWORD}"
@@ -221,45 +236,37 @@ echo -e "${GREEN}LXC Container Deployed Successfully!${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 echo "Container IP: ${CONTAINER_IP}"
+echo "SSH User:     ${SSH_USER}"
 echo ""
 echo -e "${YELLOW}Next Steps (Manual Setup):${NC}"
 echo ""
-echo "1. Copy SSH key to container (from your workstation):"
-echo "   scp ${GITHUB_SSH_KEY} root@${CONTAINER_IP}:/root/.ssh/github_deploy_key"
-echo ""
-echo "2. SSH into the container:"
+echo "1. SSH into container as root (one-time setup):"
 echo "   ssh root@${CONTAINER_IP}"
 echo ""
-echo "3. Configure SSH for GitHub access:"
-echo "   chmod 600 /root/.ssh/github_deploy_key"
-echo "   cat > /root/.ssh/config << 'EOF'"
-echo "   Host github.com"
-echo "       HostName github.com"
-echo "       User git"
-echo "       IdentityFile /root/.ssh/github_deploy_key"
-echo "       IdentitiesOnly yes"
-echo "       StrictHostKeyChecking accept-new"
-echo "   EOF"
-echo "   chmod 600 /root/.ssh/config"
+echo "2. Create non-root SSH user with sudo access:"
+echo "   useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER}"
+echo "   echo '${SSH_USER}:PASSWORD' | chpasswd"
+echo "   echo '${SSH_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${SSH_USER}"
+echo ""
+echo "3. Copy SSH key and configure GitHub access (as ${SSH_USER}):"
+echo "   ssh ${SSH_USER}@${CONTAINER_IP}"
+echo "   mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+echo "   # Copy your GitHub deploy key to ~/.ssh/github_deploy_key"
+echo "   chmod 600 ~/.ssh/github_deploy_key"
 echo ""
 echo "4. Clone the repository:"
 echo "   git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
 echo ""
 echo "5. Run the setup script:"
 echo "   cd /opt/Talos-CleanRoom/deployment-webui/scripts"
-echo "   chmod +x setup-lxc.sh"
-echo "   ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
+echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
 echo ""
 echo "6. Copy SOPS keys (from your workstation):"
-echo "   ssh root@${CONTAINER_IP} \"mkdir -p /root/.config/sops/age\""
-echo "   scp ~/.config/sops/age/keys.txt root@${CONTAINER_IP}:/root/.config/sops/age/"
+echo "   ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
+echo "   scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
 echo ""
-echo "7. Start the web UI service:"
-echo "   systemctl start deployment-webui"
-echo ""
-echo "8. Access the web UI:"
+echo "7. Access the web UI:"
 echo "   http://${CONTAINER_IP}:8000"
-echo ""
 echo "   Login: ${WEBUI_USER} / ${WEBUI_PASSWORD}"
 echo ""
 echo -e "${GREEN}============================================${NC}"
@@ -276,77 +283,98 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 
     echo -e "${GREEN}Waiting for container to be ready...${NC}"
 
-    # Wait for SSH to become available (max 120 seconds)
-    MAX_WAIT=120
+    # Wait for container to be running (check via Proxmox)
+    MAX_WAIT=60
     WAIT_INTERVAL=5
     ELAPSED=0
 
     while [ $ELAPSED -lt $MAX_WAIT ]; do
-        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 root@${CONTAINER_IP} "exit" 2>/dev/null; then
-            echo -e "${GREEN}  SSH is available after ${ELAPSED} seconds${NC}"
+        CONTAINER_STATUS=$(ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct status ${LXC_VMID} 2>/dev/null | grep -o 'running'" || echo "")
+        if [ "$CONTAINER_STATUS" = "running" ]; then
+            echo -e "${GREEN}  Container is running after ${ELAPSED} seconds${NC}"
+            sleep 3  # Give container services time to start
             break
         fi
-        echo "  Waiting for SSH... (${ELAPSED}/${MAX_WAIT}s)"
+        echo "  Waiting for container... (${ELAPSED}/${MAX_WAIT}s)"
         sleep $WAIT_INTERVAL
         ELAPSED=$((ELAPSED + WAIT_INTERVAL))
     done
 
     if [ $ELAPSED -ge $MAX_WAIT ]; then
-        echo -e "${RED}Error: Timed out waiting for SSH to become available${NC}"
-        echo -e "${YELLOW}Troubleshooting:${NC}"
-        echo "  1. Check container is running: ssh root@${PROXMOX_HOST} 'pct status ${LXC_VMID}'"
-        echo "  2. Check network from Proxmox: ssh root@${PROXMOX_HOST} 'pct enter ${LXC_VMID}' then 'ip addr'"
-        echo "  3. Verify VLAN ${VLAN_ID} is reachable from your workstation"
-        echo ""
-        echo "You can run the manual setup steps printed above once connectivity is resolved."
+        echo -e "${RED}Error: Timed out waiting for container to start${NC}"
+        echo "  Check container status: ssh root@${PROXMOX_HOST} 'pct status ${LXC_VMID}'"
         exit 1
     fi
 
     # Read the GitHub SSH key content for transfer
     GITHUB_SSH_KEY_CONTENT=$(cat "${GITHUB_SSH_KEY}")
 
-    echo -e "${GREEN}Copying SSH key and running full setup (single SSH session)...${NC}"
-    echo -e "${YELLOW}Enter password once - all setup will run automatically${NC}"
+    echo -e "${GREEN}Running setup via Proxmox pct exec (no container password needed)...${NC}"
 
-    ssh -o StrictHostKeyChecking=accept-new root@${CONTAINER_IP} << ENDSSH
+    # Use pct exec via Proxmox SSH - this bypasses container SSH authentication entirely
+    ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- bash -c '
 set -e
 
-echo "=== Setting up SSH key for GitHub ==="
-mkdir -p /root/.ssh && chmod 700 /root/.ssh
+echo \"=== Installing packages ===\"
+apt-get update && apt-get install -y sudo git locales
 
-cat > /root/.ssh/github_deploy_key << 'KEYEOF'
+# Fix locale warnings
+sed -i \"s/# en_US.UTF-8/en_US.UTF-8/\" /etc/locale.gen
+locale-gen en_US.UTF-8
+
+echo \"=== Creating non-root SSH user: ${SSH_USER} ===\"
+useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || echo \"User exists\"
+echo \"${SSH_USER}:${SSH_USER_PASSWORD}\" | chpasswd
+echo \"${SSH_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${SSH_USER}
+chmod 440 /etc/sudoers.d/${SSH_USER}
+
+echo \"=== Disabling root SSH login ===\"
+sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
+systemctl restart ssh
+
+echo \"=== Setting up GitHub SSH key for ${SSH_USER} ===\"
+SSH_USER_HOME=\"/home/${SSH_USER}\"
+mkdir -p \${SSH_USER_HOME}/.ssh
+chmod 700 \${SSH_USER_HOME}/.ssh
+
+cat > \${SSH_USER_HOME}/.ssh/github_deploy_key << \"KEYEOF\"
 ${GITHUB_SSH_KEY_CONTENT}
 KEYEOF
-chmod 600 /root/.ssh/github_deploy_key
+chmod 600 \${SSH_USER_HOME}/.ssh/github_deploy_key
 
-cat > /root/.ssh/config << 'SSHCONFIG'
+cat > \${SSH_USER_HOME}/.ssh/config << \"SSHCONFIG\"
 Host github.com
     HostName github.com
     User git
-    IdentityFile /root/.ssh/github_deploy_key
+    IdentityFile ~/.ssh/github_deploy_key
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
 SSHCONFIG
-chmod 600 /root/.ssh/config
+chmod 600 \${SSH_USER_HOME}/.ssh/config
 
-echo "=== Installing git ==="
-apt-get update && apt-get install -y git
+chown -R ${SSH_USER}:${SSH_USER} \${SSH_USER_HOME}/.ssh
 
-echo "=== Testing GitHub SSH connectivity ==="
-ssh -T git@github.com 2>&1 || true
+echo \"=== Testing GitHub connectivity ===\"
+su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
-echo "=== Cloning repository ==="
-git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom
+echo \"=== Cloning repository ===\"
+su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
+chown -R ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
 
-echo "=== Running setup script ==="
+echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
 chmod +x setup-lxc.sh
-./setup-lxc.sh --webui-password "${WEBUI_PASSWORD}"
+./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
 
-echo "=== Starting web UI service ==="
-systemctl start deployment-webui
-systemctl status deployment-webui --no-pager
-ENDSSH
+echo \"=== Starting web UI service ===\"
+systemctl start deployment-webui || echo \"Service may need manual start\"
+systemctl status deployment-webui --no-pager || true
+
+echo \"\"
+echo \"=== Setup Complete ===\"
+echo \"SSH user: ${SSH_USER}\"
+echo \"Root SSH: disabled\"
+'"
 
     echo ""
     echo -e "${GREEN}============================================${NC}"
@@ -355,8 +383,12 @@ ENDSSH
     echo ""
     echo "Web UI is now running at: http://${CONTAINER_IP}:8000"
     echo ""
+    echo -e "${YELLOW}SSH Access (root login disabled):${NC}"
+    echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
+    echo "  Password: (the one you entered during setup)"
+    echo ""
     echo "Don't forget to copy your SOPS keys:"
-    echo "  ssh root@${CONTAINER_IP} \"mkdir -p /root/.config/sops/age\""
-    echo "  scp ~/.config/sops/age/keys.txt root@${CONTAINER_IP}:/root/.config/sops/age/"
+    echo "  ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
+    echo "  scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
     echo ""
 fi

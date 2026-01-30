@@ -158,6 +158,26 @@ variable "ssh_public_keys" {
   default     = []
 }
 
+# SSH User Configuration (non-root user for secure access)
+variable "ssh_user" {
+  description = "Non-root username for SSH access (created during setup)."
+  type        = string
+  default     = "deploy"
+}
+
+variable "ssh_user_password" {
+  description = "Password for the non-root SSH user."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "ssh_user_groups" {
+  description = "Groups for the SSH user (comma-separated)."
+  type        = string
+  default     = "sudo"
+}
+
 # Web UI Configuration
 variable "webui_admin_username" {
   description = "Admin username for the web UI."
