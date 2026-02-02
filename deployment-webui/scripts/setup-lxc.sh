@@ -13,6 +13,10 @@ WEBUI_PASSWORD="admin"
 WEBUI_PORT="8000"
 APP_DIR="/opt/deployment-webui"
 
+# Deployment configuration defaults
+LONGHORN_TIMEOUT=600
+ARGOCD_PASSWORD_RETRIES=5
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,6 +30,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --webui-port)
             WEBUI_PORT="$2"
+            shift 2
+            ;;
+        --longhorn-timeout)
+            LONGHORN_TIMEOUT="$2"
+            shift 2
+            ;;
+        --argocd-retries)
+            ARGOCD_PASSWORD_RETRIES="$2"
             shift 2
             ;;
         *)
@@ -188,6 +200,14 @@ REPO_ROOT=$REPO_PATH
 MASTER_NODE=talos-CleanRoom-master-01.knowledgeondemand.net
 HEALTH_CHECK_RETRIES=30
 HEALTH_CHECK_INTERVAL=10
+
+# Longhorn Storage Settings
+# Timeout in seconds for Longhorn to become fully operational (default: 600 = 10 minutes)
+LONGHORN_TIMEOUT=$LONGHORN_TIMEOUT
+
+# ArgoCD Settings
+# Number of retry attempts for setting ArgoCD admin password (default: 5)
+ARGOCD_PASSWORD_RETRIES=$ARGOCD_PASSWORD_RETRIES
 EOF
 
 chmod 600 "$APP_DIR/.env"
@@ -222,6 +242,10 @@ mkdir -p /root/.kube
 
 # Create SOPS keys directory
 mkdir -p /root/.config/sops/age
+
+# Configure git safe directories (needed when service runs as root but repo owned by different user)
+git config --global --add safe.directory "$REPO_PATH"
+git config --global --add safe.directory "$REPO_PATH/Resources/IAC-DNS"
 
 echo ""
 echo "============================================"
