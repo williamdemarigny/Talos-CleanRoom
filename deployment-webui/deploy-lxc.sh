@@ -30,6 +30,10 @@ DNS_SERVERS='["8.8.8.8", "8.8.4.4"]'
 WEBUI_USER="admin"
 WEBUI_PASSWORD="admin"           # Change this!
 
+# Deployment Settings (used by DeployCluster.sh)
+LONGHORN_TIMEOUT=600             # Seconds to wait for Longhorn to be fully ready (10 min default)
+ARGOCD_PASSWORD_RETRIES=5        # Retry attempts for ArgoCD password configuration
+
 # SSH User Settings (non-root user for SSH access)
 SSH_USER="deploy"                # Non-root user for SSH access
 SSH_USER_GROUPS="sudo"           # Groups for the SSH user
@@ -259,7 +263,7 @@ echo "   git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
 echo ""
 echo "5. Run the setup script:"
 echo "   cd /opt/Talos-CleanRoom/deployment-webui/scripts"
-echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
+echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD} --longhorn-timeout ${LONGHORN_TIMEOUT} --argocd-retries ${ARGOCD_PASSWORD_RETRIES}"
 echo ""
 echo "6. Copy SOPS keys (from your workstation):"
 echo "   ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
@@ -366,7 +370,7 @@ su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
 echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
 chmod +x setup-lxc.sh
-./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
+./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\" --longhorn-timeout ${LONGHORN_TIMEOUT} --argocd-retries ${ARGOCD_PASSWORD_RETRIES}
 
 echo \"=== Starting web UI service ===\"
 systemctl start deployment-webui || echo \"Service may need manual start\"
