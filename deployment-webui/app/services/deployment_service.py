@@ -1,6 +1,7 @@
 """Deployment service for orchestrating cluster deployment."""
 
 import asyncio
+import json
 import uuid
 import shutil
 import os
@@ -33,6 +34,8 @@ class DeploymentService:
         self.master_node = settings.master_node
         self.health_check_retries = settings.health_check_retries
         self.health_check_interval = settings.health_check_interval
+        self.longhorn_timeout = settings.longhorn_timeout
+        self.argocd_password_retries = settings.argocd_password_retries
         self.dependencies = settings.dependencies
 
     @property
@@ -158,11 +161,12 @@ class DeploymentService:
                 (6, self._step_get_kubeconfig),
                 (7, self._step_install_argocd),
                 (8, self._step_deploy_infrastructure),
-                (9, self._step_argocd_self_management),
-                (10, self._step_deploy_openvas),
-                (11, self._step_deploy_faraday),
-                (12, self._step_deploy_metasploit),
-                (13, self._step_deploy_threat_dragon),
+                (9, self._step_wait_for_longhorn),
+                (10, self._step_argocd_self_management),
+                (11, self._step_deploy_openvas),
+                (12, self._step_deploy_faraday),
+                (13, self._step_deploy_metasploit),
+                (14, self._step_deploy_threat_dragon),
             ]
 
             for step_id, step_func in steps:
@@ -389,7 +393,71 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Configure ArgoCD admin password with retries
+        await self.log(step_id, "info", "Configuring ArgoCD admin password...")
+        retries = self.argocd_password_retries
+
+        for i in range(1, retries + 1):
+            await self.log(step_id, "info", f"  Attempt {i}/{retries}: Setting admin password...")
+
+            # Ensure argocd-server pod is fully ready
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "wait", "--for=condition=ready", "pod",
+                 "-l", "app.kubernetes.io/name=argocd-server",
+                 "-n", "argocd", "--timeout=60s"],
+                timeout=70
+            )
+            if not result.success:
+                await self.log(step_id, "warn", "  Warning: argocd-server pod not ready, retrying...")
+                await asyncio.sleep(10)
+                continue
+
+            # Give the server a moment to fully initialize
+            await asyncio.sleep(5)
+
+            # Generate bcrypt hash using argocd CLI in the pod
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "-n", "argocd", "exec", "deployment/argocd-server",
+                 "--", "argocd", "account", "bcrypt", "--password", "admin"],
+                timeout=30
+            )
+
+            if result.success and result.output.strip() and "$2" in result.output:
+                admin_hash = result.output.strip()
+                # Patch the secret with the new password
+                patch_data = json.dumps({
+                    "stringData": {
+                        "admin.password": admin_hash,
+                        "admin.passwordMtime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }
+                })
+
+                result = await self.process_manager.run_command_simple(
+                    ["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret", "-p", patch_data],
+                    timeout=30
+                )
+
+                if result.success:
+                    await asyncio.sleep(3)
+                    # Verify the password was set
+                    result = await self.process_manager.run_command_simple(
+                        ["kubectl", "-n", "argocd", "get", "secret", "argocd-secret",
+                         "-o", "jsonpath={.data.admin\\.password}"],
+                        timeout=10
+                    )
+                    if result.success and result.output.strip():
+                        await self.log(step_id, "info", "  ✓ ArgoCD admin password set to: admin")
+                        return True
+
+            await self.log(step_id, "warn", f"  Password setting attempt {i} failed, waiting before retry...")
+            await asyncio.sleep(15)
+
+        await self.log(step_id, "warn", f"Warning: Could not automatically set ArgoCD admin password after {retries} attempts")
+        await self.log(step_id, "info", "The password from values.yaml should still work")
+        return True  # Don't fail the deployment, password may still work from values.yaml
 
     async def _step_deploy_infrastructure(self, step_id: int) -> bool:
         """Step 8: Deploy infrastructure stack."""
@@ -402,6 +470,141 @@ class DeploymentService:
         )
 
         return result.success
+
+    async def _step_wait_for_longhorn(self, step_id: int) -> bool:
+        """Step 9: Wait for Longhorn storage to be fully operational."""
+        await self.log(step_id, "info", "Waiting for Longhorn to be fully operational...")
+        start_time = asyncio.get_event_loop().time()
+        timeout = self.longhorn_timeout
+
+        # Wait for longhorn-system namespace
+        await self.log(step_id, "info", "  Waiting for longhorn-system namespace...")
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
+                await self.log(step_id, "error", "Timeout waiting for longhorn-system namespace")
+                return False
+
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "namespace", "longhorn-system"],
+                timeout=10
+            )
+            if result.success:
+                await self.log(step_id, "info", "  ✓ Namespace longhorn-system exists")
+                break
+            await asyncio.sleep(5)
+
+        # Wait for all Longhorn deployments
+        deployments = [
+            "longhorn-driver-deployer",
+            "longhorn-ui",
+            "csi-attacher",
+            "csi-provisioner",
+            "csi-resizer",
+            "csi-snapshotter"
+        ]
+
+        for deploy in deployments:
+            await self.log(step_id, "info", f"  Waiting for deployment/{deploy}...")
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout:
+                    await self.log(step_id, "error", f"Timeout waiting for deployment/{deploy}")
+                    return False
+
+                # Check if deployment exists
+                result = await self.process_manager.run_command_simple(
+                    ["kubectl", "get", "deployment", deploy, "-n", "longhorn-system"],
+                    timeout=10
+                )
+                if not result.success:
+                    await asyncio.sleep(5)
+                    continue
+
+                # Wait for deployment to be available
+                remaining = int(timeout - elapsed)
+                result = await self.process_manager.run_command_simple(
+                    ["kubectl", "wait", "--for=condition=available",
+                     f"deployment/{deploy}", "-n", "longhorn-system",
+                     f"--timeout={remaining}s"],
+                    timeout=remaining + 10
+                )
+                if result.success:
+                    await self.log(step_id, "info", f"  ✓ deployment/{deploy} is available")
+                    break
+                await asyncio.sleep(5)
+
+        # Wait for Longhorn DaemonSets
+        daemonsets = ["longhorn-manager", "longhorn-csi-plugin"]
+
+        for ds in daemonsets:
+            await self.log(step_id, "info", f"  Waiting for daemonset/{ds}...")
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout:
+                    await self.log(step_id, "error", f"Timeout waiting for daemonset/{ds}")
+                    return False
+
+                # Get daemonset status
+                result = await self.process_manager.run_command_simple(
+                    ["kubectl", "get", "daemonset", ds, "-n", "longhorn-system",
+                     "-o", "jsonpath={.status.desiredNumberScheduled},{.status.numberReady}"],
+                    timeout=10
+                )
+                if result.success and result.output.strip():
+                    parts = result.output.strip().split(",")
+                    if len(parts) == 2:
+                        desired = int(parts[0]) if parts[0] else 0
+                        ready = int(parts[1]) if parts[1] else 0
+                        if desired > 0 and desired == ready:
+                            await self.log(step_id, "info", f"  ✓ daemonset/{ds} is ready ({ready}/{desired} pods)")
+                            break
+                        await self.log(step_id, "info", f"    daemonset/{ds}: {ready}/{desired} pods ready, waiting...")
+                await asyncio.sleep(10)
+
+        # Wait for Longhorn StorageClass
+        await self.log(step_id, "info", "  Waiting for Longhorn StorageClass...")
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
+                await self.log(step_id, "error", "Timeout waiting for Longhorn StorageClass")
+                return False
+
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "storageclass", "longhorn"],
+                timeout=10
+            )
+            if result.success:
+                await self.log(step_id, "info", "  ✓ StorageClass 'longhorn' is available")
+                break
+            await asyncio.sleep(5)
+
+        # Verify all pods are running
+        await self.log(step_id, "info", "  Verifying all Longhorn pods are running...")
+        pod_wait_start = asyncio.get_event_loop().time()
+        max_pod_wait = 120
+
+        while True:
+            pod_elapsed = asyncio.get_event_loop().time() - pod_wait_start
+            if pod_elapsed >= max_pod_wait:
+                await self.log(step_id, "warn", "Warning: Some Longhorn pods may not be fully ready, but continuing...")
+                break
+
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "pods", "-n", "longhorn-system", "--no-headers"],
+                timeout=10
+            )
+            if result.success:
+                lines = result.output.strip().split("\n")
+                not_running = sum(1 for line in lines if line and "Running" not in line and "Completed" not in line)
+                if not_running == 0:
+                    await self.log(step_id, "info", "  ✓ All Longhorn pods are running")
+                    break
+                await self.log(step_id, "info", f"    {not_running} pod(s) not yet running, waiting...")
+            await asyncio.sleep(10)
+
+        await self.log(step_id, "info", "✓ Longhorn is fully operational")
+        return True
 
     async def _step_argocd_self_management(self, step_id: int) -> bool:
         """Step 9: Enable ArgoCD self-management."""
