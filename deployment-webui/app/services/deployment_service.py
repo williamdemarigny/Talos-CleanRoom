@@ -58,6 +58,18 @@ class DeploymentService:
     def projects_dir(self) -> Path:
         return self.iac_dir / "infrastructure" / "projects"
 
+    def _create_log_callback(self, step_id: int, level: str = "info"):
+        """Create an async callback for logging output lines.
+
+        This is needed because lambda functions cannot properly await async methods.
+        Using a lambda like `lambda line: self.log(step_id, "info", line)` creates
+        a coroutine that is never executed. This method returns a proper async
+        function that can be awaited by the process manager.
+        """
+        async def callback(line: str):
+            await self.log(step_id, level, line)
+        return callback
+
     async def log(self, step_id: int, level: str, message: str):
         """Log a message and notify via callback."""
         entry = LogEntry(
@@ -143,7 +155,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "destroy", "-auto-approve"],
             cwd=self.terraform_dir,
-            on_output=lambda line: self.log(-1, "info", line)
+            on_output=self._create_log_callback(-1)
         )
 
         return result.success
@@ -241,7 +253,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "init"],
             cwd=self.terraform_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
         if not result.success:
             return False
@@ -250,7 +262,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "plan", "-out=.tfplan"],
             cwd=self.terraform_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
         if not result.success:
             return False
@@ -259,7 +271,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "apply", ".tfplan"],
             cwd=self.terraform_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -279,7 +291,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", str(script_path), "--backup"],
             cwd=self.iac_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
         if not result.success:
             return False
@@ -306,7 +318,7 @@ class DeploymentService:
             ["sops", "-e", "-i", "talsecret.sops.yaml"],
             cwd=self.talos_dir,
             env=env,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
         if not result.success:
             return False
@@ -317,7 +329,7 @@ class DeploymentService:
             ["talhelper", "genconfig", "--env-file", "talenv.yaml"],
             cwd=self.talos_dir,
             env=env,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -332,7 +344,7 @@ class DeploymentService:
             ["bash", "apply-configs.sh", "--bootstrap"],
             cwd=self.talos_dir,
             env=env,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -378,7 +390,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["talosctl", "kubeconfig", f"--nodes={self.master_node}", str(kubeconfig_path)],
             env=env,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -390,7 +402,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", "install.sh"],
             cwd=self.argocd_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         if not result.success:
@@ -466,7 +478,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", "deploy-ingress-stack.sh"],
             cwd=self.projects_dir,
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -613,7 +625,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "argocd" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         if result.success:
@@ -629,7 +641,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "openvas" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -641,7 +653,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -653,7 +665,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         return result.success
@@ -665,7 +677,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "threat-dragon" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
+            on_output=self._create_log_callback(step_id)
         )
 
         # Wait for applications to sync
