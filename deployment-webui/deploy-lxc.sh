@@ -387,20 +387,55 @@ echo \"Root SSH: disabled\"
     echo -e "${GREEN}Setup Complete!${NC}"
     echo -e "${GREEN}============================================${NC}"
     echo ""
+
+    # Automatically copy secrets using pct push via Proxmox (no container password needed)
+    echo -e "${GREEN}Copying secrets to container via Proxmox...${NC}"
+
+    # Copy SOPS age keys
+    SOPS_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
+    if [ -f "$SOPS_KEY_FILE" ]; then
+        echo "  Copying SOPS age keys..."
+        # Create directories in container
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- mkdir -p /home/${SSH_USER}/.config/sops/age /root/.config/sops/age"
+        # Copy to Proxmox host first, then push to container
+        scp ${SSH_OPTS} "$SOPS_KEY_FILE" root@${PROXMOX_HOST}:/tmp/sops_keys.txt
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/sops_keys.txt /home/${SSH_USER}/.config/sops/age/keys.txt"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/sops_keys.txt /root/.config/sops/age/keys.txt"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.config"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "rm /tmp/sops_keys.txt"
+        echo -e "${GREEN}  ✓ SOPS keys copied${NC}"
+    else
+        echo -e "${YELLOW}  Warning: SOPS key file not found at $SOPS_KEY_FILE${NC}"
+        echo "  You will need to copy it manually:"
+        echo "    scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
+    fi
+
+    # Copy Terraform credentials
+    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    TF_CREDS_FILE="${REPO_ROOT}/Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars"
+    if [ -f "$TF_CREDS_FILE" ]; then
+        echo "  Copying Terraform credentials..."
+        # Copy to Proxmox host first, then push to container
+        scp ${SSH_OPTS} "$TF_CREDS_FILE" root@${PROXMOX_HOST}:/tmp/credentials.auto.tfvars
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/credentials.auto.tfvars /opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "rm /tmp/credentials.auto.tfvars"
+        echo -e "${GREEN}  ✓ Terraform credentials copied${NC}"
+    else
+        echo -e "${YELLOW}  Warning: Terraform credentials not found at $TF_CREDS_FILE${NC}"
+        echo "  You will need to copy them manually:"
+        echo "    scp Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars \\"
+        echo "        ${SSH_USER}@${CONTAINER_IP}:/opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/"
+    fi
+
+    echo ""
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "${GREEN}Deployment Ready!${NC}"
+    echo -e "${GREEN}============================================${NC}"
+    echo ""
     echo "Web UI is now running at: http://${CONTAINER_IP}:8000"
     echo ""
     echo -e "${YELLOW}SSH Access (root login disabled):${NC}"
     echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
     echo "  Password: (the one you entered during setup)"
-    echo ""
-    echo "Don't forget to copy your secrets:"
-    echo ""
-    echo "1. SOPS age keys (for decrypting secrets):"
-    echo "   ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
-    echo "   scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
-    echo ""
-    echo "2. Terraform credentials (for deployment/cleanup):"
-    echo "   scp Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars \\"
-    echo "       ${SSH_USER}@${CONTAINER_IP}:/opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/"
     echo ""
 fi
