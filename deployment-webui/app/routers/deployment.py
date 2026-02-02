@@ -7,6 +7,7 @@ from typing import Optional, List
 from app.auth import get_current_user
 from app.services.deployment_service import get_deployment_service, DeploymentService
 from app.models.deployment import DeploymentState, DeploymentStatus, LogEntry
+from app.routers.websocket import log_callback, step_callback
 
 router = APIRouter()
 
@@ -45,7 +46,11 @@ async def start_deployment(
         )
 
     try:
-        deployment = await service.start_deployment()
+        # Pass WebSocket callbacks so logs are broadcast to all connected clients
+        deployment = await service.start_deployment(
+            log_callback=log_callback,
+            step_callback=step_callback
+        )
         return DeploymentResponse(
             success=True,
             message="Deployment started",
