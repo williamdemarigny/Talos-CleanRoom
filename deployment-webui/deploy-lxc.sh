@@ -411,7 +411,8 @@ echo \"Root SSH: disabled\"
     fi
 
     # Copy Terraform credentials
-    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # SCRIPT_DIR is deployment-webui/, so go up one level to get repo root
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
     TF_CREDS_FILE="${REPO_ROOT}/Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars"
     if [ -f "$TF_CREDS_FILE" ]; then
         echo "  Copying Terraform credentials..."
