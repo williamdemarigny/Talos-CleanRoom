@@ -2,9 +2,46 @@
 # Talos CleanRoom Deployment Web UI - LXC Deployment Script
 # Deploys the web UI as an LXC container on Proxmox
 #
-# Usage: ./deploy-lxc.sh
+# Usage: ./deploy-lxc.sh [--yes]
+#
+# Options:
+#   -y, --yes    Auto-confirm all prompts (non-interactive mode)
+#
+# Environment variables (set these to skip credential prompts):
+#   PROXMOX_API_TOKEN    - Proxmox API token (format: user@pam!tokenid=secret)
+#   PROXMOX_SSH_PASSWORD - Proxmox SSH password (skipped if SSH key auth works)
+#   LXC_ROOT_PASSWORD    - LXC container root password
+#   SSH_USER_PASSWORD    - SSH user password
+#   GITHUB_SSH_KEY       - Path to GitHub SSH private key
+#
+# Example (fully automated):
+#   export PROXMOX_API_TOKEN="root@pam!deploy=your-secret"
+#   export LXC_ROOT_PASSWORD="secure-password"
+#   export SSH_USER_PASSWORD="secure-password"
+#   export GITHUB_SSH_KEY="$HOME/.ssh/id_ed25519"
+#   ./deploy-lxc.sh --yes
 
 set -eo pipefail
+
+# Parse command line arguments
+AUTO_CONFIRM=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -y|--yes)
+            AUTO_CONFIRM=true
+            shift
+            ;;
+        -h|--help)
+            head -25 "$0" | tail -20
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
 
 # Configuration - Edit these values
 PROXMOX_HOST="pve01.knowledgeondemand.net"
@@ -71,10 +108,17 @@ if [ -z "$PROXMOX_API_TOKEN" ]; then
     read -r PROXMOX_API_TOKEN
 fi
 
+# Check if SSH key authentication works for Proxmox (skip password prompt if so)
 if [ -z "$PROXMOX_SSH_PASSWORD" ]; then
-    echo -e "${YELLOW}Enter Proxmox SSH password for root:${NC}"
-    read -rs PROXMOX_SSH_PASSWORD
-    echo ""
+    echo "  Checking SSH key authentication to Proxmox..."
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new root@${PROXMOX_HOST} true 2>/dev/null; then
+        echo -e "${GREEN}  ✓ SSH key authentication available - skipping password prompt${NC}"
+        PROXMOX_SSH_PASSWORD=""
+    else
+        echo -e "${YELLOW}Enter Proxmox SSH password for root:${NC}"
+        read -rs PROXMOX_SSH_PASSWORD
+        echo ""
+    fi
 fi
 
 if [ -z "$LXC_ROOT_PASSWORD" ]; then
@@ -219,12 +263,16 @@ echo "  Hostname:     ${LXC_HOSTNAME}"
 echo "  IP Address:   ${LXC_IP}"
 echo "  Resources:    ${LXC_CORES} cores, ${LXC_MEMORY}MB RAM, ${LXC_DISK}GB disk"
 echo ""
-read -p "Proceed with deployment? (y/n) " -n 1 -r
-echo ""
 
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Deployment cancelled."
-    exit 0
+if [[ "$AUTO_CONFIRM" == true ]]; then
+    echo -e "${GREEN}Auto-confirming deployment (--yes flag)${NC}"
+else
+    read -p "Proceed with deployment? (y/n) " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Deployment cancelled."
+        exit 0
+    fi
 fi
 
 # Apply deployment
@@ -277,8 +325,14 @@ echo -e "${GREEN}============================================${NC}"
 
 # Optional: Run setup automatically
 echo ""
-read -p "Run setup script automatically via SSH? (y/n) " -n 1 -r
-echo ""
+
+if [[ "$AUTO_CONFIRM" == true ]]; then
+    echo -e "${GREEN}Auto-confirming automatic setup (--yes flag)${NC}"
+    REPLY="y"
+else
+    read -p "Run setup script automatically via SSH? (y/n) " -n 1 -r
+    echo ""
+fi
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     # Remove any old host keys for this IP (container may have been recreated)
