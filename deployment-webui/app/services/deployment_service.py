@@ -332,7 +332,20 @@ class DeploymentService:
             on_output=self._create_log_callback(step_id)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Fix permissions on generated config files so they're readable
+        # This is needed because the service may run as a different user
+        clusterconfig_dir = self.talos_dir / "clusterconfig"
+        if clusterconfig_dir.exists():
+            await self.log(step_id, "info", "Fixing permissions on generated configs...")
+            await self.process_manager.run_command_simple(
+                ["chmod", "-R", "a+r", str(clusterconfig_dir)],
+                timeout=10
+            )
+
+        return True
 
     async def _step_apply_talos_configs(self, step_id: int) -> bool:
         """Step 4: Apply Talos configurations."""
