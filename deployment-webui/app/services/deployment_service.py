@@ -493,7 +493,24 @@ class DeploymentService:
                         timeout=10
                     )
                     if result.success and result.output.strip():
-                        await self.log(step_id, "info", "  ✓ ArgoCD admin password set to: admin")
+                        await self.log(step_id, "info", "  ✓ ArgoCD admin password hash updated")
+
+                        # Restart ArgoCD server to pick up the new password
+                        await self.log(step_id, "info", "  Restarting ArgoCD server to apply new password...")
+                        restart_result = await self.process_manager.run_command_simple(
+                            ["kubectl", "-n", "argocd", "rollout", "restart", "deployment/argocd-server"],
+                            timeout=30
+                        )
+                        if restart_result.success:
+                            # Wait for the rollout to complete
+                            await self.log(step_id, "info", "  Waiting for ArgoCD server rollout...")
+                            await self.process_manager.run_command_simple(
+                                ["kubectl", "-n", "argocd", "rollout", "status", "deployment/argocd-server", "--timeout=120s"],
+                                timeout=130
+                            )
+                            await self.log(step_id, "info", "  ✓ ArgoCD admin password set to: admin")
+                        else:
+                            await self.log(step_id, "warn", "  Warning: Could not restart ArgoCD server, password may not take effect immediately")
                         return True
 
             await self.log(step_id, "warn", f"  Password setting attempt {i} failed, waiting before retry...")
