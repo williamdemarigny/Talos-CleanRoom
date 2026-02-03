@@ -164,17 +164,50 @@ get_vm_ip() {
     # Query VM network interfaces via agent
     local response=$(proxmox_api "/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces")
 
-    # Debug: Show raw response
-    # echo "DEBUG Response: $response" >&2
-
     # Check if agent is available
-    if echo "$response" | jq -e '.data' > /dev/null 2>&1; then
+    if echo "$response" | jq -e '.data.result' > /dev/null 2>&1; then
         # Extract IPv4 address (exclude loopback)
         local ip=$(echo "$response" | jq -r '.data.result[]? | select(.name != "lo") | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4") | .["ip-address"]' | head -1)
-        echo "$ip"
-    else
-        echo ""
+        if [[ -n "$ip" ]]; then
+            echo "$ip"
+            return 0
+        fi
     fi
+
+    print_info "    Guest agent not available (expected for Talos)" >&2
+    echo ""
+    return 1
+}
+
+# Function to resolve FQDN to IP or check if FQDN is reachable
+resolve_or_check_fqdn() {
+    local fqdn="$1"
+
+    if [[ -z "$fqdn" ]]; then
+        return 1
+    fi
+
+    print_info "    Resolving FQDN via DNS..." >&2
+
+    # Try to resolve the FQDN
+    local ip=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | head -1)
+
+    if [[ -n "$ip" && "$ip" != "" ]]; then
+        echo "$ip"
+        return 0
+    fi
+
+    # If getent fails, try dig
+    if command -v dig &> /dev/null; then
+        ip=$(dig +short "$fqdn" 2>/dev/null | head -1)
+        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    fi
+
+    print_warning "    Could not resolve FQDN: $fqdn" >&2
+    return 1
 }
 
 # Function to find VM node in Proxmox cluster
@@ -294,18 +327,26 @@ while IFS= read -r line; do
 
                 print_success "  Found on Proxmox node: $node"
 
-                # Get DHCP IP
+                # Get DHCP IP - try guest agent first, then fall back to DNS resolution
                 dhcp_ip=$(get_vm_ip "$vmid" "$node" || true)
 
                 if [[ -z "$dhcp_ip" ]]; then
-                    print_warning "  Could not get DHCP IP"
-                    print_warning "  VM may not be running or QEMU guest agent not responding"
+                    # Talos VMs don't have guest agent - fall back to DNS resolution
+                    if [[ -n "$fqdn" ]]; then
+                        print_info "  Falling back to DNS resolution for FQDN: $fqdn"
+                        dhcp_ip=$(resolve_or_check_fqdn "$fqdn" || true)
+                    fi
+                fi
+
+                if [[ -z "$dhcp_ip" ]]; then
+                    print_warning "  Could not get IP from guest agent or DNS"
+                    print_warning "  VM may not be running or DNS not configured"
                     echo ""
                     current_node=""
                     continue
                 fi
 
-                print_success "  Current DHCP IP: $dhcp_ip"
+                print_success "  Resolved IP: $dhcp_ip"
 
                 # Save control plane info for bootstrap (use FQDN or IP)
                 if [[ "$role" == "controlplane" ]]; then
@@ -326,7 +367,35 @@ while IFS= read -r line; do
 
                 if [[ "$DRY_RUN" == true ]]; then
                     print_info "  [DRY RUN] Would apply config to $dhcp_ip"
+                    APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                 else
+                    # Wait for VM to be reachable before applying config
+                    print_info "  Waiting for VM to be reachable..."
+                    VM_REACHABLE=false
+                    VM_WAIT_TIMEOUT=180
+                    VM_WAIT_INTERVAL=10
+                    VM_ELAPSED=0
+
+                    while [[ $VM_ELAPSED -lt $VM_WAIT_TIMEOUT ]]; do
+                        # Try to connect to Talos API (port 50000)
+                        if timeout 5 bash -c "echo >/dev/tcp/${dhcp_ip}/50000" 2>/dev/null; then
+                            print_success "  VM is reachable at $dhcp_ip"
+                            VM_REACHABLE=true
+                            break
+                        fi
+                        VM_ELAPSED=$((VM_ELAPSED + VM_WAIT_INTERVAL))
+                        print_info "    Waiting for VM... (${VM_ELAPSED}/${VM_WAIT_TIMEOUT}s)"
+                        sleep $VM_WAIT_INTERVAL
+                    done
+
+                    if [[ "$VM_REACHABLE" == false ]]; then
+                        print_warning "  Timeout waiting for VM to be reachable at $dhcp_ip"
+                        print_warning "  Skipping this VM..."
+                        echo ""
+                        current_node=""
+                        continue
+                    fi
+
                     print_info "  Applying configuration..."
                     if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
                         print_success "  Config applied successfully!"
@@ -406,6 +475,17 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
 fi
 
 echo ""
+
+# Check if any VMs were actually configured
+if [[ "$DRY_RUN" == false && ${#APPLIED_VMS[@]} -eq 0 ]]; then
+    print_error "No VMs were successfully configured!"
+    print_error "Check that:"
+    print_error "  - VMs are running in Proxmox"
+    print_error "  - DNS resolution works for VM FQDNs"
+    print_error "  - Network connectivity to VMs is available"
+    exit 1
+fi
+
 print_success "Done!"
 
 if [[ "$DRY_RUN" == false && ${#APPLIED_VMS[@]} -gt 0 ]]; then
