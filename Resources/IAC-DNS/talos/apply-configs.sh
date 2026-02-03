@@ -348,23 +348,60 @@ done < "$TFVARS_FILE"
 # Bootstrap cluster if requested
 if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
     echo ""
-    print_info "Waiting 180 seconds for VMs to reboot and become available..."
+    print_info "Waiting for control plane node to be reachable before bootstrapping..."
 
     if [[ "$DRY_RUN" == true ]]; then
         print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
-        sleep 180
+        # Wait for node to be reachable with timeout (max 10 minutes)
+        MAX_WAIT=600
+        WAIT_INTERVAL=15
+        ELAPSED=0
+
+        print_info "Waiting for $CONTROL_PLANE_ENDPOINT to be reachable (timeout: ${MAX_WAIT}s)..."
+
+        while [[ $ELAPSED -lt $MAX_WAIT ]]; do
+            # Try to get node version - this works even in maintenance mode
+            if talosctl --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT" version --short 2>/dev/null; then
+                print_success "Node is reachable after ${ELAPSED}s"
+                break
+            fi
+
+            ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+            print_info "  Waiting... (${ELAPSED}/${MAX_WAIT}s)"
+            sleep $WAIT_INTERVAL
+        done
+
+        if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+            print_error "Timeout waiting for node to be reachable"
+            exit 1
+        fi
+
+        # Give the node a moment to fully initialize after becoming reachable
+        print_info "Node reachable, waiting additional 30 seconds for full initialization..."
+        sleep 30
 
         print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
-        if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
-            print_success "Cluster bootstrapped successfully!"
-            echo ""
-            print_info "Configure talosctl context:"
-            print_info "  talosctl config endpoint $CONTROL_PLANE_ENDPOINT"
-            print_info "  talosctl config node $CONTROL_PLANE_ENDPOINT"
-        else
-            print_error "Failed to bootstrap cluster"
-        fi
+
+        # Retry bootstrap a few times in case of transient failures
+        BOOTSTRAP_RETRIES=3
+        for i in $(seq 1 $BOOTSTRAP_RETRIES); do
+            if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT" 2>&1; then
+                print_success "Cluster bootstrapped successfully!"
+                echo ""
+                print_info "Configure talosctl context:"
+                print_info "  talosctl config endpoint $CONTROL_PLANE_ENDPOINT"
+                print_info "  talosctl config node $CONTROL_PLANE_ENDPOINT"
+                break
+            else
+                if [[ $i -lt $BOOTSTRAP_RETRIES ]]; then
+                    print_warning "Bootstrap attempt $i failed, retrying in 30 seconds..."
+                    sleep 30
+                else
+                    print_error "Failed to bootstrap cluster after $BOOTSTRAP_RETRIES attempts"
+                fi
+            fi
+        done
     fi
 fi
 
