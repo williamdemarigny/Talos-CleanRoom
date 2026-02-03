@@ -213,6 +213,33 @@ resolve_or_check_fqdn() {
     return 1
 }
 
+# Function to wait for Talos API to be ready on a node
+wait_for_talos_api() {
+    local ip="$1"
+    local max_wait="${2:-180}"  # Default 3 minutes
+    local wait_interval=10
+    local elapsed=0
+
+    print_info "    Waiting for Talos API on $ip (timeout: ${max_wait}s)..." >&2
+
+    while [[ $elapsed -lt $max_wait ]]; do
+        # Check if port 50000 is open
+        if nc -z -w 2 "$ip" 50000 2>/dev/null; then
+            print_success "    Talos API is ready on $ip (after ${elapsed}s)" >&2
+            return 0
+        fi
+
+        elapsed=$((elapsed + wait_interval))
+        if [[ $elapsed -lt $max_wait ]]; then
+            print_info "    Talos API not ready yet, waiting... (${elapsed}/${max_wait}s)" >&2
+            sleep $wait_interval
+        fi
+    done
+
+    print_warning "    Timeout waiting for Talos API on $ip" >&2
+    return 1
+}
+
 # Function to find VM node in Proxmox cluster
 find_vm_node() {
     local vmid="$1"
@@ -374,14 +401,21 @@ while IFS= read -r line; do
                     print_info "  [DRY RUN] Would apply config to $dhcp_ip"
                     APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                 else
-                    print_info "  Applying configuration to $dhcp_ip..."
-                    if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
-                        print_success "  Config applied successfully!"
-                        print_info "  VM will reboot and come up at: $target_endpoint"
-                        APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
+                    # Wait for Talos API to be ready before applying config
+                    print_info "  Waiting for Talos API to be ready..."
+                    if wait_for_talos_api "$dhcp_ip" 180; then
+                        print_info "  Applying configuration to $dhcp_ip..."
+                        if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
+                            print_success "  Config applied successfully!"
+                            print_info "  VM will reboot and come up at: $target_endpoint"
+                            APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
+                        else
+                            print_error "  Failed to apply config to $dhcp_ip"
+                            print_warning "  Will continue with remaining VMs..."
+                        fi
                     else
-                        print_error "  Failed to apply config to $dhcp_ip"
-                        print_warning "  Will continue with remaining VMs..."
+                        print_error "  Talos API not available on $dhcp_ip after timeout"
+                        print_warning "  Skipping this VM, will continue with remaining VMs..."
                     fi
                 fi
 
