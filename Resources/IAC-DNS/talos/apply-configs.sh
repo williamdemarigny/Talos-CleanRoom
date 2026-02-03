@@ -214,29 +214,45 @@ resolve_or_check_fqdn() {
 }
 
 # Function to wait for Talos API to be ready on a node
+# Uses progressive polling: fast at first, then slower to reduce load
 wait_for_talos_api() {
     local ip="$1"
-    local max_wait="${2:-180}"  # Default 3 minutes
-    local wait_interval=10
+    local max_wait="${2:-300}"  # Default 5 minutes (Ceph storage can be slow)
     local elapsed=0
+    local attempt=0
 
     print_info "    Waiting for Talos API on $ip (timeout: ${max_wait}s)..." >&2
 
     while [[ $elapsed -lt $max_wait ]]; do
+        attempt=$((attempt + 1))
+
         # Check if port 50000 is open
         if nc -z -w 2 "$ip" 50000 2>/dev/null; then
-            print_success "    Talos API is ready on $ip (after ${elapsed}s)" >&2
+            print_success "    Talos API is ready on $ip (after ${elapsed}s, attempt #${attempt})" >&2
             return 0
+        fi
+
+        # Progressive wait interval: 3s for first minute, 5s for next 2 min, 10s after
+        local wait_interval
+        if [[ $elapsed -lt 60 ]]; then
+            wait_interval=3
+        elif [[ $elapsed -lt 180 ]]; then
+            wait_interval=5
+        else
+            wait_interval=10
         fi
 
         elapsed=$((elapsed + wait_interval))
         if [[ $elapsed -lt $max_wait ]]; then
-            print_info "    Talos API not ready yet, waiting... (${elapsed}/${max_wait}s)" >&2
+            # Only log every 15 seconds to reduce noise
+            if [[ $((elapsed % 15)) -lt $wait_interval ]]; then
+                print_info "    Talos API not ready yet, polling... (${elapsed}/${max_wait}s)" >&2
+            fi
             sleep $wait_interval
         fi
     done
 
-    print_warning "    Timeout waiting for Talos API on $ip" >&2
+    print_warning "    Timeout waiting for Talos API on $ip after ${max_wait}s (${attempt} attempts)" >&2
     return 1
 }
 
@@ -402,8 +418,9 @@ while IFS= read -r line; do
                     APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                 else
                     # Wait for Talos API to be ready before applying config
-                    print_info "  Waiting for Talos API to be ready..."
-                    if wait_for_talos_api "$dhcp_ip" 180; then
+                    # Use 300s timeout for Ceph storage boot latency
+                    print_info "  Waiting for Talos API to be ready (up to 5 minutes for Ceph boot)..."
+                    if wait_for_talos_api "$dhcp_ip"; then
                         print_info "  Applying configuration to $dhcp_ip..."
                         if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
                             print_success "  Config applied successfully!"
