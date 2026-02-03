@@ -369,40 +369,14 @@ while IFS= read -r line; do
                     print_info "  [DRY RUN] Would apply config to $dhcp_ip"
                     APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                 else
-                    # Wait for VM to be reachable before applying config
-                    print_info "  Waiting for VM to be reachable..."
-                    VM_REACHABLE=false
-                    VM_WAIT_TIMEOUT=180
-                    VM_WAIT_INTERVAL=10
-                    VM_ELAPSED=0
-
-                    while [[ $VM_ELAPSED -lt $VM_WAIT_TIMEOUT ]]; do
-                        # Try to connect to Talos API (port 50000)
-                        if timeout 5 bash -c "echo >/dev/tcp/${dhcp_ip}/50000" 2>/dev/null; then
-                            print_success "  VM is reachable at $dhcp_ip"
-                            VM_REACHABLE=true
-                            break
-                        fi
-                        VM_ELAPSED=$((VM_ELAPSED + VM_WAIT_INTERVAL))
-                        print_info "    Waiting for VM... (${VM_ELAPSED}/${VM_WAIT_TIMEOUT}s)"
-                        sleep $VM_WAIT_INTERVAL
-                    done
-
-                    if [[ "$VM_REACHABLE" == false ]]; then
-                        print_warning "  Timeout waiting for VM to be reachable at $dhcp_ip"
-                        print_warning "  Skipping this VM..."
-                        echo ""
-                        current_node=""
-                        continue
-                    fi
-
-                    print_info "  Applying configuration..."
+                    print_info "  Applying configuration to $dhcp_ip..."
                     if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
                         print_success "  Config applied successfully!"
                         print_info "  VM will reboot and come up at: $target_endpoint"
                         APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                     else
-                        print_error "  Failed to apply config"
+                        print_error "  Failed to apply config to $dhcp_ip"
+                        print_warning "  Will continue with remaining VMs..."
                     fi
                 fi
 
@@ -468,6 +442,7 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
                     sleep 30
                 else
                     print_error "Failed to bootstrap cluster after $BOOTSTRAP_RETRIES attempts"
+                    exit 1
                 fi
             fi
         done
