@@ -411,18 +411,53 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
 
         print_info "Waiting for $CONTROL_PLANE_ENDPOINT to be reachable (timeout: ${MAX_WAIT}s)..."
 
+        # First, wait for basic network connectivity (ping or port check)
+        print_info "Waiting for node to be network-reachable..."
+        NETWORK_READY=false
+        NETWORK_WAIT=0
+        NETWORK_MAX=300  # 5 minutes for network
+
+        while [[ $NETWORK_WAIT -lt $NETWORK_MAX ]]; do
+            # Try to resolve and ping the node
+            NODE_IP=$(getent hosts "$CONTROL_PLANE_ENDPOINT" 2>/dev/null | awk '{print $1}' | head -1)
+            if [[ -n "$NODE_IP" ]]; then
+                print_info "  DEBUG: Resolved $CONTROL_PLANE_ENDPOINT to $NODE_IP"
+                # Check if port 50000 is open (node is at least partially up)
+                if nc -z -w 2 "$NODE_IP" 50000 2>/dev/null; then
+                    print_success "  Node network is ready (port 50000 responding)"
+                    NETWORK_READY=true
+                    break
+                else
+                    print_info "  Port 50000 not yet responding on $NODE_IP..."
+                fi
+            else
+                print_warning "  Could not resolve $CONTROL_PLANE_ENDPOINT"
+            fi
+            NETWORK_WAIT=$((NETWORK_WAIT + 15))
+            print_info "  Waiting for network... (${NETWORK_WAIT}/${NETWORK_MAX}s)"
+            sleep 15
+        done
+
+        if [[ "$NETWORK_READY" == false ]]; then
+            print_error "Node never became network-reachable within ${NETWORK_MAX}s"
+            print_error "Check Proxmox console to see node state"
+            exit 1
+        fi
+
+        # Now wait for Talos API to be ready
+        print_info "Network ready, waiting for Talos API..."
         while [[ $ELAPSED -lt $MAX_WAIT ]]; do
             # Try to get node version - this works even in maintenance mode
             print_info "  DEBUG: Attempting talosctl version --nodes $CONTROL_PLANE_ENDPOINT"
             if talosctl --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT" version --short; then
-                print_success "Node is reachable after ${ELAPSED}s"
+                print_success "Node Talos API is reachable after ${ELAPSED}s"
                 break
             else
-                print_info "  DEBUG: talosctl version failed (exit code $?)"
+                print_info "  DEBUG: talosctl version failed (exit code $?), API not ready yet"
             fi
 
             ELAPSED=$((ELAPSED + WAIT_INTERVAL))
-            print_info "  Waiting... (${ELAPSED}/${MAX_WAIT}s)"
+            print_info "  Waiting for Talos API... (${ELAPSED}/${MAX_WAIT}s)"
             sleep $WAIT_INTERVAL
         done
 
