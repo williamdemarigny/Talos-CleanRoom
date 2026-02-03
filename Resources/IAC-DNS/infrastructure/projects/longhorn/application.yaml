@@ -40,6 +40,11 @@ spec:
           autoCleanupSystemGeneratedSnapshot: true
           # Auto delete pod when volume detached unexpectedly
           autoDeletePodWhenVolumeDetachedUnexpectedly: true
+          # Only use worker nodes for storage (they have the secondary Longhorn disk)
+          # Control plane nodes don't have /var/lib/longhorn mounted
+          systemManagedComponentsNodeSelector: "node-role.kubernetes.io/worker:"
+          # Taint toleration for system components (allow scheduling on tainted nodes)
+          taintToleration: "node-role.kubernetes.io/control-plane:NoSchedule"
 
         # Persistence settings
         persistence:
