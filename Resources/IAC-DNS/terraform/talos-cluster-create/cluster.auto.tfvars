@@ -49,9 +49,8 @@ opnsense_vms = [
 talos_iso_file = "cephfs:iso/nocloud-amd64.iso" # Standard Talos ISO
 
 # Primary system disk datastore id (Proxmox storage ID)
+# Also used for the secondary 125GB Longhorn disk (ensures HA compatibility)
 disk_storage = "CleanRoom_Storage"
-
-# Note: Secondary 75GB VirtIO disk for Longhorn is configured in main.tf using local-lvm storage
 
 # Proxmox network bridge
 network_bridge = "vmbr0"
@@ -60,7 +59,7 @@ network_bridge = "vmbr0"
 # Fields:
 # - vmid: unique VM ID per Proxmox node
 # - role: controlplane | worker
-# NOTE: All Talos VMs get a secondary 75GB VirtIO disk for Longhorn (configured in main.tf)
+# NOTE: All Talos VMs get a secondary 125GB VirtIO disk for Longhorn on shared Ceph storage
 
 nodes = [
   # Control Plane Node - Uses standard Talos ISO

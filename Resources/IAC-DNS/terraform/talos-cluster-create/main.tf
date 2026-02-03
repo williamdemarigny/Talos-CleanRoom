@@ -148,12 +148,13 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   # Additional disk for Longhorn storage (VirtIO Block device)
   # Size: 125GB provides headroom for OpenVAS (31GB), replicas (x2), and future workloads
+  # Uses shared Ceph storage for HA compatibility (allows VM migration between nodes)
   disk {
     interface    = "virtio1"
-    datastore_id = "local-lvm"
+    datastore_id = var.disk_storage
     size         = 125
     cache        = "writeback"
-    discard      = "ignore"
+    discard      = "on"
     file_format  = "raw"
   }
 
