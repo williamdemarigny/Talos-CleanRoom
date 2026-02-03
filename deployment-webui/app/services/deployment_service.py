@@ -158,7 +158,26 @@ class DeploymentService:
             on_output=self._create_log_callback(-1)
         )
 
-        return result.success
+        # Log the actual result for debugging
+        await self.log(-1, "info", f"Terraform destroy completed with return code: {result.return_code}")
+
+        # Check output for success indicators even if return code is non-zero
+        # Terraform can return non-zero if some resources were already deleted
+        output_lower = result.output.lower()
+        if result.success:
+            await self.log(-1, "info", "Cleanup completed successfully")
+            return True
+        elif "destroy complete" in output_lower or "resources destroyed" in output_lower:
+            # Terraform reported destruction but may have had warnings
+            await self.log(-1, "warn", f"Cleanup completed with warnings (exit code {result.return_code})")
+            return True
+        elif result.return_code == 1 and ("no changes" in output_lower or "0 destroyed" in output_lower):
+            # Nothing to destroy - that's still a success
+            await self.log(-1, "info", "No resources to destroy")
+            return True
+        else:
+            await self.log(-1, "error", f"Cleanup failed with exit code {result.return_code}")
+            return False
 
     async def _run_deployment(self):
         """Execute the full deployment process."""
