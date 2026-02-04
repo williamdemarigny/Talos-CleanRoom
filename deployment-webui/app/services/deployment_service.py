@@ -1,7 +1,6 @@
 """Deployment service for orchestrating cluster deployment."""
 
 import asyncio
-import json
 import uuid
 import shutil
 import os
@@ -34,8 +33,6 @@ class DeploymentService:
         self.master_node = settings.master_node
         self.health_check_retries = settings.health_check_retries
         self.health_check_interval = settings.health_check_interval
-        self.longhorn_timeout = settings.longhorn_timeout
-        self.argocd_password_retries = settings.argocd_password_retries
         self.dependencies = settings.dependencies
 
     @property
@@ -57,18 +54,6 @@ class DeploymentService:
     @property
     def projects_dir(self) -> Path:
         return self.iac_dir / "infrastructure" / "projects"
-
-    def _create_log_callback(self, step_id: int, level: str = "info"):
-        """Create an async callback for logging output lines.
-
-        This is needed because lambda functions cannot properly await async methods.
-        Using a lambda like `lambda line: self.log(step_id, "info", line)` creates
-        a coroutine that is never executed. This method returns a proper async
-        function that can be awaited by the process manager.
-        """
-        async def callback(line: str):
-            await self.log(step_id, level, line)
-        return callback
 
     async def log(self, step_id: int, level: str, message: str):
         """Log a message and notify via callback."""
@@ -155,29 +140,10 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "destroy", "-auto-approve"],
             cwd=self.terraform_dir,
-            on_output=self._create_log_callback(-1)
+            on_output=lambda line: self.log(-1, "info", line)
         )
 
-        # Log the actual result for debugging
-        await self.log(-1, "info", f"Terraform destroy completed with return code: {result.return_code}")
-
-        # Check output for success indicators even if return code is non-zero
-        # Terraform can return non-zero if some resources were already deleted
-        output_lower = result.output.lower()
-        if result.success:
-            await self.log(-1, "info", "Cleanup completed successfully")
-            return True
-        elif "destroy complete" in output_lower or "resources destroyed" in output_lower:
-            # Terraform reported destruction but may have had warnings
-            await self.log(-1, "warn", f"Cleanup completed with warnings (exit code {result.return_code})")
-            return True
-        elif result.return_code == 1 and ("no changes" in output_lower or "0 destroyed" in output_lower):
-            # Nothing to destroy - that's still a success
-            await self.log(-1, "info", "No resources to destroy")
-            return True
-        else:
-            await self.log(-1, "error", f"Cleanup failed with exit code {result.return_code}")
-            return False
+        return result.success
 
     async def _run_deployment(self):
         """Execute the full deployment process."""
@@ -192,12 +158,11 @@ class DeploymentService:
                 (6, self._step_get_kubeconfig),
                 (7, self._step_install_argocd),
                 (8, self._step_deploy_infrastructure),
-                (9, self._step_wait_for_longhorn),
-                (10, self._step_argocd_self_management),
-                (11, self._step_deploy_openvas),
-                (12, self._step_deploy_faraday),
-                (13, self._step_deploy_metasploit),
-                (14, self._step_deploy_threat_dragon),
+                (9, self._step_argocd_self_management),
+                (10, self._step_deploy_openvas),
+                (11, self._step_deploy_faraday),
+                (12, self._step_deploy_metasploit),
+                (13, self._step_deploy_threat_dragon),
             ]
 
             for step_id, step_func in steps:
@@ -272,7 +237,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "init"],
             cwd=self.terraform_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
             return False
@@ -281,7 +246,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "plan", "-out=.tfplan"],
             cwd=self.terraform_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
             return False
@@ -290,7 +255,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["terraform", "apply", ".tfplan"],
             cwd=self.terraform_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -310,7 +275,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", str(script_path), "--backup"],
             cwd=self.iac_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
             return False
@@ -337,7 +302,7 @@ class DeploymentService:
             ["sops", "-e", "-i", "talsecret.sops.yaml"],
             cwd=self.talos_dir,
             env=env,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
             return False
@@ -348,23 +313,10 @@ class DeploymentService:
             ["talhelper", "genconfig", "--env-file", "talenv.yaml"],
             cwd=self.talos_dir,
             env=env,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        if not result.success:
-            return False
-
-        # Fix permissions on generated config files so they're readable
-        # This is needed because the service may run as a different user
-        clusterconfig_dir = self.talos_dir / "clusterconfig"
-        if clusterconfig_dir.exists():
-            await self.log(step_id, "info", "Fixing permissions on generated configs...")
-            await self.process_manager.run_command_simple(
-                ["chmod", "-R", "a+r", str(clusterconfig_dir)],
-                timeout=10
-            )
-
-        return True
+        return result.success
 
     async def _step_apply_talos_configs(self, step_id: int) -> bool:
         """Step 4: Apply Talos configurations."""
@@ -376,7 +328,7 @@ class DeploymentService:
             ["bash", "apply-configs.sh", "--bootstrap"],
             cwd=self.talos_dir,
             env=env,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -422,7 +374,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["talosctl", "kubeconfig", f"--nodes={self.master_node}", str(kubeconfig_path)],
             env=env,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -434,91 +386,10 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", "install.sh"],
             cwd=self.argocd_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        if not result.success:
-            return False
-
-        # Configure ArgoCD admin password with retries
-        await self.log(step_id, "info", "Configuring ArgoCD admin password...")
-        retries = self.argocd_password_retries
-
-        for i in range(1, retries + 1):
-            await self.log(step_id, "info", f"  Attempt {i}/{retries}: Setting admin password...")
-
-            # Ensure argocd-server pod is fully ready
-            result = await self.process_manager.run_command_simple(
-                ["kubectl", "wait", "--for=condition=ready", "pod",
-                 "-l", "app.kubernetes.io/name=argocd-server",
-                 "-n", "argocd", "--timeout=60s"],
-                timeout=70
-            )
-            if not result.success:
-                await self.log(step_id, "warn", "  Warning: argocd-server pod not ready, retrying...")
-                await asyncio.sleep(10)
-                continue
-
-            # Give the server a moment to fully initialize
-            await asyncio.sleep(5)
-
-            # Generate bcrypt hash using argocd CLI in the pod
-            result = await self.process_manager.run_command_simple(
-                ["kubectl", "-n", "argocd", "exec", "deployment/argocd-server",
-                 "--", "argocd", "account", "bcrypt", "--password", "admin"],
-                timeout=30
-            )
-
-            if result.success and result.output.strip() and "$2" in result.output:
-                admin_hash = result.output.strip()
-                # Patch the secret with the new password
-                patch_data = json.dumps({
-                    "stringData": {
-                        "admin.password": admin_hash,
-                        "admin.passwordMtime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                    }
-                })
-
-                result = await self.process_manager.run_command_simple(
-                    ["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret", "-p", patch_data],
-                    timeout=30
-                )
-
-                if result.success:
-                    await asyncio.sleep(3)
-                    # Verify the password was set
-                    result = await self.process_manager.run_command_simple(
-                        ["kubectl", "-n", "argocd", "get", "secret", "argocd-secret",
-                         "-o", "jsonpath={.data.admin\\.password}"],
-                        timeout=10
-                    )
-                    if result.success and result.output.strip():
-                        await self.log(step_id, "info", "  ✓ ArgoCD admin password hash updated")
-
-                        # Restart ArgoCD server to pick up the new password
-                        await self.log(step_id, "info", "  Restarting ArgoCD server to apply new password...")
-                        restart_result = await self.process_manager.run_command_simple(
-                            ["kubectl", "-n", "argocd", "rollout", "restart", "deployment/argocd-server"],
-                            timeout=30
-                        )
-                        if restart_result.success:
-                            # Wait for the rollout to complete
-                            await self.log(step_id, "info", "  Waiting for ArgoCD server rollout...")
-                            await self.process_manager.run_command_simple(
-                                ["kubectl", "-n", "argocd", "rollout", "status", "deployment/argocd-server", "--timeout=120s"],
-                                timeout=130
-                            )
-                            await self.log(step_id, "info", "  ✓ ArgoCD admin password set to: admin")
-                        else:
-                            await self.log(step_id, "warn", "  Warning: Could not restart ArgoCD server, password may not take effect immediately")
-                        return True
-
-            await self.log(step_id, "warn", f"  Password setting attempt {i} failed, waiting before retry...")
-            await asyncio.sleep(15)
-
-        await self.log(step_id, "warn", f"Warning: Could not automatically set ArgoCD admin password after {retries} attempts")
-        await self.log(step_id, "info", "The password from values.yaml should still work")
-        return True  # Don't fail the deployment, password may still work from values.yaml
+        return result.success
 
     async def _step_deploy_infrastructure(self, step_id: int) -> bool:
         """Step 8: Deploy infrastructure stack."""
@@ -527,145 +398,10 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", "deploy-ingress-stack.sh"],
             cwd=self.projects_dir,
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
-
-    async def _step_wait_for_longhorn(self, step_id: int) -> bool:
-        """Step 9: Wait for Longhorn storage to be fully operational."""
-        await self.log(step_id, "info", "Waiting for Longhorn to be fully operational...")
-        start_time = asyncio.get_event_loop().time()
-        timeout = self.longhorn_timeout
-
-        # Wait for longhorn-system namespace
-        await self.log(step_id, "info", "  Waiting for longhorn-system namespace...")
-        while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed >= timeout:
-                await self.log(step_id, "error", "Timeout waiting for longhorn-system namespace")
-                return False
-
-            result = await self.process_manager.run_command_simple(
-                ["kubectl", "get", "namespace", "longhorn-system"],
-                timeout=10
-            )
-            if result.success:
-                await self.log(step_id, "info", "  ✓ Namespace longhorn-system exists")
-                break
-            await asyncio.sleep(5)
-
-        # Wait for all Longhorn deployments
-        deployments = [
-            "longhorn-driver-deployer",
-            "longhorn-ui",
-            "csi-attacher",
-            "csi-provisioner",
-            "csi-resizer",
-            "csi-snapshotter"
-        ]
-
-        for deploy in deployments:
-            await self.log(step_id, "info", f"  Waiting for deployment/{deploy}...")
-            while True:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= timeout:
-                    await self.log(step_id, "error", f"Timeout waiting for deployment/{deploy}")
-                    return False
-
-                # Check if deployment exists
-                result = await self.process_manager.run_command_simple(
-                    ["kubectl", "get", "deployment", deploy, "-n", "longhorn-system"],
-                    timeout=10
-                )
-                if not result.success:
-                    await asyncio.sleep(5)
-                    continue
-
-                # Wait for deployment to be available
-                remaining = int(timeout - elapsed)
-                result = await self.process_manager.run_command_simple(
-                    ["kubectl", "wait", "--for=condition=available",
-                     f"deployment/{deploy}", "-n", "longhorn-system",
-                     f"--timeout={remaining}s"],
-                    timeout=remaining + 10
-                )
-                if result.success:
-                    await self.log(step_id, "info", f"  ✓ deployment/{deploy} is available")
-                    break
-                await asyncio.sleep(5)
-
-        # Wait for Longhorn DaemonSets
-        daemonsets = ["longhorn-manager", "longhorn-csi-plugin"]
-
-        for ds in daemonsets:
-            await self.log(step_id, "info", f"  Waiting for daemonset/{ds}...")
-            while True:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= timeout:
-                    await self.log(step_id, "error", f"Timeout waiting for daemonset/{ds}")
-                    return False
-
-                # Get daemonset status
-                result = await self.process_manager.run_command_simple(
-                    ["kubectl", "get", "daemonset", ds, "-n", "longhorn-system",
-                     "-o", "jsonpath={.status.desiredNumberScheduled},{.status.numberReady}"],
-                    timeout=10
-                )
-                if result.success and result.output.strip():
-                    parts = result.output.strip().split(",")
-                    if len(parts) == 2:
-                        desired = int(parts[0]) if parts[0] else 0
-                        ready = int(parts[1]) if parts[1] else 0
-                        if desired > 0 and desired == ready:
-                            await self.log(step_id, "info", f"  ✓ daemonset/{ds} is ready ({ready}/{desired} pods)")
-                            break
-                        await self.log(step_id, "info", f"    daemonset/{ds}: {ready}/{desired} pods ready, waiting...")
-                await asyncio.sleep(10)
-
-        # Wait for Longhorn StorageClass
-        await self.log(step_id, "info", "  Waiting for Longhorn StorageClass...")
-        while True:
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed >= timeout:
-                await self.log(step_id, "error", "Timeout waiting for Longhorn StorageClass")
-                return False
-
-            result = await self.process_manager.run_command_simple(
-                ["kubectl", "get", "storageclass", "longhorn"],
-                timeout=10
-            )
-            if result.success:
-                await self.log(step_id, "info", "  ✓ StorageClass 'longhorn' is available")
-                break
-            await asyncio.sleep(5)
-
-        # Verify all pods are running
-        await self.log(step_id, "info", "  Verifying all Longhorn pods are running...")
-        pod_wait_start = asyncio.get_event_loop().time()
-        max_pod_wait = 120
-
-        while True:
-            pod_elapsed = asyncio.get_event_loop().time() - pod_wait_start
-            if pod_elapsed >= max_pod_wait:
-                await self.log(step_id, "warn", "Warning: Some Longhorn pods may not be fully ready, but continuing...")
-                break
-
-            result = await self.process_manager.run_command_simple(
-                ["kubectl", "get", "pods", "-n", "longhorn-system", "--no-headers"],
-                timeout=10
-            )
-            if result.success:
-                lines = result.output.strip().split("\n")
-                not_running = sum(1 for line in lines if line and "Running" not in line and "Completed" not in line)
-                if not_running == 0:
-                    await self.log(step_id, "info", "  ✓ All Longhorn pods are running")
-                    break
-                await self.log(step_id, "info", f"    {not_running} pod(s) not yet running, waiting...")
-            await asyncio.sleep(10)
-
-        await self.log(step_id, "info", "✓ Longhorn is fully operational")
-        return True
 
     async def _step_argocd_self_management(self, step_id: int) -> bool:
         """Step 9: Enable ArgoCD self-management."""
@@ -674,7 +410,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "argocd" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         if result.success:
@@ -690,7 +426,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "openvas" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -702,7 +438,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -714,7 +450,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         return result.success
@@ -726,7 +462,7 @@ class DeploymentService:
         app_yaml = self.projects_dir / "threat-dragon" / "application.yaml"
         result = await self.process_manager.run_command(
             ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=self._create_log_callback(step_id)
+            on_output=lambda line: self.log(step_id, "info", line)
         )
 
         # Wait for applications to sync

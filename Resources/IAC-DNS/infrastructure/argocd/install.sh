@@ -58,7 +58,7 @@ helm upgrade --install "${RELEASE_NAME}" argo/argo-cd \
     --version "${CHART_VERSION}" \
     --values "${SCRIPT_DIR}/values.yaml" \
     --wait \
-    --timeout 10m
+    --timeout 20m
 
 # Wait for ArgoCD to be ready
 echo "Waiting for ArgoCD pods to be ready..."
@@ -69,8 +69,15 @@ kubectl wait --for=condition=ready pod \
 
 # Set admin password to 'admin' using ArgoCD's bcrypt tool
 # This ensures the password works regardless of Helm chart version
+# Wait a moment for argocd-server to fully initialize after pod ready
 echo "Setting admin password..."
-ADMIN_HASH=$(kubectl -n "${NAMESPACE}" exec deployment/argocd-server -- argocd account bcrypt --password admin 2>/dev/null)
+sleep 10
+ADMIN_HASH=""
+for attempt in 1 2 3 4 5; do
+    ADMIN_HASH=$(kubectl -n "${NAMESPACE}" exec deployment/argocd-server -- argocd account bcrypt --password admin 2>/dev/null) && break
+    echo "  Waiting for argocd-server to initialize... (attempt $attempt/5)"
+    sleep 5
+done
 if [[ -n "${ADMIN_HASH}" ]]; then
     kubectl -n "${NAMESPACE}" patch secret argocd-secret \
         -p "{\"stringData\": {\"admin.password\": \"${ADMIN_HASH}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
