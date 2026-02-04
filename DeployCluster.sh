@@ -6,8 +6,6 @@ set -eo pipefail  # Exit immediately if any command exits with a non-zero status
 MASTER_NODE="talos-CleanRoom-master-01.knowledgeondemand.net"
 HEALTH_CHECK_RETRIES=30
 HEALTH_CHECK_INTERVAL=10
-LONGHORN_TIMEOUT=600  # 10 minutes timeout for Longhorn readiness
-ARGOCD_PASSWORD_RETRIES=5
 
 # Function to perform cleanup on failure (defined early so it's available for all error handlers)
 cleanup() {
@@ -20,180 +18,6 @@ cleanup() {
     else
         echo "Warning: Could not determine repository root for cleanup."
     fi
-}
-
-# Function to wait for Longhorn to be fully ready
-wait_for_longhorn_ready() {
-    echo "Waiting for Longhorn to be fully operational..."
-    local start_time=$(date +%s)
-    local timeout=$LONGHORN_TIMEOUT
-
-    # Wait for longhorn-system namespace
-    echo "  Waiting for longhorn-system namespace..."
-    while ! kubectl get namespace longhorn-system &>/dev/null; do
-        local elapsed=$(($(date +%s) - start_time))
-        if [[ $elapsed -ge $timeout ]]; then
-            echo "Error: Timeout waiting for longhorn-system namespace"
-            return 1
-        fi
-        sleep 5
-    done
-    echo "  ✓ Namespace longhorn-system exists"
-
-    # Wait for all Longhorn deployments
-    local deployments=(
-        "longhorn-driver-deployer"
-        "longhorn-ui"
-        "csi-attacher"
-        "csi-provisioner"
-        "csi-resizer"
-        "csi-snapshotter"
-    )
-
-    for deploy in "${deployments[@]}"; do
-        echo "  Waiting for deployment/$deploy..."
-        local deploy_start=$(date +%s)
-        while ! kubectl get deployment "$deploy" -n longhorn-system &>/dev/null; do
-            local elapsed=$(($(date +%s) - start_time))
-            if [[ $elapsed -ge $timeout ]]; then
-                echo "Error: Timeout waiting for deployment/$deploy to be created"
-                return 1
-            fi
-            sleep 5
-        done
-        kubectl wait --for=condition=available deployment/"$deploy" \
-            -n longhorn-system \
-            --timeout=$((timeout - ($(date +%s) - start_time)))s || {
-            echo "Error: Timeout waiting for deployment/$deploy to be available"
-            return 1
-        }
-        echo "  ✓ deployment/$deploy is available"
-    done
-
-    # Wait for Longhorn DaemonSets to be ready
-    local daemonsets=(
-        "longhorn-manager"
-        "longhorn-csi-plugin"
-    )
-
-    for ds in "${daemonsets[@]}"; do
-        echo "  Waiting for daemonset/$ds..."
-        local ds_start=$(date +%s)
-        while ! kubectl get daemonset "$ds" -n longhorn-system &>/dev/null; do
-            local elapsed=$(($(date +%s) - start_time))
-            if [[ $elapsed -ge $timeout ]]; then
-                echo "Error: Timeout waiting for daemonset/$ds to be created"
-                return 1
-            fi
-            sleep 5
-        done
-
-        # Wait for DaemonSet to have all pods ready
-        while true; do
-            local elapsed=$(($(date +%s) - start_time))
-            if [[ $elapsed -ge $timeout ]]; then
-                echo "Error: Timeout waiting for daemonset/$ds to be ready"
-                return 1
-            fi
-
-            local desired=$(kubectl get daemonset "$ds" -n longhorn-system -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
-            local ready=$(kubectl get daemonset "$ds" -n longhorn-system -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
-
-            if [[ "$desired" -gt 0 && "$desired" == "$ready" ]]; then
-                echo "  ✓ daemonset/$ds is ready ($ready/$desired pods)"
-                break
-            fi
-            echo "    daemonset/$ds: $ready/$desired pods ready, waiting..."
-            sleep 10
-        done
-    done
-
-    # Wait for Longhorn StorageClass
-    echo "  Waiting for Longhorn StorageClass..."
-    while ! kubectl get storageclass longhorn &>/dev/null; do
-        local elapsed=$(($(date +%s) - start_time))
-        if [[ $elapsed -ge $timeout ]]; then
-            echo "Error: Timeout waiting for Longhorn StorageClass"
-            return 1
-        fi
-        sleep 5
-    done
-    echo "  ✓ StorageClass 'longhorn' is available"
-
-    # Verify all pods in longhorn-system are Running
-    echo "  Verifying all Longhorn pods are running..."
-    local max_pod_wait=120
-    local pod_wait_start=$(date +%s)
-    while true; do
-        local elapsed=$(($(date +%s) - pod_wait_start))
-        if [[ $elapsed -ge $max_pod_wait ]]; then
-            echo "Warning: Some Longhorn pods may not be fully ready, but continuing..."
-            break
-        fi
-
-        local not_running=$(kubectl get pods -n longhorn-system --no-headers 2>/dev/null | grep -v "Running\|Completed" | wc -l)
-        if [[ "$not_running" -eq 0 ]]; then
-            echo "  ✓ All Longhorn pods are running"
-            break
-        fi
-        echo "    $not_running pod(s) not yet running, waiting..."
-        sleep 10
-    done
-
-    echo "✓ Longhorn is fully operational"
-    return 0
-}
-
-# Function to configure ArgoCD admin password with retries
-configure_argocd_password() {
-    echo "Configuring ArgoCD admin password..."
-    local retries=$ARGOCD_PASSWORD_RETRIES
-
-    for ((i=1; i<=retries; i++)); do
-        echo "  Attempt $i/$retries: Setting admin password..."
-
-        # Ensure argocd-server pod is fully ready
-        if ! kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=argocd-server \
-            -n argocd \
-            --timeout=60s &>/dev/null; then
-            echo "  Warning: argocd-server pod not ready, retrying..."
-            sleep 10
-            continue
-        fi
-
-        # Give the server a moment to fully initialize
-        sleep 5
-
-        # Try to generate bcrypt hash using argocd CLI in the pod
-        local admin_hash
-        admin_hash=$(kubectl -n argocd exec deployment/argocd-server -- argocd account bcrypt --password admin 2>/dev/null) || true
-
-        if [[ -n "${admin_hash}" && "${admin_hash}" == *'$2'* ]]; then
-            # Patch the secret with the new password
-            if kubectl -n argocd patch secret argocd-secret \
-                -p "{\"stringData\": {\"admin.password\": \"${admin_hash}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"; then
-
-                # Verify the password was set by checking the secret
-                sleep 3
-                local stored_hash
-                stored_hash=$(kubectl -n argocd get secret argocd-secret -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d 2>/dev/null) || true
-
-                if [[ -n "${stored_hash}" && "${stored_hash}" == *'$2'* ]]; then
-                    echo "  ✓ ArgoCD admin password set to: admin"
-                    return 0
-                fi
-            fi
-        fi
-
-        echo "  Password setting attempt $i failed, waiting before retry..."
-        sleep 15
-    done
-
-    echo "Warning: Could not automatically set ArgoCD admin password after $retries attempts"
-    echo "The password from values.yaml should still work, or set it manually with:"
-    echo "  kubectl -n argocd patch secret argocd-secret -p '{\"stringData\": {\"admin.password\": \"\$(argocd account bcrypt --password YOUR_PASSWORD)\"}}'"
-    return 1
 }
 
 # Function to check if a command exists
@@ -229,7 +53,7 @@ terraform apply ".tfplan" || { echo "Error: Terraform apply failed."; cleanup; e
 # Step 2: Talos Configuration Generation
 echo "Generating Talos configuration..."
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS" || { echo "Error: Could not change directory to Talos configuration directory."; cleanup; exit 1; }
-./tfvars-to-talos-env.sh || { echo "Error: Failed to run tfvars-to-talos-env.sh."; cleanup; exit 1; }
+./tfvars-to-talos-env.sh --force || { echo "Error: Failed to run tfvars-to-talos-env.sh."; cleanup; exit 1; }
 
 cd talos || { echo "Error: Could not change directory to Talos config directory."; cleanup; exit 1; }
 export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
@@ -268,26 +92,21 @@ talosctl kubeconfig --nodes="$MASTER_NODE" ~/.kube/config || { echo "Error: Fail
 
 # Step 6: Install ArgoCD
 echo "Installing ArgoCD..."
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd" || { echo "Error: Could not change directory to ArgoCD installation directory."; cleanup; exit 1; }
-chmod +x install.sh && ./install.sh || { echo "Error: Failed to install ArgoCD."; cleanup; exit 1; }
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd" || { echo "Error: Could not change directory to ArgoCD installation directory."; exit 1; }
+chmod +x install.sh && ./install.sh || { echo "Error: Failed to install ArgoCD."; exit 1; }
 
-# Configure ArgoCD admin password with retries
-configure_argocd_password || echo "Warning: ArgoCD password configuration had issues, but continuing..."
+# ArgoCD password is preconfigured in values.yaml (admin/admin)
 echo "ArgoCD installed with default credentials: admin / admin"
 
 # Step 7: Deploy Infrastructure Stack
 echo "Deploying infrastructure stack..."
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects" || { echo "Error: Could not change directory to infrastructure projects directory."; cleanup; exit 1; }
-chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh || { echo "Error: Failed to deploy infrastructure stack."; cleanup; exit 1; }
-
-# Step 7.1: Wait for Longhorn to be fully ready
-echo "Ensuring Longhorn storage is fully operational before deploying applications..."
-wait_for_longhorn_ready || { echo "Error: Longhorn failed to become fully operational. Applications requiring PVCs will fail."; cleanup; exit 1; }
+cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects" || { echo "Error: Could not change directory to infrastructure projects directory."; exit 1; }
+chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh || { echo "Error: Failed to deploy infrastructure stack."; exit 1; }
 
 # Step 8: Enable ArgoCD Self-Management
 echo "Enabling ArgoCD self-management..."
 cd "$(git rev-parse --show-toplevel)" || { echo "Error: Could not change directory to repository root."; cleanup; exit 1; }
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml || { echo "Error: Failed to enable ArgoCD self-management."; cleanup; exit 1; }
+kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml || { echo "Error: Failed to enable ArgoCD self-management."; exit 1; }
 
 # Verify ArgoCD self-management
 echo "Verifying ArgoCD self-management..."

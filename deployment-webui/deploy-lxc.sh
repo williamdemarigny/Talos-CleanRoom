@@ -2,46 +2,9 @@
 # Talos CleanRoom Deployment Web UI - LXC Deployment Script
 # Deploys the web UI as an LXC container on Proxmox
 #
-# Usage: ./deploy-lxc.sh [--yes]
-#
-# Options:
-#   -y, --yes    Auto-confirm all prompts (non-interactive mode)
-#
-# Environment variables (set these to skip credential prompts):
-#   PROXMOX_API_TOKEN    - Proxmox API token (format: user@pam!tokenid=secret)
-#   PROXMOX_SSH_PASSWORD - Proxmox SSH password (skipped if SSH key auth works)
-#   LXC_ROOT_PASSWORD    - LXC container root password
-#   SSH_USER_PASSWORD    - SSH user password
-#   GITHUB_SSH_KEY       - Path to GitHub SSH private key
-#
-# Example (fully automated):
-#   export PROXMOX_API_TOKEN="root@pam!deploy=your-secret"
-#   export LXC_ROOT_PASSWORD="secure-password"
-#   export SSH_USER_PASSWORD="secure-password"
-#   export GITHUB_SSH_KEY="$HOME/.ssh/id_ed25519"
-#   ./deploy-lxc.sh --yes
+# Usage: ./deploy-lxc.sh
 
 set -eo pipefail
-
-# Parse command line arguments
-AUTO_CONFIRM=false
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -y|--yes)
-            AUTO_CONFIRM=true
-            shift
-            ;;
-        -h|--help)
-            head -25 "$0" | tail -20
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
-    esac
-done
 
 # Configuration - Edit these values
 PROXMOX_HOST="pve01.knowledgeondemand.net"
@@ -66,10 +29,6 @@ DNS_SERVERS='["8.8.8.8", "8.8.4.4"]'
 # Web UI Settings
 WEBUI_USER="admin"
 WEBUI_PASSWORD="admin"           # Change this!
-
-# Deployment Settings (used by DeployCluster.sh)
-LONGHORN_TIMEOUT=600             # Seconds to wait for Longhorn to be fully ready (10 min default)
-ARGOCD_PASSWORD_RETRIES=5        # Retry attempts for ArgoCD password configuration
 
 # SSH User Settings (non-root user for SSH access)
 SSH_USER="deploy"                # Non-root user for SSH access
@@ -108,17 +67,10 @@ if [ -z "$PROXMOX_API_TOKEN" ]; then
     read -r PROXMOX_API_TOKEN
 fi
 
-# Check if SSH key authentication works for Proxmox (skip password prompt if so)
 if [ -z "$PROXMOX_SSH_PASSWORD" ]; then
-    echo "  Checking SSH key authentication to Proxmox..."
-    if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new root@${PROXMOX_HOST} true 2>/dev/null; then
-        echo -e "${GREEN}  ✓ SSH key authentication available - skipping password prompt${NC}"
-        PROXMOX_SSH_PASSWORD=""
-    else
-        echo -e "${YELLOW}Enter Proxmox SSH password for root:${NC}"
-        read -rs PROXMOX_SSH_PASSWORD
-        echo ""
-    fi
+    echo -e "${YELLOW}Enter Proxmox SSH password for root:${NC}"
+    read -rs PROXMOX_SSH_PASSWORD
+    echo ""
 fi
 
 if [ -z "$LXC_ROOT_PASSWORD" ]; then
@@ -263,16 +215,12 @@ echo "  Hostname:     ${LXC_HOSTNAME}"
 echo "  IP Address:   ${LXC_IP}"
 echo "  Resources:    ${LXC_CORES} cores, ${LXC_MEMORY}MB RAM, ${LXC_DISK}GB disk"
 echo ""
+read -p "Proceed with deployment? (y/n) " -n 1 -r
+echo ""
 
-if [[ "$AUTO_CONFIRM" == true ]]; then
-    echo -e "${GREEN}Auto-confirming deployment (--yes flag)${NC}"
-else
-    read -p "Proceed with deployment? (y/n) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Deployment cancelled."
-        exit 0
-    fi
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Deployment cancelled."
+    exit 0
 fi
 
 # Apply deployment
@@ -311,7 +259,7 @@ echo "   git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
 echo ""
 echo "5. Run the setup script:"
 echo "   cd /opt/Talos-CleanRoom/deployment-webui/scripts"
-echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD} --longhorn-timeout ${LONGHORN_TIMEOUT} --argocd-retries ${ARGOCD_PASSWORD_RETRIES}"
+echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
 echo ""
 echo "6. Copy SOPS keys (from your workstation):"
 echo "   ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
@@ -325,14 +273,8 @@ echo -e "${GREEN}============================================${NC}"
 
 # Optional: Run setup automatically
 echo ""
-
-if [[ "$AUTO_CONFIRM" == true ]]; then
-    echo -e "${GREEN}Auto-confirming automatic setup (--yes flag)${NC}"
-    REPLY="y"
-else
-    read -p "Run setup script automatically via SSH? (y/n) " -n 1 -r
-    echo ""
-fi
+read -p "Run setup script automatically via SSH? (y/n) " -n 1 -r
+echo ""
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     # Remove any old host keys for this IP (container may have been recreated)
@@ -415,23 +357,16 @@ chown -R ${SSH_USER}:${SSH_USER} \${SSH_USER_HOME}/.ssh
 echo \"=== Testing GitHub connectivity ===\"
 su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
-echo \"=== Cloning/Updating repository ===\"
-if [ -d /opt/Talos-CleanRoom/.git ]; then
-    echo \"Repository already exists, pulling latest changes...\"
-    chown -R ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-    su - ${SSH_USER} -c \"cd /opt/Talos-CleanRoom && git pull\"
-else
-    # Remove directory if it exists but is not a git repo
-    rm -rf /opt/Talos-CleanRoom 2>/dev/null || true
-    mkdir -p /opt/Talos-CleanRoom
-    chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-    su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
-fi
+echo \"=== Cloning repository ===\"
+# Create /opt/Talos-CleanRoom with correct ownership before cloning
+mkdir -p /opt/Talos-CleanRoom
+chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
+su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
 
 echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
 chmod +x setup-lxc.sh
-./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\" --longhorn-timeout ${LONGHORN_TIMEOUT} --argocd-retries ${ARGOCD_PASSWORD_RETRIES}
+./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
 
 echo \"=== Starting web UI service ===\"
 systemctl start deployment-webui || echo \"Service may need manual start\"
@@ -448,56 +383,14 @@ echo \"Root SSH: disabled\"
     echo -e "${GREEN}Setup Complete!${NC}"
     echo -e "${GREEN}============================================${NC}"
     echo ""
-
-    # Automatically copy secrets using pct push via Proxmox (no container password needed)
-    echo -e "${GREEN}Copying secrets to container via Proxmox...${NC}"
-
-    # Copy SOPS age keys
-    SOPS_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
-    if [ -f "$SOPS_KEY_FILE" ]; then
-        echo "  Copying SOPS age keys..."
-        # Create directories in container
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- mkdir -p /home/${SSH_USER}/.config/sops/age /root/.config/sops/age"
-        # Copy to Proxmox host first, then push to container
-        scp ${SSH_OPTS} "$SOPS_KEY_FILE" root@${PROXMOX_HOST}:/tmp/sops_keys.txt
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/sops_keys.txt /home/${SSH_USER}/.config/sops/age/keys.txt"
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/sops_keys.txt /root/.config/sops/age/keys.txt"
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.config"
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "rm /tmp/sops_keys.txt"
-        echo -e "${GREEN}  ✓ SOPS keys copied${NC}"
-    else
-        echo -e "${YELLOW}  Warning: SOPS key file not found at $SOPS_KEY_FILE${NC}"
-        echo "  You will need to copy it manually:"
-        echo "    scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
-    fi
-
-    # Copy Terraform credentials
-    # SCRIPT_DIR is deployment-webui/, so go up one level to get repo root
-    REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-    TF_CREDS_FILE="${REPO_ROOT}/Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars"
-    if [ -f "$TF_CREDS_FILE" ]; then
-        echo "  Copying Terraform credentials..."
-        # Copy to Proxmox host first, then push to container
-        scp ${SSH_OPTS} "$TF_CREDS_FILE" root@${PROXMOX_HOST}:/tmp/credentials.auto.tfvars
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /tmp/credentials.auto.tfvars /opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars"
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "rm /tmp/credentials.auto.tfvars"
-        echo -e "${GREEN}  ✓ Terraform credentials copied${NC}"
-    else
-        echo -e "${YELLOW}  Warning: Terraform credentials not found at $TF_CREDS_FILE${NC}"
-        echo "  You will need to copy them manually:"
-        echo "    scp Resources/IAC-DNS/terraform/talos-cluster-create/credentials.auto.tfvars \\"
-        echo "        ${SSH_USER}@${CONTAINER_IP}:/opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/"
-    fi
-
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}Deployment Ready!${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo ""
     echo "Web UI is now running at: http://${CONTAINER_IP}:8000"
     echo ""
     echo -e "${YELLOW}SSH Access (root login disabled):${NC}"
     echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
     echo "  Password: (the one you entered during setup)"
+    echo ""
+    echo "Don't forget to copy your SOPS keys:"
+    echo "  ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
+    echo "  scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
     echo ""
 fi

@@ -24,14 +24,13 @@ function deploymentMonitor() {
             { id: 4, name: 'apply_talos_configs', description: 'Apply Talos Configurations' },
             { id: 5, name: 'verify_cluster_health', description: 'Verify Cluster Health' },
             { id: 6, name: 'get_kubeconfig', description: 'Get Kubeconfig' },
-            { id: 7, name: 'install_argocd', description: 'Install ArgoCD & Configure Password' },
+            { id: 7, name: 'install_argocd', description: 'Install ArgoCD' },
             { id: 8, name: 'deploy_infrastructure', description: 'Deploy Infrastructure Stack' },
-            { id: 9, name: 'wait_for_longhorn', description: 'Wait for Longhorn Storage' },
-            { id: 10, name: 'argocd_self_management', description: 'Enable ArgoCD Self-Management' },
-            { id: 11, name: 'deploy_openvas', description: 'Deploy OpenVAS' },
-            { id: 12, name: 'deploy_faraday', description: 'Deploy Faraday' },
-            { id: 13, name: 'deploy_metasploit', description: 'Deploy Metasploit' },
-            { id: 14, name: 'deploy_threat_dragon', description: 'Deploy Threat Dragon' },
+            { id: 9, name: 'argocd_self_management', description: 'Enable ArgoCD Self-Management' },
+            { id: 10, name: 'deploy_openvas', description: 'Deploy OpenVAS' },
+            { id: 11, name: 'deploy_faraday', description: 'Deploy Faraday' },
+            { id: 12, name: 'deploy_metasploit', description: 'Deploy Metasploit' },
+            { id: 13, name: 'deploy_threat_dragon', description: 'Deploy Threat Dragon' },
         ],
 
         get statusText() {
@@ -95,11 +94,6 @@ function deploymentMonitor() {
 
                     if (this.isRunning) {
                         this.startElapsedTimer();
-                        // Auto-expand any running step
-                        const runningStep = this.steps.find(s => s.status === 'running');
-                        if (runningStep) {
-                            this.expandedSteps = [runningStep.id];
-                        }
                     }
                 },
                 onLog: (data) => {
@@ -127,13 +121,12 @@ function deploymentMonitor() {
                         this.currentStep = data.step_id;
                         this.isRunning = true;
                         this.status = 'running';
-                        // Collapse all other steps, expand only the current one
-                        this.expandedSteps = [data.step_id];
+                        this.expandedSteps.push(data.step_id);
                     } else if (data.status === 'failed') {
                         this.status = 'failed';
                         this.isRunning = false;
                         this.stopElapsedTimer();
-                    } else if (data.status === 'success' && data.step_id === 14) {
+                    } else if (data.status === 'success' && data.step_id === 13) {
                         // Last step completed
                         this.status = 'completed';
                         this.isRunning = false;
@@ -164,11 +157,6 @@ function deploymentMonitor() {
 
                 if (this.isRunning) {
                     this.startElapsedTimer();
-                    // Auto-expand any running step
-                    const runningStep = this.steps.find(s => s.status === 'running');
-                    if (runningStep) {
-                        this.expandedSteps = [runningStep.id];
-                    }
                 }
             } catch (e) {
                 console.error('Failed to load status:', e);

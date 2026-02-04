@@ -13,10 +13,6 @@ WEBUI_PASSWORD="admin"
 WEBUI_PORT="8000"
 APP_DIR="/opt/deployment-webui"
 
-# Deployment configuration defaults
-LONGHORN_TIMEOUT=600
-ARGOCD_PASSWORD_RETRIES=5
-
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -30,14 +26,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --webui-port)
             WEBUI_PORT="$2"
-            shift 2
-            ;;
-        --longhorn-timeout)
-            LONGHORN_TIMEOUT="$2"
-            shift 2
-            ;;
-        --argocd-retries)
-            ARGOCD_PASSWORD_RETRIES="$2"
             shift 2
             ;;
         *)
@@ -81,11 +69,7 @@ apt-get install -y kubectl
 
 # Install Helm
 echo "[4/10] Installing Helm..."
-# Ensure /usr/local/bin is in PATH for helm installer verification
-export PATH="/usr/local/bin:$PATH"
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-# Verify helm installation
-/usr/local/bin/helm version --short || { echo "Helm installation failed"; exit 1; }
 
 # Install Terraform
 echo "[5/10] Installing Terraform..."
@@ -114,14 +98,6 @@ SOPS_VERSION="3.8.1"
 curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" -o /usr/local/bin/sops
 chmod +x /usr/local/bin/sops
 sops --version
-
-# Create symlinks in /usr/bin for tools installed to /usr/local/bin
-echo "Creating symlinks for CLI tools..."
-for tool in helm terraform talosctl talhelper sops; do
-    if [ -f "/usr/local/bin/$tool" ] && [ ! -f "/usr/bin/$tool" ]; then
-        ln -sf "/usr/local/bin/$tool" "/usr/bin/$tool"
-    fi
-done
 
 # Clone or setup repository
 echo "[9/10] Setting up repository..."
@@ -152,8 +128,6 @@ source venv/bin/activate
 if [ -f "requirements.txt" ]; then
     pip install --upgrade pip
     pip install -r requirements.txt
-    # Fix bcrypt version compatibility with passlib
-    pip install bcrypt==4.0.1
 else
     echo "Warning: requirements.txt not found. Installing dependencies manually..."
     pip install --upgrade pip
@@ -162,7 +136,6 @@ else
         uvicorn[standard]==0.27.0 \
         python-jose[cryptography]==3.3.0 \
         passlib[bcrypt]==1.7.4 \
-        bcrypt==4.0.1 \
         python-multipart==0.0.6 \
         pydantic==2.5.3 \
         pydantic-settings==2.1.0 \
@@ -173,10 +146,12 @@ else
         python-hcl2==4.3.2
 fi
 
-# Generate password hash (use venv python which has passlib installed)
+deactivate
+
+# Generate password hash
 echo ""
 echo "Generating password hash for web UI..."
-PASSWORD_HASH=$("$APP_DIR/venv/bin/python3" -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
+PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
 
 # Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
@@ -200,14 +175,6 @@ REPO_ROOT=$REPO_PATH
 MASTER_NODE=talos-CleanRoom-master-01.knowledgeondemand.net
 HEALTH_CHECK_RETRIES=30
 HEALTH_CHECK_INTERVAL=10
-
-# Longhorn Storage Settings
-# Timeout in seconds for Longhorn to become fully operational (default: 600 = 10 minutes)
-LONGHORN_TIMEOUT=$LONGHORN_TIMEOUT
-
-# ArgoCD Settings
-# Number of retry attempts for setting ArgoCD admin password (default: 5)
-ARGOCD_PASSWORD_RETRIES=$ARGOCD_PASSWORD_RETRIES
 EOF
 
 chmod 600 "$APP_DIR/.env"
@@ -242,10 +209,6 @@ mkdir -p /root/.kube
 
 # Create SOPS keys directory
 mkdir -p /root/.config/sops/age
-
-# Configure git safe directories (needed when service runs as root but repo owned by different user)
-git config --global --add safe.directory "$REPO_PATH"
-git config --global --add safe.directory "$REPO_PATH/Resources/IAC-DNS"
 
 echo ""
 echo "============================================"
