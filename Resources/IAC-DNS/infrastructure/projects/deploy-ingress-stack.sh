@@ -132,19 +132,91 @@ echo "[8/10] Deploying Longhorn..."
 kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
 
 echo "Waiting for Longhorn to be ready..."
-sleep 15  # Give ArgoCD time to create namespace and resources
+sleep 15  # Give ArgoCD time to create namespace and initial resources
 
-kubectl wait --for=condition=available deployment/longhorn-driver-deployer \
+# Wait for the longhorn-system namespace to exist (ArgoCD creates it)
+for i in $(seq 1 12); do
+    kubectl get namespace longhorn-system &>/dev/null && break
+    echo "  Waiting for longhorn-system namespace... ($i/12)"
+    sleep 10
+done
+kubectl get namespace longhorn-system || { echo "Error: longhorn-system namespace never created"; exit 1; }
+
+# 1. Wait for longhorn-manager DaemonSet — one pod per node, core of Longhorn
+echo "  Waiting for longhorn-manager DaemonSet..."
+for i in $(seq 1 36); do
+    DESIRED=$(kubectl get daemonset longhorn-manager -n longhorn-system -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
+    READY=$(kubectl get daemonset longhorn-manager -n longhorn-system -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
+    if [[ "$DESIRED" -gt 0 && "$READY" -eq "$DESIRED" ]]; then
+        echo "  ✓ longhorn-manager: $READY/$DESIRED pods ready"
+        break
+    fi
+    echo "  longhorn-manager: $READY/$DESIRED ready... ($i/36)"
+    sleep 10
+done
+[[ "$READY" -eq "$DESIRED" && "$DESIRED" -gt 0 ]] || { echo "Error: longhorn-manager DaemonSet never became ready"; exit 1; }
+
+# 2. Wait for CSI controller deployments (attacher, provisioner, resizer, snapshotter)
+#    These are created by longhorn-driver-deployer several minutes after longhorn-manager is ready.
+#    kubectl wait fails immediately with NotFound if the resource doesn't exist yet, so we poll
+#    for existence first before checking availability.
+echo "  Waiting for Longhorn CSI controllers..."
+for component in csi-attacher csi-provisioner csi-resizer csi-snapshotter; do
+    # Poll until the deployment exists and is available (up to 6 min)
+    FOUND=false
+    for i in $(seq 1 36); do
+        REPLICAS=$(kubectl get deployment ${component} -n longhorn-system -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
+        if [[ "$REPLICAS" =~ ^[1-9] ]]; then
+            echo "  ✓ ${component} ready ($REPLICAS replicas available)"
+            FOUND=true
+            break
+        fi
+        echo "  Waiting for ${component}... ($i/36)"
+        sleep 10
+    done
+    [[ "$FOUND" == true ]] || { echo "Error: ${component} deployment never became available"; exit 1; }
+done
+
+# 3. Wait for longhorn-csi-plugin DaemonSet — per-node volume mount driver
+echo "  Waiting for longhorn-csi-plugin DaemonSet..."
+for i in $(seq 1 36); do
+    DESIRED=$(kubectl get daemonset longhorn-csi-plugin -n longhorn-system -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
+    READY=$(kubectl get daemonset longhorn-csi-plugin -n longhorn-system -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
+    if [[ "$DESIRED" -gt 0 && "$READY" -eq "$DESIRED" ]]; then
+        echo "  ✓ longhorn-csi-plugin: $READY/$DESIRED pods ready"
+        break
+    fi
+    echo "  longhorn-csi-plugin: $READY/$DESIRED ready... ($i/36)"
+    sleep 10
+done
+[[ "$READY" -eq "$DESIRED" && "$DESIRED" -gt 0 ]] || { echo "Error: longhorn-csi-plugin DaemonSet never became ready"; exit 1; }
+
+# 4. Wait for Longhorn UI
+echo "  Waiting for Longhorn UI..."
+kubectl wait --for=condition=available deployment/longhorn-ui \
     -n longhorn-system \
     --timeout=300s 2>/dev/null || {
-    echo "Waiting for Longhorn deployment to be created..."
-    sleep 45
-    kubectl wait --for=condition=available deployment/longhorn-driver-deployer \
+    echo "  Waiting for longhorn-ui deployment to be created..."
+    sleep 30
+    kubectl wait --for=condition=available deployment/longhorn-ui \
         -n longhorn-system \
         --timeout=300s
 }
+echo "  ✓ longhorn-ui ready"
 
-echo "✓ Longhorn deployed"
+# 5. Verify the Longhorn StorageClass exists — confirms CSI is registered
+echo "  Verifying Longhorn StorageClass..."
+for i in $(seq 1 12); do
+    if kubectl get storageclass longhorn &>/dev/null; then
+        echo "  ✓ StorageClass 'longhorn' registered"
+        break
+    fi
+    echo "  Waiting for StorageClass... ($i/12)"
+    sleep 10
+done
+kubectl get storageclass longhorn || { echo "Error: Longhorn StorageClass never appeared"; exit 1; }
+
+echo "✓ Longhorn fully deployed"
 echo ""
 
 # Get LoadBalancer IP

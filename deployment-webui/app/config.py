@@ -26,12 +26,6 @@ class Settings(BaseSettings):
     health_check_retries: int = 30
     health_check_interval: int = 10
 
-    # Longhorn Storage Settings
-    longhorn_timeout: int = 600  # 10 minutes timeout for Longhorn readiness
-
-    # ArgoCD Settings
-    argocd_password_retries: int = 5  # Retry attempts for setting admin password
-
     # Dependencies required for deployment
     dependencies: list[str] = [
         "terraform", "talhelper", "talosctl", "sops",

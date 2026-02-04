@@ -94,7 +94,7 @@
                     <button
                         @click="toggleStep(step.id)"
                         class="ml-4 text-gray-400 hover:text-white"
-                        x-show="getStepLogs(step.id).length > 0 || step.status === 'running'"
+                        x-show="getStepLogs(step.id).length > 0"
                     >
                         <svg class="w-5 h-5 transform transition-transform" :class="expandedSteps.includes(step.id) ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>

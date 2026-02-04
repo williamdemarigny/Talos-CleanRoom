@@ -5,9 +5,6 @@
 
 set -euo pipefail
 
-# Enable debug output to see exactly what's happening
-exec 2>&1  # Redirect stderr to stdout so all output is captured
-
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -130,12 +127,12 @@ if [[ -z "$PROXMOX_ENDPOINT" || -z "$PROXMOX_TOKEN" ]]; then
 
     # Extract endpoint
     if [[ -z "$PROXMOX_ENDPOINT" ]]; then
-        PROXMOX_ENDPOINT=$(grep -oP 'proxmox_api_url\s*=\s*"\K[^"]+' "$CREDENTIALS_FILE" || true)
+        PROXMOX_ENDPOINT=$(sed -n 's/.*proxmox_api_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CREDENTIALS_FILE" || true)
     fi
 
     # Extract token
     if [[ -z "$PROXMOX_TOKEN" ]]; then
-        PROXMOX_TOKEN=$(grep -oP 'proxmox_api_token\s*=\s*"\K[^"]+' "$CREDENTIALS_FILE" || true)
+        PROXMOX_TOKEN=$(sed -n 's/.*proxmox_api_token[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CREDENTIALS_FILE" || true)
     fi
 fi
 
@@ -167,93 +164,17 @@ get_vm_ip() {
     # Query VM network interfaces via agent
     local response=$(proxmox_api "/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces")
 
+    # Debug: Show raw response
+    # echo "DEBUG Response: $response" >&2
+
     # Check if agent is available
-    if echo "$response" | jq -e '.data.result' > /dev/null 2>&1; then
+    if echo "$response" | jq -e '.data' > /dev/null 2>&1; then
         # Extract IPv4 address (exclude loopback)
         local ip=$(echo "$response" | jq -r '.data.result[]? | select(.name != "lo") | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4") | .["ip-address"]' | head -1)
-        if [[ -n "$ip" ]]; then
-            echo "$ip"
-            return 0
-        fi
-    fi
-
-    print_info "    Guest agent not available (expected for Talos)" >&2
-    echo ""
-    return 1
-}
-
-# Function to resolve FQDN to IP or check if FQDN is reachable
-resolve_or_check_fqdn() {
-    local fqdn="$1"
-
-    if [[ -z "$fqdn" ]]; then
-        return 1
-    fi
-
-    print_info "    Resolving FQDN via DNS..." >&2
-
-    # Try to resolve the FQDN
-    local ip=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | head -1)
-
-    if [[ -n "$ip" && "$ip" != "" ]]; then
         echo "$ip"
-        return 0
+    else
+        echo ""
     fi
-
-    # If getent fails, try dig
-    if command -v dig &> /dev/null; then
-        ip=$(dig +short "$fqdn" 2>/dev/null | head -1)
-        if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "$ip"
-            return 0
-        fi
-    fi
-
-    print_warning "    Could not resolve FQDN: $fqdn" >&2
-    return 1
-}
-
-# Function to wait for Talos API to be ready on a node
-# Uses progressive polling: fast at first, then slower to reduce load
-wait_for_talos_api() {
-    local ip="$1"
-    local max_wait="${2:-300}"  # Default 5 minutes (Ceph storage can be slow)
-    local elapsed=0
-    local attempt=0
-
-    print_info "    Waiting for Talos API on $ip (timeout: ${max_wait}s)..." >&2
-
-    while [[ $elapsed -lt $max_wait ]]; do
-        attempt=$((attempt + 1))
-
-        # Check if port 50000 is open
-        if nc -z -w 2 "$ip" 50000 2>/dev/null; then
-            print_success "    Talos API is ready on $ip (after ${elapsed}s, attempt #${attempt})" >&2
-            return 0
-        fi
-
-        # Progressive wait interval: 3s for first minute, 5s for next 2 min, 10s after
-        local wait_interval
-        if [[ $elapsed -lt 60 ]]; then
-            wait_interval=3
-        elif [[ $elapsed -lt 180 ]]; then
-            wait_interval=5
-        else
-            wait_interval=10
-        fi
-
-        elapsed=$((elapsed + wait_interval))
-        if [[ $elapsed -lt $max_wait ]]; then
-            # Only log every 15 seconds to reduce noise
-            if [[ $((elapsed % 15)) -lt $wait_interval ]]; then
-                print_info "    Talos API not ready yet, polling... (${elapsed}/${max_wait}s)" >&2
-            fi
-            sleep $wait_interval
-        fi
-    done
-
-    print_warning "    Timeout waiting for Talos API on $ip after ${max_wait}s (${attempt} attempts)" >&2
-    return 1
 }
 
 # Function to find VM node in Proxmox cluster
@@ -348,8 +269,8 @@ while IFS= read -r line; do
             vmid=$(echo "$current_node" | sed -n 's/.*vmid[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p')
             role=$(echo "$current_node" | sed -n 's/.*role[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
             # Support both IP-based and FQDN-based configurations
-            # Use negative lookbehind pattern to avoid matching 'fqdn' when looking for 'ip'
-            static_ip=$(echo "$current_node" | grep -oP '(?<!fq)ip\s*=\s*"\K[^"]+' || true)
+            # Extract ip field only (not fqdn) using sed with word-boundary-like pattern
+            static_ip=$(echo "$current_node" | sed -n 's/.*[^a-z]ip[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' || true)
             fqdn=$(echo "$current_node" | sed -n 's/.*fqdn[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')
             # Use FQDN if IP is not available (DNS-based configuration)
             target_endpoint="${static_ip:-$fqdn}"
@@ -373,32 +294,22 @@ while IFS= read -r line; do
 
                 print_success "  Found on Proxmox node: $node"
 
-                # Get DHCP IP - try guest agent first, then fall back to DNS resolution
+                # Get DHCP IP
                 dhcp_ip=$(get_vm_ip "$vmid" "$node" || true)
 
                 if [[ -z "$dhcp_ip" ]]; then
-                    # Talos VMs don't have guest agent - fall back to DNS resolution
-                    if [[ -n "$fqdn" ]]; then
-                        print_info "  Falling back to DNS resolution for FQDN: $fqdn"
-                        dhcp_ip=$(resolve_or_check_fqdn "$fqdn" || true)
-                    fi
-                fi
-
-                if [[ -z "$dhcp_ip" ]]; then
-                    print_warning "  Could not get IP from guest agent or DNS"
-                    print_warning "  VM may not be running or DNS not configured"
+                    print_warning "  Could not get DHCP IP"
+                    print_warning "  VM may not be running or QEMU guest agent not responding"
                     echo ""
                     current_node=""
                     continue
                 fi
 
-                print_success "  Resolved IP: $dhcp_ip"
+                print_success "  Current DHCP IP: $dhcp_ip"
 
                 # Save control plane info for bootstrap (use FQDN or IP)
-                print_info "  DEBUG: role='$role', target_endpoint='$target_endpoint'"
                 if [[ "$role" == "controlplane" ]]; then
                     CONTROL_PLANE_ENDPOINT="$target_endpoint"
-                    print_info "  DEBUG: Set CONTROL_PLANE_ENDPOINT='$CONTROL_PLANE_ENDPOINT'"
                 fi
 
                 # Find corresponding config file
@@ -415,24 +326,14 @@ while IFS= read -r line; do
 
                 if [[ "$DRY_RUN" == true ]]; then
                     print_info "  [DRY RUN] Would apply config to $dhcp_ip"
-                    APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                 else
-                    # Wait for Talos API to be ready before applying config
-                    # Use 300s timeout for Ceph storage boot latency
-                    print_info "  Waiting for Talos API to be ready (up to 5 minutes for Ceph boot)..."
-                    if wait_for_talos_api "$dhcp_ip"; then
-                        print_info "  Applying configuration to $dhcp_ip..."
-                        if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
-                            print_success "  Config applied successfully!"
-                            print_info "  VM will reboot and come up at: $target_endpoint"
-                            APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
-                        else
-                            print_error "  Failed to apply config to $dhcp_ip"
-                            print_warning "  Will continue with remaining VMs..."
-                        fi
+                    print_info "  Applying configuration..."
+                    if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
+                        print_success "  Config applied successfully!"
+                        print_info "  VM will reboot and come up at: $target_endpoint"
+                        APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
                     else
-                        print_error "  Talos API not available on $dhcp_ip after timeout"
-                        print_warning "  Skipping this VM, will continue with remaining VMs..."
+                        print_error "  Failed to apply config"
                     fi
                 fi
 
@@ -445,121 +346,29 @@ while IFS= read -r line; do
 done < "$TFVARS_FILE"
 
 # Bootstrap cluster if requested
-print_info "DEBUG: BOOTSTRAP='$BOOTSTRAP', CONTROL_PLANE_ENDPOINT='$CONTROL_PLANE_ENDPOINT'"
-print_info "DEBUG: APPLIED_VMS count=${#APPLIED_VMS[@]}"
-
 if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
     echo ""
-    print_info "Waiting for control plane node to be reachable before bootstrapping..."
+    print_info "Waiting 180 seconds for VMs to reboot and become available..."
 
     if [[ "$DRY_RUN" == true ]]; then
         print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
-        # Wait for node to be reachable with timeout (max 10 minutes)
-        MAX_WAIT=600
-        WAIT_INTERVAL=15
-        ELAPSED=0
-
-        print_info "Waiting for $CONTROL_PLANE_ENDPOINT to be reachable (timeout: ${MAX_WAIT}s)..."
-
-        # First, wait for basic network connectivity (ping or port check)
-        print_info "Waiting for node to be network-reachable..."
-        NETWORK_READY=false
-        NETWORK_WAIT=0
-        NETWORK_MAX=300  # 5 minutes for network
-
-        while [[ $NETWORK_WAIT -lt $NETWORK_MAX ]]; do
-            # Try to resolve and ping the node
-            NODE_IP=$(getent hosts "$CONTROL_PLANE_ENDPOINT" 2>/dev/null | awk '{print $1}' | head -1)
-            if [[ -n "$NODE_IP" ]]; then
-                print_info "  DEBUG: Resolved $CONTROL_PLANE_ENDPOINT to $NODE_IP"
-                # Check if port 50000 is open (node is at least partially up)
-                if nc -z -w 2 "$NODE_IP" 50000 2>/dev/null; then
-                    print_success "  Node network is ready (port 50000 responding)"
-                    NETWORK_READY=true
-                    break
-                else
-                    print_info "  Port 50000 not yet responding on $NODE_IP..."
-                fi
-            else
-                print_warning "  Could not resolve $CONTROL_PLANE_ENDPOINT"
-            fi
-            NETWORK_WAIT=$((NETWORK_WAIT + 15))
-            print_info "  Waiting for network... (${NETWORK_WAIT}/${NETWORK_MAX}s)"
-            sleep 15
-        done
-
-        if [[ "$NETWORK_READY" == false ]]; then
-            print_error "Node never became network-reachable within ${NETWORK_MAX}s"
-            print_error "Check Proxmox console to see node state"
-            exit 1
-        fi
-
-        # Now wait for Talos API to be ready
-        print_info "Network ready, waiting for Talos API..."
-        while [[ $ELAPSED -lt $MAX_WAIT ]]; do
-            # Try to get node version - this works even in maintenance mode
-            print_info "  DEBUG: Attempting talosctl version --nodes $CONTROL_PLANE_ENDPOINT"
-            if talosctl --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT" version --short; then
-                print_success "Node Talos API is reachable after ${ELAPSED}s"
-                break
-            else
-                print_info "  DEBUG: talosctl version failed (exit code $?), API not ready yet"
-            fi
-
-            ELAPSED=$((ELAPSED + WAIT_INTERVAL))
-            print_info "  Waiting for Talos API... (${ELAPSED}/${MAX_WAIT}s)"
-            sleep $WAIT_INTERVAL
-        done
-
-        if [[ $ELAPSED -ge $MAX_WAIT ]]; then
-            print_error "Timeout waiting for node to be reachable"
-            exit 1
-        fi
-
-        # Give the node a moment to fully initialize after becoming reachable
-        print_info "Node reachable, waiting additional 30 seconds for full initialization..."
-        sleep 30
+        sleep 180
 
         print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
-        print_info "DEBUG: Using TALOSCONFIG=$TALOSCONFIG"
-
-        # Retry bootstrap a few times in case of transient failures
-        BOOTSTRAP_RETRIES=3
-        for i in $(seq 1 $BOOTSTRAP_RETRIES); do
-            print_info "DEBUG: Bootstrap attempt $i - running: talosctl bootstrap --nodes $CONTROL_PLANE_ENDPOINT --endpoints $CONTROL_PLANE_ENDPOINT"
-            if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
-                print_success "Cluster bootstrapped successfully!"
-                echo ""
-                print_info "Configure talosctl context:"
-                print_info "  talosctl config endpoint $CONTROL_PLANE_ENDPOINT"
-                print_info "  talosctl config node $CONTROL_PLANE_ENDPOINT"
-                break
-            else
-                if [[ $i -lt $BOOTSTRAP_RETRIES ]]; then
-                    print_warning "Bootstrap attempt $i failed, retrying in 30 seconds..."
-                    sleep 30
-                else
-                    print_error "Failed to bootstrap cluster after $BOOTSTRAP_RETRIES attempts"
-                    exit 1
-                fi
-            fi
-        done
+        if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
+            print_success "Cluster bootstrapped successfully!"
+            echo ""
+            print_info "Configure talosctl context:"
+            print_info "  talosctl config endpoint $CONTROL_PLANE_ENDPOINT"
+            print_info "  talosctl config node $CONTROL_PLANE_ENDPOINT"
+        else
+            print_error "Failed to bootstrap cluster"
+        fi
     fi
 fi
 
 echo ""
-
-# Check if any VMs were actually configured
-if [[ "$DRY_RUN" == false && ${#APPLIED_VMS[@]} -eq 0 ]]; then
-    print_error "No VMs were successfully configured!"
-    print_error "Check that:"
-    print_error "  - VMs are running in Proxmox"
-    print_error "  - DNS resolution works for VM FQDNs"
-    print_error "  - Network connectivity to VMs is available"
-    exit 1
-fi
-
 print_success "Done!"
 
 if [[ "$DRY_RUN" == false && ${#APPLIED_VMS[@]} -gt 0 ]]; then
