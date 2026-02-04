@@ -6,6 +6,9 @@
 
 set -eo pipefail
 
+# Disable bash history expansion to handle '!' in API tokens (e.g., user@pam!tokenid=secret)
+set +H
+
 # Configuration - Edit these values
 PROXMOX_HOST="pve01.knowledgeondemand.net"
 PROXMOX_API_URL="https://${PROXMOX_HOST}:8006"
