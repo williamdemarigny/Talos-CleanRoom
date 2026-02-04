@@ -238,9 +238,13 @@ echo ""
 echo "Container IP: ${CONTAINER_IP}"
 echo "SSH User:     ${SSH_USER}"
 echo ""
-echo -e "${YELLOW}Next Steps (Manual Setup):${NC}"
+echo -e "${YELLOW}Next Steps (Manual Setup - if you decline automatic setup below):${NC}"
+echo -e "${YELLOW}NOTE: setup-lxc.sh disables root SSH login. Complete steps 1-4 BEFORE running step 5.${NC}"
 echo ""
-echo "1. SSH into container as root (one-time setup):"
+echo "1. Access container via Proxmox (recommended) or SSH:"
+echo "   # Option A: Via Proxmox pct exec (no password needed):"
+echo "   ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
+echo "   # Option B: Via direct SSH (before root login is disabled):"
 echo "   ssh root@${CONTAINER_IP}"
 echo ""
 echo "2. Create non-root SSH user with sudo access:"
@@ -257,7 +261,7 @@ echo ""
 echo "4. Clone the repository:"
 echo "   git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
 echo ""
-echo "5. Run the setup script:"
+echo "5. Run the setup script (this disables root SSH login):"
 echo "   cd /opt/Talos-CleanRoom/deployment-webui/scripts"
 echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
 echo ""
@@ -268,6 +272,9 @@ echo ""
 echo "7. Access the web UI:"
 echo "   http://${CONTAINER_IP}:8000"
 echo "   Login: ${WEBUI_USER} / ${WEBUI_PASSWORD}"
+echo ""
+echo -e "${YELLOW}Recovery (if locked out of SSH):${NC}"
+echo "   ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
 echo ""
 echo -e "${GREEN}============================================${NC}"
 
@@ -328,10 +335,6 @@ echo \"${SSH_USER}:${SSH_USER_PASSWORD}\" | chpasswd
 echo \"${SSH_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${SSH_USER}
 chmod 440 /etc/sudoers.d/${SSH_USER}
 
-echo \"=== Disabling root SSH login ===\"
-sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
-systemctl restart ssh
-
 echo \"=== Setting up GitHub SSH key for ${SSH_USER} ===\"
 SSH_USER_HOME=\"/home/${SSH_USER}\"
 mkdir -p \${SSH_USER_HOME}/.ssh
@@ -372,10 +375,16 @@ echo \"=== Starting web UI service ===\"
 systemctl start deployment-webui || echo \"Service may need manual start\"
 systemctl status deployment-webui --no-pager || true
 
+echo \"=== Disabling root SSH login (final step) ===\"
+sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
+systemctl restart ssh
+
 echo \"\"
 echo \"=== Setup Complete ===\"
 echo \"SSH user: ${SSH_USER}\"
 echo \"Root SSH: disabled\"
+echo \"\"
+echo \"Recovery (if locked out): ssh root@PROXMOX_HOST pct exec ${LXC_VMID} -- bash\"
 '"
 
     echo ""
