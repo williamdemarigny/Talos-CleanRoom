@@ -273,7 +273,7 @@ class DeploymentService:
         script_path = self.iac_dir / "tfvars-to-talos-env.sh"
 
         result = await self.process_manager.run_command(
-            ["bash", str(script_path), "--backup"],
+            ["bash", str(script_path), "--force"],
             cwd=self.iac_dir,
             on_output=lambda line: self.log(step_id, "info", line)
         )
@@ -468,6 +468,32 @@ class DeploymentService:
         # Wait for applications to sync
         await self.log(step_id, "info", "Waiting for applications to sync...")
         await asyncio.sleep(30)
+
+        # Log deployment summary
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "==========================================")
+        await self.log(step_id, "info", "Deployment complete!")
+        await self.log(step_id, "info", "==========================================")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Default Credentials (CHANGE IN PRODUCTION!):")
+        await self.log(step_id, "info", "  - ArgoCD:     admin / admin")
+        await self.log(step_id, "info", "  - OpenVAS:    admin / admin")
+        await self.log(step_id, "info", "  - Faraday:    faraday / admin")
+        await self.log(step_id, "info", "  - Traefik/Longhorn: Uses basic-auth-secret")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Access services at:")
+        await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Traefik:       https://traefik.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Longhorn:      https://longhorn.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - OpenVAS:       https://openvas.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Faraday:       https://faraday.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Threat Dragon: https://threatdragon.knowledgeondemand.net")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Metasploit access (CLI only - no web UI):")
+        await self.log(step_id, "info", "  kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Note: OpenVAS feed sync takes 30-60 minutes on first deployment.")
+        await self.log(step_id, "info", "==========================================")
 
         return result.success
 
