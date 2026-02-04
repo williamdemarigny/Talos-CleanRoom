@@ -6,6 +6,9 @@
 
 set -eo pipefail
 
+# Ensure /usr/local/bin is in PATH (may not be set in non-login shells like pct exec)
+export PATH="/usr/local/bin:$PATH"
+
 # Default values
 REPO_PATH="/opt/Talos-CleanRoom"
 WEBUI_USER="admin"
@@ -69,7 +72,16 @@ apt-get install -y kubectl
 
 # Install Helm
 echo "[4/10] Installing Helm..."
+# Ensure /usr/local/bin is in PATH for the installer script
+export PATH="/usr/local/bin:$PATH"
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# Verify installation
+if [ -x /usr/local/bin/helm ]; then
+    /usr/local/bin/helm version --short
+else
+    echo "Error: Helm installation failed"
+    exit 1
+fi
 
 # Install Terraform
 echo "[5/10] Installing Terraform..."
