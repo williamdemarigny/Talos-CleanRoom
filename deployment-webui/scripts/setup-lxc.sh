@@ -158,12 +158,12 @@ else
         python-hcl2==4.3.2
 fi
 
-deactivate
-
-# Generate password hash
+# Generate password hash while venv is still active
 echo ""
 echo "Generating password hash for web UI..."
 PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
+
+deactivate
 
 # Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
