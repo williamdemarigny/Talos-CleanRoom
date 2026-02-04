@@ -117,6 +117,21 @@ fi
 
 echo -e "${GREEN}  Using SSH key: ${GITHUB_SSH_KEY}${NC}"
 
+# Get or derive the public key for container root access
+# This allows direct SSH to root during setup (proper login shell environment)
+SSH_PUBLIC_KEY=""
+if [ -f "${GITHUB_SSH_KEY}.pub" ]; then
+    SSH_PUBLIC_KEY=$(cat "${GITHUB_SSH_KEY}.pub")
+    echo -e "${GREEN}  Found public key: ${GITHUB_SSH_KEY}.pub${NC}"
+else
+    # Try to derive public key from private key
+    echo -e "${YELLOW}  Public key not found, deriving from private key...${NC}"
+    SSH_PUBLIC_KEY=$(ssh-keygen -y -f "${GITHUB_SSH_KEY}" 2>/dev/null) || {
+        echo -e "${YELLOW}  Could not derive public key. Setup will use pct exec fallback.${NC}"
+        SSH_PUBLIC_KEY=""
+    }
+fi
+
 # Download LXC template to Proxmox if needed
 echo -e "${GREEN}[1/5] Checking LXC template on Proxmox...${NC}"
 
@@ -186,7 +201,7 @@ dns_servers = ${DNS_SERVERS}
 
 # Authentication
 lxc_root_password = "${LXC_ROOT_PASSWORD}"
-ssh_public_keys   = []
+ssh_public_keys   = [$([ -n "$SSH_PUBLIC_KEY" ] && echo "\"$SSH_PUBLIC_KEY\"")]
 
 # SSH User Configuration (non-root user for secure access)
 ssh_user          = "${SSH_USER}"
@@ -315,77 +330,87 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         exit 1
     fi
 
-    # Wait for SSH to be ready on the container
-    echo -e "${GREEN}Waiting for SSH to be ready on container...${NC}"
-    MAX_SSH_WAIT=60
-    SSH_ELAPSED=0
-    while [ $SSH_ELAPSED -lt $MAX_SSH_WAIT ]; do
-        if ssh ${SSH_OPTS} -o ConnectTimeout=5 -o BatchMode=yes root@${CONTAINER_IP} "echo ready" 2>/dev/null | grep -q ready; then
-            echo -e "${GREEN}  SSH is ready after ${SSH_ELAPSED} seconds${NC}"
-            break
+    # Determine setup method: direct SSH (preferred) or pct exec (fallback)
+    # Direct SSH provides proper login shell environment where source/venv works correctly
+    USE_DIRECT_SSH=false
+    if [ -n "$SSH_PUBLIC_KEY" ]; then
+        echo -e "${GREEN}Waiting for SSH to be ready on container...${NC}"
+        MAX_SSH_WAIT=60
+        SSH_ELAPSED=0
+        while [ $SSH_ELAPSED -lt $MAX_SSH_WAIT ]; do
+            # Use key-based auth (public key was passed to Terraform)
+            if ssh ${SSH_OPTS} -o ConnectTimeout=5 -o BatchMode=yes -i "${GITHUB_SSH_KEY}" root@${CONTAINER_IP} "echo ready" 2>/dev/null | grep -q ready; then
+                echo -e "${GREEN}  SSH is ready (key auth) after ${SSH_ELAPSED} seconds${NC}"
+                USE_DIRECT_SSH=true
+                break
+            fi
+            echo "  Waiting for SSH... (${SSH_ELAPSED}/${MAX_SSH_WAIT}s)"
+            sleep 5
+            SSH_ELAPSED=$((SSH_ELAPSED + 5))
+        done
+        if [ "$USE_DIRECT_SSH" = false ]; then
+            echo -e "${YELLOW}  SSH key auth not working, falling back to pct exec${NC}"
         fi
-        echo "  Waiting for SSH... (${SSH_ELAPSED}/${MAX_SSH_WAIT}s)"
-        sleep 5
-        SSH_ELAPSED=$((SSH_ELAPSED + 5))
-    done
-
-    if [ $SSH_ELAPSED -ge $MAX_SSH_WAIT ]; then
-        echo -e "${RED}Error: SSH not ready on container. Falling back to pct exec for bootstrap...${NC}"
-        # Minimal bootstrap via pct exec to ensure SSH works
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- bash -c 'apt-get update && apt-get install -y openssh-server && systemctl enable ssh && systemctl start ssh'"
-        sleep 5
+    else
+        echo -e "${YELLOW}No SSH public key available, using pct exec for setup${NC}"
     fi
 
-    # Create a temporary script file to transfer
-    SETUP_SCRIPT=$(mktemp)
-    cat > "$SETUP_SCRIPT" << 'SETUP_SCRIPT_CONTENT'
-#!/bin/bash
-set -e
+    if [ "$USE_DIRECT_SSH" = true ]; then
+        # ===========================================
+        # DIRECT SSH METHOD (preferred)
+        # Provides proper login shell environment
+        # ===========================================
+        echo -e "${GREEN}Setting up container via direct SSH (key auth)...${NC}"
 
-# Arguments passed via environment
-SSH_USER="$1"
-SSH_USER_PASSWORD="$2"
-SSH_USER_GROUPS="$3"
-WEBUI_PASSWORD="$4"
-GITHUB_REPO_URL="$5"
+        ssh ${SSH_OPTS} -i "${GITHUB_SSH_KEY}" root@${CONTAINER_IP} << REMOTE_SETUP
+set -e
+export PATH="/usr/local/bin:\$PATH"
+export LANG=en_US.UTF-8
 
 echo "=== Installing base packages ==="
 apt-get update
-apt-get install -y sudo git locales curl wget gnupg ca-certificates
+apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates
 
 # Fix locale warnings
-sed -i "s/# en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen
+sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
 locale-gen en_US.UTF-8
-export LANG=en_US.UTF-8
 
-echo "=== Creating non-root SSH user: ${SSH_USER} ==="
+echo "=== Creating deploy user: ${SSH_USER} ==="
 useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || echo "User already exists"
 echo "${SSH_USER}:${SSH_USER_PASSWORD}" | chpasswd
 echo "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${SSH_USER}
 chmod 440 /etc/sudoers.d/${SSH_USER}
 
-echo "=== Setting up GitHub SSH key ==="
-SSH_USER_HOME="/home/${SSH_USER}"
-mkdir -p ${SSH_USER_HOME}/.ssh
-chmod 700 ${SSH_USER_HOME}/.ssh
+echo "=== Setting up SSH for ${SSH_USER} ==="
+mkdir -p /home/${SSH_USER}/.ssh
+chmod 700 /home/${SSH_USER}/.ssh
 
-# GitHub key will be copied separately
-cat > ${SSH_USER_HOME}/.ssh/config << 'SSHCONFIG'
+cat > /home/${SSH_USER}/.ssh/config << 'SSHCFG'
 Host github.com
     HostName github.com
     User git
     IdentityFile ~/.ssh/github_deploy_key
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
-SSHCONFIG
-chmod 600 ${SSH_USER_HOME}/.ssh/config
-chown -R ${SSH_USER}:${SSH_USER} ${SSH_USER_HOME}/.ssh
+SSHCFG
+chmod 600 /home/${SSH_USER}/.ssh/config
+chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh
+REMOTE_SETUP
+
+        # Copy GitHub SSH key
+        echo -e "${GREEN}  Copying GitHub SSH key...${NC}"
+        scp ${SSH_OPTS} -i "${GITHUB_SSH_KEY}" "${GITHUB_SSH_KEY}" root@${CONTAINER_IP}:/home/${SSH_USER}/.ssh/github_deploy_key
+        ssh ${SSH_OPTS} -i "${GITHUB_SSH_KEY}" root@${CONTAINER_IP} "chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key && chown ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh/github_deploy_key"
+
+        # Clone repository and run setup
+        echo -e "${GREEN}  Cloning repository and running setup...${NC}"
+        ssh ${SSH_OPTS} -i "${GITHUB_SSH_KEY}" root@${CONTAINER_IP} << REMOTE_SETUP2
+set -e
+export PATH="/usr/local/bin:\$PATH"
 
 echo "=== Cloning repository ==="
 mkdir -p /opt/Talos-CleanRoom
 chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-
-# Clone as the deploy user
 su - ${SSH_USER} -c "git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
 
 echo "=== Running setup script ==="
@@ -397,52 +422,85 @@ echo "=== Starting web UI service ==="
 systemctl start deployment-webui || echo "Service may need manual start"
 systemctl status deployment-webui --no-pager || true
 
-echo "=== Disabling root SSH login (final step) ==="
-sed -i "s/^#*PermitRootLogin.*/PermitRootLogin no/" /etc/ssh/sshd_config
+echo "=== Disabling root SSH login ==="
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 systemctl restart ssh
 
-echo ""
-echo "=== Setup Complete ==="
-echo "SSH user: ${SSH_USER}"
-echo "Root SSH: disabled"
-SETUP_SCRIPT_CONTENT
-    chmod +x "$SETUP_SCRIPT"
-
-    echo -e "${GREEN}Copying setup files to container via SSH...${NC}"
-
-    # Copy the GitHub SSH key to container
-    ssh ${SSH_OPTS} root@${CONTAINER_IP} "mkdir -p /tmp/deploy-setup"
-    scp ${SSH_OPTS} "${GITHUB_SSH_KEY}" root@${CONTAINER_IP}:/tmp/deploy-setup/github_deploy_key
-    scp ${SSH_OPTS} "$SETUP_SCRIPT" root@${CONTAINER_IP}:/tmp/deploy-setup/setup.sh
-
-    echo -e "${GREEN}Running setup on container via direct SSH...${NC}"
-
-    # Run the setup script via SSH
-    ssh ${SSH_OPTS} root@${CONTAINER_IP} << REMOTE_COMMANDS
-set -e
-
-# Move GitHub key to correct location (will be moved to user's home after user creation)
-chmod 600 /tmp/deploy-setup/github_deploy_key
-
-# Run setup script with arguments
-cd /tmp/deploy-setup
-./setup.sh "${SSH_USER}" "${SSH_USER_PASSWORD}" "${SSH_USER_GROUPS}" "${WEBUI_PASSWORD}" "${GITHUB_REPO_URL}"
-
-# Move GitHub key to user's SSH directory
-cp /tmp/deploy-setup/github_deploy_key /home/${SSH_USER}/.ssh/github_deploy_key
-chown ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh/github_deploy_key
-chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key
-
-# Test GitHub connectivity
 echo "=== Testing GitHub connectivity ==="
 su - ${SSH_USER} -c "ssh -T git@github.com 2>&1" || true
+REMOTE_SETUP2
 
-# Cleanup
-rm -rf /tmp/deploy-setup
-REMOTE_COMMANDS
+    else
+        # ===========================================
+        # PCT EXEC METHOD (fallback)
+        # Used when SSH key auth is not available
+        # Note: source venv/bin/activate may not work properly
+        # ===========================================
+        echo -e "${GREEN}Setting up container via pct exec (fallback method)...${NC}"
+        echo -e "${YELLOW}  Note: Some shell features may not work in pct exec environment${NC}"
 
-    # Cleanup local temp file
-    rm -f "$SETUP_SCRIPT"
+        # Helper function to run commands via pct exec
+        pct_exec() {
+            ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- bash -c '$1'"
+        }
+
+        # Step 1: Install base packages and create deploy user
+        echo -e "${GREEN}  Installing base packages...${NC}"
+        pct_exec "export PATH=/usr/local/bin:\$PATH && apt-get update && apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates"
+
+        # Fix locale warnings
+        echo -e "${GREEN}  Configuring locales...${NC}"
+        pct_exec "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen en_US.UTF-8"
+
+        # Create deploy user
+        echo -e "${GREEN}  Creating deploy user: ${SSH_USER}...${NC}"
+        pct_exec "useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || echo 'User exists'"
+        pct_exec "echo '${SSH_USER}:${SSH_USER_PASSWORD}' | chpasswd"
+        pct_exec "echo '${SSH_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${SSH_USER} && chmod 440 /etc/sudoers.d/${SSH_USER}"
+
+        # Setup SSH directory for deploy user
+        echo -e "${GREEN}  Setting up SSH for ${SSH_USER}...${NC}"
+        pct_exec "mkdir -p /home/${SSH_USER}/.ssh && chmod 700 /home/${SSH_USER}/.ssh && chown ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh"
+
+        # Step 2: Copy GitHub SSH key via pct push
+        echo -e "${GREEN}  Copying GitHub SSH key to container...${NC}"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /dev/stdin /home/${SSH_USER}/.ssh/github_deploy_key" < "${GITHUB_SSH_KEY}"
+        pct_exec "chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key && chown ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh/github_deploy_key"
+
+        # Create SSH config for GitHub
+        echo -e "${GREEN}  Configuring GitHub SSH access...${NC}"
+        pct_exec "cat > /home/${SSH_USER}/.ssh/config << 'SSHCFG'
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy_key
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+SSHCFG"
+        pct_exec "chmod 600 /home/${SSH_USER}/.ssh/config && chown ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh/config"
+
+        # Step 3: Clone repository as deploy user
+        echo -e "${GREEN}  Cloning repository...${NC}"
+        pct_exec "mkdir -p /opt/Talos-CleanRoom && chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- su - ${SSH_USER} -c 'git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom'"
+
+        # Step 4: Run setup script
+        echo -e "${GREEN}  Running setup script...${NC}"
+        pct_exec "export PATH=/usr/local/bin:\$PATH && cd /opt/Talos-CleanRoom/deployment-webui/scripts && chmod +x setup-lxc.sh && ./setup-lxc.sh --webui-password '${WEBUI_PASSWORD}'"
+
+        # Step 5: Start service
+        echo -e "${GREEN}  Starting web UI service...${NC}"
+        pct_exec "systemctl start deployment-webui || echo 'Service may need manual start'"
+        pct_exec "systemctl status deployment-webui --no-pager || true"
+
+        # Step 6: Disable root SSH login (final step)
+        echo -e "${GREEN}  Disabling root SSH login...${NC}"
+        pct_exec "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && systemctl restart ssh"
+
+        # Step 7: Test GitHub connectivity
+        echo -e "${GREEN}  Testing GitHub connectivity...${NC}"
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct exec ${LXC_VMID} -- su - ${SSH_USER} -c 'ssh -T git@github.com 2>&1'" || true
+    fi
 
     echo ""
     echo -e "${GREEN}============================================${NC}"
