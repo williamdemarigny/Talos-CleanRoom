@@ -135,15 +135,18 @@ fi
 echo "[10/10] Setting up Python environment..."
 cd "$APP_DIR"
 python3 -m venv venv
-source venv/bin/activate
+
+# Use explicit venv paths (source/activate doesn't work reliably in pct exec)
+VENV_PIP="$APP_DIR/venv/bin/pip"
+VENV_PYTHON="$APP_DIR/venv/bin/python3"
 
 if [ -f "requirements.txt" ]; then
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    "$VENV_PIP" install --upgrade pip
+    "$VENV_PIP" install -r requirements.txt
 else
     echo "Warning: requirements.txt not found. Installing dependencies manually..."
-    pip install --upgrade pip
-    pip install \
+    "$VENV_PIP" install --upgrade pip
+    "$VENV_PIP" install \
         fastapi==0.109.0 \
         uvicorn[standard]==0.27.0 \
         python-jose[cryptography]==3.3.0 \
@@ -158,12 +161,10 @@ else
         python-hcl2==4.3.2
 fi
 
-# Generate password hash while venv is still active
+# Generate password hash using venv Python
 echo ""
 echo "Generating password hash for web UI..."
-PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
-
-deactivate
+PASSWORD_HASH=$("$VENV_PYTHON" -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
 
 # Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
