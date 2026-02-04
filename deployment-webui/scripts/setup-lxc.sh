@@ -6,7 +6,7 @@
 
 set -eo pipefail
 
-# Ensure /usr/local/bin is in PATH (may not be set in non-login shells like pct exec)
+# Ensure /usr/local/bin is in PATH
 export PATH="/usr/local/bin:$PATH"
 
 # Default values
@@ -72,16 +72,8 @@ apt-get install -y kubectl
 
 # Install Helm
 echo "[4/10] Installing Helm..."
-# Ensure /usr/local/bin is in PATH for the installer script
-export PATH="/usr/local/bin:$PATH"
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-# Verify installation
-if [ -x /usr/local/bin/helm ]; then
-    /usr/local/bin/helm version --short
-else
-    echo "Error: Helm installation failed"
-    exit 1
-fi
+helm version --short
 
 # Install Terraform
 echo "[5/10] Installing Terraform..."
@@ -136,21 +128,21 @@ echo "[10/10] Setting up Python environment..."
 cd "$APP_DIR"
 python3 -m venv venv
 
-# Use explicit venv paths (source/activate doesn't work reliably in pct exec)
-VENV_PIP="$APP_DIR/venv/bin/pip"
-VENV_PYTHON="$APP_DIR/venv/bin/python3"
+# Activate virtual environment
+source venv/bin/activate
+
+pip install --upgrade pip
 
 if [ -f "requirements.txt" ]; then
-    "$VENV_PIP" install --upgrade pip
-    "$VENV_PIP" install -r requirements.txt
+    pip install -r requirements.txt
 else
     echo "Warning: requirements.txt not found. Installing dependencies manually..."
-    "$VENV_PIP" install --upgrade pip
-    "$VENV_PIP" install \
+    pip install \
         fastapi==0.109.0 \
         uvicorn[standard]==0.27.0 \
         python-jose[cryptography]==3.3.0 \
-        passlib[bcrypt]==1.7.4 \
+        passlib==1.7.4 \
+        bcrypt==4.0.1 \
         python-multipart==0.0.6 \
         pydantic==2.5.3 \
         pydantic-settings==2.1.0 \
@@ -161,10 +153,13 @@ else
         python-hcl2==4.3.2
 fi
 
-# Generate password hash using venv Python
+# Generate password hash (venv is active, so python3 has passlib)
 echo ""
 echo "Generating password hash for web UI..."
-PASSWORD_HASH=$("$VENV_PYTHON" -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
+PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('$WEBUI_PASSWORD'))")
+
+# Deactivate virtual environment
+deactivate
 
 # Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
