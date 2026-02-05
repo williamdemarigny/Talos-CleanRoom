@@ -275,6 +275,7 @@ class DeploymentService:
         result = await self.process_manager.run_command(
             ["bash", str(script_path), "--force"],
             cwd=self.iac_dir,
+            env=env,
             on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
