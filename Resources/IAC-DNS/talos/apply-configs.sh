@@ -28,6 +28,30 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to wait for Talos API to be ready on a node
+wait_for_talos_api() {
+    local ip="$1"
+    local max_attempts="${2:-30}"
+    local interval="${3:-10}"
+
+    print_info "  Waiting for Talos API on $ip:50000..."
+
+    for ((i=1; i<=max_attempts; i++)); do
+        if talosctl version --insecure --nodes "$ip" --endpoints "$ip" &>/dev/null; then
+            print_success "  Talos API is ready on $ip"
+            return 0
+        fi
+
+        if [[ $i -lt $max_attempts ]]; then
+            print_info "    Attempt $i/$max_attempts - Talos API not ready, waiting ${interval}s..."
+            sleep "$interval"
+        fi
+    done
+
+    print_error "  Talos API not ready on $ip after $((max_attempts * interval)) seconds"
+    return 1
+}
+
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TFVARS_FILE="../terraform/talos-cluster-create/cluster.auto.tfvars"
@@ -306,6 +330,16 @@ while IFS= read -r line; do
                 fi
 
                 print_success "  Current DHCP IP: $dhcp_ip"
+
+                # Wait for Talos API to be ready before applying config
+                if [[ "$DRY_RUN" == false ]]; then
+                    if ! wait_for_talos_api "$dhcp_ip" 30 10; then
+                        print_error "  Talos API not ready - skipping this VM"
+                        echo ""
+                        current_node=""
+                        continue
+                    fi
+                fi
 
                 # Save control plane info for bootstrap (use FQDN or IP)
                 if [[ "$role" == "controlplane" ]]; then

@@ -1,6 +1,7 @@
 """Deployment service for orchestrating cluster deployment."""
 
 import asyncio
+import json
 import uuid
 import shutil
 import os
@@ -152,17 +153,18 @@ class DeploymentService:
                 (0, self._step_validate_git),
                 (1, self._step_check_dependencies),
                 (2, self._step_terraform_deploy),
-                (3, self._step_generate_talos_config),
-                (4, self._step_apply_talos_configs),
-                (5, self._step_verify_cluster_health),
-                (6, self._step_get_kubeconfig),
-                (7, self._step_install_argocd),
-                (8, self._step_deploy_infrastructure),
-                (9, self._step_argocd_self_management),
-                (10, self._step_deploy_openvas),
-                (11, self._step_deploy_faraday),
-                (12, self._step_deploy_metasploit),
-                (13, self._step_deploy_threat_dragon),
+                (3, self._step_wait_for_vms),
+                (4, self._step_generate_talos_config),
+                (5, self._step_apply_talos_configs),
+                (6, self._step_verify_cluster_health),
+                (7, self._step_get_kubeconfig),
+                (8, self._step_install_argocd),
+                (9, self._step_deploy_infrastructure),
+                (10, self._step_argocd_self_management),
+                (11, self._step_deploy_openvas),
+                (12, self._step_deploy_faraday),
+                (13, self._step_deploy_metasploit),
+                (14, self._step_deploy_threat_dragon),
             ]
 
             for step_id, step_func in steps:
@@ -260,8 +262,78 @@ class DeploymentService:
 
         return result.success
 
+    async def _step_wait_for_vms(self, step_id: int) -> bool:
+        """Step 3: Wait for VMs to boot and Talos API to be ready."""
+        await self.log(step_id, "info", "Waiting for VMs to boot and Talos API to become available...")
+
+        # Get VM IPs from terraform output
+        result = await self.process_manager.run_command_simple(
+            ["terraform", "output", "-json"],
+            cwd=self.terraform_dir
+        )
+
+        if not result.success:
+            await self.log(step_id, "error", "Failed to get terraform output")
+            return False
+
+        try:
+            tf_output = json.loads(result.output)
+            vm_details = tf_output.get("vm_details", {}).get("value", {})
+        except json.JSONDecodeError:
+            await self.log(step_id, "error", "Failed to parse terraform output")
+            return False
+
+        if not vm_details:
+            await self.log(step_id, "warn", "No VM details found in terraform output")
+            return True
+
+        # Wait for each VM's Talos API to be ready
+        max_attempts = 30
+        interval = 10
+        max_wait = max_attempts * interval
+
+        await self.log(step_id, "info", f"Checking Talos API readiness (max wait: {max_wait}s per VM)...")
+
+        for vm_name, details in vm_details.items():
+            fqdn = details.get("fqdn", "")
+            if not fqdn:
+                await self.log(step_id, "warn", f"No FQDN for {vm_name}, skipping")
+                continue
+
+            await self.log(step_id, "info", f"Waiting for {vm_name} ({fqdn})...")
+
+            # First wait for QEMU guest agent to respond (VM booted)
+            vmid = details.get("vmid")
+            proxmox_node = details.get("proxmox_node", "")
+
+            # Poll for Talos API readiness using talosctl
+            ready = False
+            for attempt in range(1, max_attempts + 1):
+                if self.current_deployment.status != DeploymentStatus.RUNNING:
+                    return False
+
+                check_result = await self.process_manager.run_command_simple(
+                    ["talosctl", "version", "--insecure", "--nodes", fqdn, "--endpoints", fqdn],
+                    timeout=10
+                )
+
+                if check_result.success:
+                    await self.log(step_id, "info", f"  {vm_name}: Talos API ready")
+                    ready = True
+                    break
+
+                await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
+                await asyncio.sleep(interval)
+
+            if not ready:
+                await self.log(step_id, "error", f"  {vm_name}: Talos API not ready after {max_wait}s")
+                return False
+
+        await self.log(step_id, "info", "All VMs are ready with Talos API available")
+        return True
+
     async def _step_generate_talos_config(self, step_id: int) -> bool:
-        """Step 3: Generate Talos configuration."""
+        """Step 4: Generate Talos configuration."""
         sops_key_file = os.environ.get(
             "SOPS_AGE_KEY_FILE",
             os.path.expanduser("~/.config/sops/age/keys.txt")
