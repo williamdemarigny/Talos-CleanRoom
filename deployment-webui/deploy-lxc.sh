@@ -275,25 +275,22 @@ echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
 echo -e "${GREEN}[4/5] Bootstrapping container via pct exec...${NC}"
 echo -e "${YELLOW}  (One Proxmox password prompt for entire bootstrap)${NC}"
 
-# Prepare base64-encoded data (single line, no wrapping)
-# Use tr to remove newlines for Windows compatibility (base64 -w0 not available everywhere)
+# First, copy the GitHub SSH key to Proxmox host, then use pct push to get it into the container
+# This avoids base64 encoding issues
+echo "  Copying GitHub SSH key to Proxmox..."
+scp ${SSH_OPTS} "${GITHUB_SSH_KEY}" root@${PROXMOX_HOST}:/tmp/github_deploy_key
+
+# Prepare base64-encoded data for simple strings only
 PASS_B64=$(echo -n "${SSH_USER}:${SSH_USER_PASSWORD}" | base64 | tr -d '\n\r')
 SUDOERS_B64=$(echo -n "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | base64 | tr -d '\n\r')
-GITHUB_KEY_B64=$(cat "${GITHUB_SSH_KEY}" | base64 | tr -d '\n\r')
 SSH_CONFIG_B64=$(printf "Host github.com\n    HostName github.com\n    User git\n    IdentityFile ~/.ssh/github_deploy_key\n    IdentitiesOnly yes\n    StrictHostKeyChecking accept-new" | base64 | tr -d '\n\r')
 
-# Debug: Show first 50 chars of encoded key to verify
-echo "  GitHub key encoded (first 50 chars): ${GITHUB_KEY_B64:0:50}..."
-
 # Run entire bootstrap in ONE SSH session to Proxmox
-# Use quoted heredoc to prevent local expansion, then pass variables explicitly
 proxmox_ssh "
 set -e
 
-# Variables passed from local
 PASS_B64='${PASS_B64}'
 SUDOERS_B64='${SUDOERS_B64}'
-GITHUB_KEY_B64='${GITHUB_KEY_B64}'
 SSH_CONFIG_B64='${SSH_CONFIG_B64}'
 LXC_VMID=${LXC_VMID}
 SSH_USER=${SSH_USER}
@@ -323,13 +320,14 @@ pct exec \${LXC_VMID} -- bash -c \"echo \${PASS_B64} | base64 -d | chpasswd\"
 pct exec \${LXC_VMID} -- bash -c \"echo \${SUDOERS_B64} | base64 -d > /etc/sudoers.d/\${SSH_USER}\"
 pct exec \${LXC_VMID} -- chmod 440 /etc/sudoers.d/\${SSH_USER}
 
-echo '  Setting up SSH...'
+echo '  Setting up SSH directory...'
 pct exec \${LXC_VMID} -- mkdir -p /home/\${SSH_USER}/.ssh
 pct exec \${LXC_VMID} -- chmod 700 /home/\${SSH_USER}/.ssh
 
-echo '  Copying GitHub SSH key...'
-pct exec \${LXC_VMID} -- bash -c \"echo \${GITHUB_KEY_B64} | base64 -d > /home/\${SSH_USER}/.ssh/github_deploy_key\"
+echo '  Copying GitHub SSH key via pct push...'
+pct push \${LXC_VMID} /tmp/github_deploy_key /home/\${SSH_USER}/.ssh/github_deploy_key
 pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/github_deploy_key
+rm -f /tmp/github_deploy_key
 
 echo '  Creating SSH config...'
 pct exec \${LXC_VMID} -- bash -c \"echo \${SSH_CONFIG_B64} | base64 -d > /home/\${SSH_USER}/.ssh/config\"
