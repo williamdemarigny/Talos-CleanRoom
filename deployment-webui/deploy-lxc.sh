@@ -64,26 +64,32 @@ if ! command -v terraform &> /dev/null; then
     exit 1
 fi
 
-# Prompt for credentials if not set
+# ===========================================
+# COLLECT ALL CREDENTIALS UPFRONT
+# ===========================================
+
+echo -e "${YELLOW}Please provide the following credentials:${NC}"
+echo ""
+
 if [ -z "$PROXMOX_API_TOKEN" ]; then
-    echo -e "${YELLOW}Enter Proxmox API Token (format: user@pam!tokenid=secret):${NC}"
+    echo -e "${YELLOW}Proxmox API Token (format: user@pam!tokenid=secret):${NC}"
     read -r PROXMOX_API_TOKEN
 fi
 
 if [ -z "$PROXMOX_SSH_PASSWORD" ]; then
-    echo -e "${YELLOW}Enter Proxmox SSH password for root:${NC}"
+    echo -e "${YELLOW}Proxmox SSH password for root:${NC}"
     read -rs PROXMOX_SSH_PASSWORD
     echo ""
 fi
 
 if [ -z "$LXC_ROOT_PASSWORD" ]; then
-    echo -e "${YELLOW}Enter password for LXC container root user:${NC}"
+    echo -e "${YELLOW}Password for LXC container root user:${NC}"
     read -rs LXC_ROOT_PASSWORD
     echo ""
 fi
 
 if [ -z "$SSH_USER_PASSWORD" ]; then
-    echo -e "${YELLOW}Enter password for SSH user '${SSH_USER}':${NC}"
+    echo -e "${YELLOW}Password for deploy user '${SSH_USER}' (used for SSH to container):${NC}"
     read -rs SSH_USER_PASSWORD
     echo ""
 fi
@@ -100,11 +106,11 @@ if [ -z "$GITHUB_SSH_KEY" ]; then
     done
 
     if [ -n "$DEFAULT_KEY" ]; then
-        echo -e "${YELLOW}Enter path to GitHub SSH private key [${DEFAULT_KEY}]:${NC}"
+        echo -e "${YELLOW}Path to GitHub SSH private key [${DEFAULT_KEY}]:${NC}"
         read -r GITHUB_SSH_KEY
         GITHUB_SSH_KEY="${GITHUB_SSH_KEY:-$DEFAULT_KEY}"
     else
-        echo -e "${YELLOW}Enter path to GitHub SSH private key:${NC}"
+        echo -e "${YELLOW}Path to GitHub SSH private key:${NC}"
         read -r GITHUB_SSH_KEY
     fi
 fi
@@ -115,114 +121,69 @@ if [ ! -f "$GITHUB_SSH_KEY" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}  Using SSH key: ${GITHUB_SSH_KEY}${NC}"
+echo -e "${GREEN}Using SSH key: ${GITHUB_SSH_KEY}${NC}"
 
-# Get or derive the public key for container root access
-# This allows direct SSH to root during setup (proper login shell environment)
-SSH_PUBLIC_KEY=""
-if [ -f "${GITHUB_SSH_KEY}.pub" ]; then
-    SSH_PUBLIC_KEY=$(cat "${GITHUB_SSH_KEY}.pub")
-    echo -e "${GREEN}  Found public key: ${GITHUB_SSH_KEY}.pub${NC}"
-else
-    # Try to derive public key from private key
-    echo -e "${YELLOW}  Public key not found, deriving from private key...${NC}"
-    SSH_PUBLIC_KEY=$(ssh-keygen -y -f "${GITHUB_SSH_KEY}" 2>/dev/null) || {
-        echo -e "${YELLOW}  Could not derive public key. Setup will use pct exec fallback.${NC}"
-        SSH_PUBLIC_KEY=""
-    }
-fi
+# ===========================================
+# SSH SETUP
+# ===========================================
 
-# SSH options for automated connections (accept new host keys)
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30"
 
-# Check if sshpass is available for password-based SSH
+# Check if sshpass is available (optional - enables automation)
 SSHPASS_AVAILABLE=false
 if command -v sshpass &> /dev/null; then
     SSHPASS_AVAILABLE=true
-    echo -e "${GREEN}sshpass is available - password-based SSH automation enabled${NC}"
-fi
-
-# Check if SSH key auth is set up for Proxmox (avoids repeated password prompts)
-echo -e "${GREEN}Checking SSH authentication to Proxmox...${NC}"
-PROXMOX_SSH_KEY_AUTH=false
-if ssh ${SSH_OPTS} -o BatchMode=yes -o ConnectTimeout=5 root@${PROXMOX_HOST} "echo ok" 2>/dev/null | grep -q ok; then
-    echo -e "${GREEN}  SSH key authentication is working${NC}"
-    PROXMOX_SSH_KEY_AUTH=true
+    echo -e "${GREEN}sshpass found - SSH will be automated${NC}"
 else
-    echo -e "${YELLOW}SSH key authentication not set up for Proxmox.${NC}"
-    if [ "$SSHPASS_AVAILABLE" = true ]; then
-        echo -e "${GREEN}  Will use sshpass for automated password auth.${NC}"
-    else
-        echo -e "${YELLOW}You will be prompted for password multiple times during setup.${NC}"
-        echo ""
-        echo -e "${YELLOW}To set up SSH key auth (recommended), run:${NC}"
-        echo -e "  ssh-copy-id root@${PROXMOX_HOST}"
-        echo ""
-        echo -e "${YELLOW}Or install sshpass for automated password auth:${NC}"
-        echo -e "  apt-get install sshpass  # Debian/Ubuntu"
-        echo -e "  brew install hudochenkov/sshpass/sshpass  # macOS"
-        echo ""
-        read -p "Continue anyway? (y/n) " -n 1 -r
-        echo ""
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Setup cancelled. Please set up SSH key auth first."
-            exit 0
-        fi
-    fi
+    echo -e "${YELLOW}sshpass not found - you will be prompted for passwords${NC}"
+    echo -e "${YELLOW}(Install sshpass to automate: choco install sshpass)${NC}"
 fi
 
-# Helper function to run SSH to Proxmox (uses key auth or sshpass)
+# Helper: SSH to Proxmox (uses sshpass if available)
 proxmox_ssh() {
-    if [ "$PROXMOX_SSH_KEY_AUTH" = true ]; then
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "$@"
-    elif [ "$SSHPASS_AVAILABLE" = true ]; then
+    if [ "$SSHPASS_AVAILABLE" = true ]; then
         sshpass -p "${PROXMOX_SSH_PASSWORD}" ssh ${SSH_OPTS} root@${PROXMOX_HOST} "$@"
     else
         ssh ${SSH_OPTS} root@${PROXMOX_HOST} "$@"
     fi
 }
 
-# Helper function to run pct exec commands
+# Helper: Run command in container via pct exec
 pct_exec() {
     proxmox_ssh "pct exec ${LXC_VMID} -- $1"
 }
 
-# Helper function to push content to container via stdin
-pct_push_stdin() {
-    local dest_path="$1"
-    if [ "$PROXMOX_SSH_KEY_AUTH" = true ]; then
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /dev/stdin ${dest_path}"
-    elif [ "$SSHPASS_AVAILABLE" = true ]; then
-        sshpass -p "${PROXMOX_SSH_PASSWORD}" ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /dev/stdin ${dest_path}"
-    else
-        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "pct push ${LXC_VMID} /dev/stdin ${dest_path}"
-    fi
-}
+# ===========================================
+# CHECK LXC TEMPLATE
+# ===========================================
 
-# Download LXC template to Proxmox if needed
 echo -e "${GREEN}[1/5] Checking LXC template on Proxmox...${NC}"
+echo -e "${YELLOW}  (You may be prompted for Proxmox password once)${NC}"
 
 TEMPLATE_NAME="debian-12-standard_12.12-1_amd64.tar.zst"
 TEMPLATE_STORAGE="cephfs"
 
-# Check if template exists via SSH
-echo "  Checking if template exists on Proxmox..."
-TEMPLATE_EXISTS=$(proxmox_ssh "pveam list ${TEMPLATE_STORAGE} 2>/dev/null | grep -c '${TEMPLATE_NAME}'" 2>/dev/null || echo "0")
-
-if [ "$TEMPLATE_EXISTS" = "0" ]; then
-    echo -e "${YELLOW}  Template not found. Downloading to Proxmox...${NC}"
-    proxmox_ssh "pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME}" || {
-        echo -e "${RED}  Failed to download template automatically.${NC}"
-        echo -e "${YELLOW}  Please download manually on Proxmox:${NC}"
-        echo "    pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME}"
-        echo ""
-        read -p "Press Enter once template is downloaded, or Ctrl+C to cancel..."
+# Check and download template in one SSH session
+proxmox_ssh << TEMPLATE_CHECK
+TEMPLATE_EXISTS=\$(pveam list ${TEMPLATE_STORAGE} 2>/dev/null | grep -c '${TEMPLATE_NAME}' || echo "0")
+if [ "\$TEMPLATE_EXISTS" = "0" ]; then
+    echo "  Template not found. Downloading..."
+    pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME} || {
+        echo "  Failed to download template."
+        echo "  Please download manually: pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME}"
+        exit 1
     }
 else
-    echo -e "${GREEN}  Template already exists on Proxmox${NC}"
+    echo "  Template exists"
 fi
+TEMPLATE_CHECK
 
-# Create terraform.tfvars
+echo -e "${GREEN}  Template check complete${NC}"
+
+# ===========================================
+# CREATE TERRAFORM CONFIG
+# ===========================================
+
 echo -e "${GREEN}[2/5] Creating Terraform configuration...${NC}"
 
 cat > "${TERRAFORM_DIR}/terraform.tfvars" << EOF
@@ -246,274 +207,186 @@ lxc_disk_size = ${LXC_DISK}
 lxc_storage   = "${LXC_STORAGE}"
 lxc_tags      = ["deployment", "webui", "management"]
 
-# Template Configuration (downloaded via pveam in step 1)
-template_storage      = "cephfs"
+# Template
+template_storage      = "${TEMPLATE_STORAGE}"
 lxc_template_filename = "${TEMPLATE_NAME}"
 
-# Network Configuration
+# Network
 network_bridge  = "${NETWORK_BRIDGE}"
 vlan_id         = ${VLAN_ID}
 lxc_ip_address  = "${LXC_IP}"
 lxc_gateway     = "${LXC_GATEWAY}"
 lxc_mac_address = ""
 
-# DNS Configuration
+# DNS
 dns_domain  = "${DNS_DOMAIN}"
 dns_servers = ${DNS_SERVERS}
 
-# Authentication
+# Auth
 lxc_root_password = "${LXC_ROOT_PASSWORD}"
-ssh_public_keys   = [$([ -n "$SSH_PUBLIC_KEY" ] && echo "\"$SSH_PUBLIC_KEY\"")]
+ssh_public_keys   = []
 
-# SSH User Configuration (non-root user for secure access)
+# SSH User (created via pct exec after deployment)
 ssh_user          = "${SSH_USER}"
 ssh_user_password = "${SSH_USER_PASSWORD}"
 ssh_user_groups   = "${SSH_USER_GROUPS}"
 
-# Web UI Configuration
+# Web UI
 webui_admin_username = "${WEBUI_USER}"
 webui_admin_password = "${WEBUI_PASSWORD}"
 EOF
 
-echo "  Configuration written to ${TERRAFORM_DIR}/terraform.tfvars"
+echo "  Config written to ${TERRAFORM_DIR}/terraform.tfvars"
 
-# Initialize Terraform
-echo -e "${GREEN}[3/5] Initializing Terraform...${NC}"
+# ===========================================
+# TERRAFORM DEPLOY
+# ===========================================
+
+echo -e "${GREEN}[3/5] Running Terraform...${NC}"
 cd "${TERRAFORM_DIR}"
 terraform init
-
-# Plan deployment
-echo -e "${GREEN}[4/5] Planning deployment...${NC}"
 terraform plan -out=.tfplan
 
-# Confirm deployment
 echo ""
-echo -e "${YELLOW}Ready to deploy LXC container with the following settings:${NC}"
-echo "  Proxmox Host: ${PROXMOX_HOST}"
-echo "  Container ID: ${LXC_VMID}"
-echo "  Hostname:     ${LXC_HOSTNAME}"
-echo "  IP Address:   ${LXC_IP}"
-echo "  Resources:    ${LXC_CORES} cores, ${LXC_MEMORY}MB RAM, ${LXC_DISK}GB disk"
-echo ""
-read -p "Proceed with deployment? (y/n) " -n 1 -r
+echo -e "${YELLOW}Deploy LXC container?${NC}"
+echo "  Host: ${PROXMOX_HOST}"
+echo "  VMID: ${LXC_VMID}"
+echo "  IP:   ${LXC_IP}"
+read -p "Proceed? (y/n) " -n 1 -r
 echo ""
 
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Deployment cancelled."
+    echo "Cancelled."
     exit 0
 fi
 
-# Apply deployment
-echo -e "${GREEN}[5/5] Deploying LXC container...${NC}"
 terraform apply .tfplan
 
-# Get container IP (strip CIDR notation)
 CONTAINER_IP="${LXC_IP%/*}"
 
-echo ""
-echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}LXC Container Deployed Successfully!${NC}"
-echo -e "${GREEN}============================================${NC}"
-echo ""
-echo "Container IP: ${CONTAINER_IP}"
-echo "SSH User:     ${SSH_USER}"
-echo ""
-echo -e "${YELLOW}Next Steps (Manual Setup - if you decline automatic setup below):${NC}"
-echo -e "${YELLOW}NOTE: setup-lxc.sh disables root SSH login. Complete steps 1-4 BEFORE running step 5.${NC}"
-echo ""
-echo "1. Access container via Proxmox (recommended) or SSH:"
-echo "   # Option A: Via Proxmox pct exec (no password needed):"
-echo "   ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
-echo "   # Option B: Via direct SSH (before root login is disabled):"
-echo "   ssh root@${CONTAINER_IP}"
-echo ""
-echo "2. Create non-root SSH user with sudo access:"
-echo "   useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER}"
-echo "   echo '${SSH_USER}:PASSWORD' | chpasswd"
-echo "   echo '${SSH_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${SSH_USER}"
-echo ""
-echo "3. Copy SSH key and configure GitHub access (as ${SSH_USER}):"
-echo "   ssh ${SSH_USER}@${CONTAINER_IP}"
-echo "   mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-echo "   # Copy your GitHub deploy key to ~/.ssh/github_deploy_key"
-echo "   chmod 600 ~/.ssh/github_deploy_key"
-echo ""
-echo "4. Clone the repository:"
-echo "   git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom"
-echo ""
-echo "5. Run the setup script (this disables root SSH login):"
-echo "   cd /opt/Talos-CleanRoom/deployment-webui/scripts"
-echo "   sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}"
-echo ""
-echo "6. Copy SOPS keys (from your workstation):"
-echo "   ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
-echo "   scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
-echo ""
-echo "7. Access the web UI:"
-echo "   http://${CONTAINER_IP}:8000"
-echo "   Login: ${WEBUI_USER} / ${WEBUI_PASSWORD}"
-echo ""
-echo -e "${YELLOW}Recovery (if locked out of SSH):${NC}"
-echo "   ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
-echo ""
-echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
 
-# Optional: Run setup automatically
-echo ""
-read -p "Run setup script automatically via SSH? (y/n) " -n 1 -r
-echo ""
+# ===========================================
+# BOOTSTRAP VIA PCT EXEC
+# Create deploy user, install SSH, copy keys
+# All done in ONE SSH session to avoid multiple password prompts
+# ===========================================
 
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    # Remove any old host keys for this IP (container may have been recreated)
-    echo -e "${GREEN}Clearing old SSH host keys for ${CONTAINER_IP}...${NC}"
-    ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
+echo -e "${GREEN}[4/5] Bootstrapping container via pct exec...${NC}"
+echo -e "${YELLOW}  (One Proxmox password prompt for entire bootstrap)${NC}"
 
-    echo -e "${GREEN}Waiting for container to be ready...${NC}"
-
-    # Wait for container to be running (check via Proxmox)
-    MAX_WAIT=60
-    WAIT_INTERVAL=5
-    ELAPSED=0
-
-    while [ $ELAPSED -lt $MAX_WAIT ]; do
-        CONTAINER_STATUS=$(proxmox_ssh "pct status ${LXC_VMID} 2>/dev/null | grep -o 'running'" || echo "")
-        if [ "$CONTAINER_STATUS" = "running" ]; then
-            echo -e "${GREEN}  Container is running after ${ELAPSED} seconds${NC}"
-            break
-        fi
-        echo "  Waiting for container... (${ELAPSED}/${MAX_WAIT}s)"
-        sleep $WAIT_INTERVAL
-        ELAPSED=$((ELAPSED + WAIT_INTERVAL))
-    done
-
-    if [ $ELAPSED -ge $MAX_WAIT ]; then
-        echo -e "${RED}Error: Timed out waiting for container to start${NC}"
-        echo "  Check container status: ssh root@${PROXMOX_HOST} 'pct status ${LXC_VMID}'"
-        exit 1
-    fi
-
-    # ===========================================
-    # PHASE 1: Bootstrap via pct exec
-    # Create deploy user with SSH password auth enabled
-    # ===========================================
-
-    echo -e "${GREEN}Phase 1: Bootstrapping container via pct exec...${NC}"
-
-    # Step 1: Install base packages
-    echo -e "${GREEN}  [1/6] Installing base packages...${NC}"
-    pct_exec "apt-get update"
-    pct_exec "apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates"
-
-    # Fix locale warnings
-    echo -e "${GREEN}  [2/6] Configuring locales...${NC}"
-    pct_exec "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen"
-    pct_exec "locale-gen en_US.UTF-8"
-
-    # Create deploy user with password
-    echo -e "${GREEN}  [3/6] Creating deploy user: ${SSH_USER}...${NC}"
-    pct_exec "useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER}" || true
-    # Set password via stdin to avoid quoting issues
-    echo "${SSH_USER}:${SSH_USER_PASSWORD}" | pct_push_stdin "/tmp/userpass"
-    pct_exec "chpasswd < /tmp/userpass"
-    pct_exec "rm -f /tmp/userpass"
-    # Setup sudoers
-    echo "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | pct_push_stdin "/etc/sudoers.d/${SSH_USER}"
-    pct_exec "chmod 440 /etc/sudoers.d/${SSH_USER}"
-
-    # Setup SSH directory for deploy user
-    echo -e "${GREEN}  [4/6] Setting up SSH for ${SSH_USER}...${NC}"
-    pct_exec "mkdir -p /home/${SSH_USER}/.ssh"
-    pct_exec "chmod 700 /home/${SSH_USER}/.ssh"
-
-    # Copy the public key to authorized_keys for password-less SSH (if available)
-    if [ -n "$SSH_PUBLIC_KEY" ]; then
-        echo -e "${GREEN}  Adding SSH public key for password-less login...${NC}"
-        echo "$SSH_PUBLIC_KEY" | pct_push_stdin "/home/${SSH_USER}/.ssh/authorized_keys"
-        pct_exec "chmod 600 /home/${SSH_USER}/.ssh/authorized_keys"
-    fi
-
-    # Create SSH config for GitHub
-    cat << 'SSHCFG' | pct_push_stdin "/home/${SSH_USER}/.ssh/config"
-Host github.com
+# Prepare base64-encoded data
+PASS_B64=$(echo -n "${SSH_USER}:${SSH_USER_PASSWORD}" | base64)
+SUDOERS_B64=$(echo -n "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | base64)
+GITHUB_KEY_B64=$(base64 -w0 < "${GITHUB_SSH_KEY}")
+SSH_CONFIG_B64=$(echo -n "Host github.com
     HostName github.com
     User git
     IdentityFile ~/.ssh/github_deploy_key
     IdentitiesOnly yes
-    StrictHostKeyChecking accept-new
-SSHCFG
-    pct_exec "chmod 600 /home/${SSH_USER}/.ssh/config"
+    StrictHostKeyChecking accept-new" | base64)
 
-    # Copy GitHub SSH key
-    echo -e "${GREEN}  [5/6] Copying GitHub SSH key to container...${NC}"
-    pct_push_stdin "/home/${SSH_USER}/.ssh/github_deploy_key" < "${GITHUB_SSH_KEY}"
-    pct_exec "chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key"
+# Run entire bootstrap in ONE SSH session to Proxmox
+proxmox_ssh << BOOTSTRAP_SCRIPT
+set -e
 
-    # Fix ownership of all SSH files
-    pct_exec "chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh"
+# Wait for container
+echo "  Waiting for container..."
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if pct status ${LXC_VMID} 2>/dev/null | grep -q running; then
+        echo "  Container is running"
+        break
+    fi
+    sleep 5
+done
 
-    # Ensure SSH password authentication is enabled for deploy user
-    echo -e "${GREEN}  [6/6] Configuring and starting SSH service...${NC}"
-    pct_exec "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config"
-    pct_exec "systemctl enable ssh"
-    pct_exec "systemctl start ssh"
+echo "  Installing packages..."
+pct exec ${LXC_VMID} -- apt-get update
+pct exec ${LXC_VMID} -- apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates
 
-    # ===========================================
-    # PHASE 2: Connect via SSH as deploy user
-    # Use key auth if available, otherwise password auth via sshpass
-    # ===========================================
+echo "  Configuring locale..."
+pct exec ${LXC_VMID} -- sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+pct exec ${LXC_VMID} -- locale-gen en_US.UTF-8
 
-    echo -e "${GREEN}Phase 2: Connecting via SSH as ${SSH_USER}...${NC}"
+echo "  Creating user: ${SSH_USER}..."
+pct exec ${LXC_VMID} -- useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || true
+pct exec ${LXC_VMID} -- bash -c 'echo ${PASS_B64} | base64 -d | chpasswd'
+pct exec ${LXC_VMID} -- bash -c 'echo ${SUDOERS_B64} | base64 -d > /etc/sudoers.d/${SSH_USER}'
+pct exec ${LXC_VMID} -- chmod 440 /etc/sudoers.d/${SSH_USER}
 
-    # Wait for SSH to be ready
-    MAX_SSH_WAIT=30
-    SSH_ELAPSED=0
-    SSH_READY=false
-    SSH_AUTH=""
+echo "  Setting up SSH..."
+pct exec ${LXC_VMID} -- mkdir -p /home/${SSH_USER}/.ssh
+pct exec ${LXC_VMID} -- chmod 700 /home/${SSH_USER}/.ssh
 
-    while [ $SSH_ELAPSED -lt $MAX_SSH_WAIT ]; do
-        # Try key-based auth first (if we have a public key)
-        if [ -n "$SSH_PUBLIC_KEY" ]; then
-            if ssh ${SSH_OPTS} -o ConnectTimeout=5 -o BatchMode=yes -i "${GITHUB_SSH_KEY}" ${SSH_USER}@${CONTAINER_IP} "echo ready" 2>/dev/null | grep -q ready; then
-                echo -e "${GREEN}  SSH ready (key auth) after ${SSH_ELAPSED}s${NC}"
-                SSH_READY=true
-                SSH_AUTH="-i ${GITHUB_SSH_KEY}"
-                break
-            fi
-        fi
-        # Try password auth via sshpass
-        if [ "$SSHPASS_AVAILABLE" = true ]; then
-            if sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_OPTS} -o ConnectTimeout=5 ${SSH_USER}@${CONTAINER_IP} "echo ready" 2>/dev/null | grep -q ready; then
-                echo -e "${GREEN}  SSH ready (password auth) after ${SSH_ELAPSED}s${NC}"
-                SSH_READY=true
-                SSH_AUTH="sshpass"
-                break
-            fi
-        fi
-        echo "  Waiting for SSH... (${SSH_ELAPSED}/${MAX_SSH_WAIT}s)"
-        sleep 5
-        SSH_ELAPSED=$((SSH_ELAPSED + 5))
-    done
+echo "  Copying GitHub SSH key..."
+pct exec ${LXC_VMID} -- bash -c 'echo ${GITHUB_KEY_B64} | base64 -d > /home/${SSH_USER}/.ssh/github_deploy_key'
+pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key
 
-    # Helper function to run commands on the container as deploy user
-    container_ssh() {
-        if [ "$SSH_AUTH" = "sshpass" ]; then
-            sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
-        elif [ -n "$SSH_AUTH" ]; then
-            ssh ${SSH_OPTS} ${SSH_AUTH} ${SSH_USER}@${CONTAINER_IP} "$@"
-        else
-            # No automated auth available - prompt user
-            ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
-        fi
-    }
+echo "  Creating SSH config..."
+pct exec ${LXC_VMID} -- bash -c 'echo ${SSH_CONFIG_B64} | base64 -d > /home/${SSH_USER}/.ssh/config'
+pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/config
 
-    if [ "$SSH_READY" = true ]; then
-        # ===========================================
-        # DIRECT SSH AS DEPLOY USER
-        # Proper login shell - source/venv works
-        # ===========================================
-        echo -e "${GREEN}Continuing setup via direct SSH as ${SSH_USER}...${NC}"
+echo "  Adding GitHub to known_hosts..."
+pct exec ${LXC_VMID} -- bash -c 'ssh-keyscan -t ed25519,rsa github.com >> /home/${SSH_USER}/.ssh/known_hosts 2>/dev/null'
+pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/known_hosts
 
-        container_ssh << REMOTE_SETUP
+pct exec ${LXC_VMID} -- chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh
+
+echo "  Starting SSH service..."
+pct exec ${LXC_VMID} -- sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+pct exec ${LXC_VMID} -- systemctl enable ssh
+pct exec ${LXC_VMID} -- systemctl start ssh
+
+echo "  Bootstrap complete!"
+BOOTSTRAP_SCRIPT
+
+echo -e "${GREEN}  Bootstrap complete - deploy user created${NC}"
+
+# ===========================================
+# FINISH SETUP VIA SSH AS DEPLOY USER
+# Use SSH multiplexing to reuse single connection
+# ===========================================
+
+echo -e "${GREEN}[5/5] Completing setup via SSH as ${SSH_USER}...${NC}"
+
+# Clear old host keys
+ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
+
+# Setup SSH multiplexing (reuse single connection, password only entered once)
+CONTROL_PATH="/tmp/ssh-deploy-${LXC_VMID}"
+SSH_MUX_OPTS="${SSH_OPTS} -o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
+
+# Helper: SSH to container (uses sshpass if available, otherwise prompts once)
+container_ssh() {
+    if [ "$SSHPASS_AVAILABLE" = true ]; then
+        sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
+    else
+        ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
+    fi
+}
+
+# Wait for SSH and establish master connection
+echo "  Waiting for SSH..."
+if [ "$SSHPASS_AVAILABLE" = false ]; then
+    echo -e "${YELLOW}  Enter the deploy user password when prompted (only once due to multiplexing)${NC}"
+fi
+
+for i in {1..6}; do
+    if container_ssh "echo ok" 2>/dev/null | grep -q ok; then
+        echo -e "${GREEN}  SSH connected${NC}"
+        break
+    fi
+    sleep 5
+done
+
+# Cleanup function for SSH multiplexing
+cleanup_ssh() {
+    ssh -O exit -o ControlPath=${CONTROL_PATH} ${SSH_USER}@${CONTAINER_IP} 2>/dev/null || true
+}
+trap cleanup_ssh EXIT
+
+# Run the rest via multiplexed SSH (no more password prompts)
+ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} << REMOTE_SETUP
 set -e
 export PATH="/usr/local/bin:\$PATH"
 export LANG=en_US.UTF-8
@@ -540,53 +413,25 @@ sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 sudo systemctl restart ssh
 REMOTE_SETUP
 
-    else
-        # ===========================================
-        # FALLBACK: Continue with pct exec
-        # ===========================================
-        echo -e "${YELLOW}SSH not ready, continuing with pct exec fallback...${NC}"
+# ===========================================
+# DONE
+# ===========================================
 
-        # Clone repository as deploy user
-        echo -e "${GREEN}  Cloning repository...${NC}"
-        pct_exec "mkdir -p /opt/Talos-CleanRoom"
-        pct_exec "chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom"
-        proxmox_ssh "pct exec ${LXC_VMID} -- su - ${SSH_USER} -c 'git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom'"
-
-        # Run setup script (use su - for proper login shell)
-        echo -e "${GREEN}  Running setup script...${NC}"
-        proxmox_ssh "pct exec ${LXC_VMID} -- bash -c 'cd /opt/Talos-CleanRoom/deployment-webui/scripts && chmod +x setup-lxc.sh && ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}'"
-
-        # Start service
-        echo -e "${GREEN}  Starting web UI service...${NC}"
-        pct_exec "systemctl start deployment-webui" || true
-        pct_exec "systemctl status deployment-webui --no-pager" || true
-
-        # Disable root SSH login
-        echo -e "${GREEN}  Disabling root SSH login...${NC}"
-        pct_exec "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config"
-        pct_exec "systemctl restart ssh"
-
-        # Test GitHub connectivity
-        echo -e "${GREEN}  Testing GitHub connectivity...${NC}"
-        proxmox_ssh "pct exec ${LXC_VMID} -- su - ${SSH_USER} -c 'ssh -T git@github.com 2>&1'" || true
-    fi
-
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}Setup Complete!${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo ""
-    echo "Web UI is now running at: http://${CONTAINER_IP}:8000"
-    echo ""
-    echo -e "${YELLOW}SSH Access (root login disabled):${NC}"
-    echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
-    echo "  Password: (the one you entered during setup)"
-    echo ""
-    echo "Don't forget to copy your SOPS keys:"
-    echo "  ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
-    echo "  scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
-    echo ""
-    echo -e "${YELLOW}Recovery (if locked out of SSH):${NC}"
-    echo "  ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
-    echo ""
-fi
+echo ""
+echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}Setup Complete!${NC}"
+echo -e "${GREEN}============================================${NC}"
+echo ""
+echo "Web UI: http://${CONTAINER_IP}:8000"
+echo "Login:  ${WEBUI_USER} / ${WEBUI_PASSWORD}"
+echo ""
+echo "SSH access:"
+echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
+echo ""
+echo "Don't forget to copy SOPS keys:"
+echo "  ssh ${SSH_USER}@${CONTAINER_IP} 'mkdir -p ~/.config/sops/age'"
+echo "  scp ~/.config/sops/age/keys.txt ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/"
+echo ""
+echo -e "${YELLOW}Recovery (if locked out):${NC}"
+echo "  ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
+echo ""
