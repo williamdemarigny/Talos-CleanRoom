@@ -56,38 +56,20 @@ spec:
           resizerReplicaCount: 2
           snapshotterReplicaCount: 2
 
-        # Longhorn Manager
+        # Longhorn Manager - runs on worker nodes only (no control-plane tolerations)
         longhornManager:
           priorityClass: ~
-          tolerations:
-            - key: node-role.kubernetes.io/control-plane
-              operator: Exists
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              operator: Exists
-              effect: NoSchedule
+          tolerations: []
 
-        # Longhorn Driver
+        # Longhorn Driver - runs on worker nodes only (no control-plane tolerations)
         longhornDriver:
           priorityClass: ~
-          tolerations:
-            - key: node-role.kubernetes.io/control-plane
-              operator: Exists
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              operator: Exists
-              effect: NoSchedule
+          tolerations: []
 
-        # Longhorn UI
+        # Longhorn UI - runs on worker nodes only
         longhornUI:
           replicas: 1
-          tolerations:
-            - key: node-role.kubernetes.io/control-plane
-              operator: Exists
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              operator: Exists
-              effect: NoSchedule
+          tolerations: []
 
         # Ingress for Longhorn UI (disabled by default)
         ingress:
