@@ -275,76 +275,84 @@ echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
 echo -e "${GREEN}[4/5] Bootstrapping container via pct exec...${NC}"
 echo -e "${YELLOW}  (One Proxmox password prompt for entire bootstrap)${NC}"
 
-# Prepare base64-encoded data
-PASS_B64=$(echo -n "${SSH_USER}:${SSH_USER_PASSWORD}" | base64)
-SUDOERS_B64=$(echo -n "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | base64)
-GITHUB_KEY_B64=$(base64 -w0 < "${GITHUB_SSH_KEY}")
-SSH_CONFIG_B64=$(echo -n "Host github.com
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/github_deploy_key
-    IdentitiesOnly yes
-    StrictHostKeyChecking accept-new" | base64)
+# Prepare base64-encoded data (single line, no wrapping)
+# Use tr to remove newlines for Windows compatibility (base64 -w0 not available everywhere)
+PASS_B64=$(echo -n "${SSH_USER}:${SSH_USER_PASSWORD}" | base64 | tr -d '\n\r')
+SUDOERS_B64=$(echo -n "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | base64 | tr -d '\n\r')
+GITHUB_KEY_B64=$(cat "${GITHUB_SSH_KEY}" | base64 | tr -d '\n\r')
+SSH_CONFIG_B64=$(printf "Host github.com\n    HostName github.com\n    User git\n    IdentityFile ~/.ssh/github_deploy_key\n    IdentitiesOnly yes\n    StrictHostKeyChecking accept-new" | base64 | tr -d '\n\r')
+
+# Debug: Show first 50 chars of encoded key to verify
+echo "  GitHub key encoded (first 50 chars): ${GITHUB_KEY_B64:0:50}..."
 
 # Run entire bootstrap in ONE SSH session to Proxmox
-proxmox_ssh << BOOTSTRAP_SCRIPT
+# Use quoted heredoc to prevent local expansion, then pass variables explicitly
+proxmox_ssh "
 set -e
 
+# Variables passed from local
+PASS_B64='${PASS_B64}'
+SUDOERS_B64='${SUDOERS_B64}'
+GITHUB_KEY_B64='${GITHUB_KEY_B64}'
+SSH_CONFIG_B64='${SSH_CONFIG_B64}'
+LXC_VMID=${LXC_VMID}
+SSH_USER=${SSH_USER}
+SSH_USER_GROUPS=${SSH_USER_GROUPS}
+
 # Wait for container
-echo "  Waiting for container..."
+echo '  Waiting for container...'
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    if pct status ${LXC_VMID} 2>/dev/null | grep -q running; then
-        echo "  Container is running"
+    if pct status \${LXC_VMID} 2>/dev/null | grep -q running; then
+        echo '  Container is running'
         break
     fi
     sleep 5
 done
 
-echo "  Installing packages..."
-pct exec ${LXC_VMID} -- apt-get update
-pct exec ${LXC_VMID} -- apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates
+echo '  Installing packages...'
+pct exec \${LXC_VMID} -- apt-get update
+pct exec \${LXC_VMID} -- apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates coreutils
 
-echo "  Configuring locale..."
-pct exec ${LXC_VMID} -- sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-pct exec ${LXC_VMID} -- locale-gen en_US.UTF-8
+echo '  Configuring locale...'
+pct exec \${LXC_VMID} -- sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+pct exec \${LXC_VMID} -- locale-gen en_US.UTF-8
 
-echo "  Creating user: ${SSH_USER}..."
-pct exec ${LXC_VMID} -- useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || true
-pct exec ${LXC_VMID} -- bash -c 'echo ${PASS_B64} | base64 -d | chpasswd'
-pct exec ${LXC_VMID} -- bash -c 'echo ${SUDOERS_B64} | base64 -d > /etc/sudoers.d/${SSH_USER}'
-pct exec ${LXC_VMID} -- chmod 440 /etc/sudoers.d/${SSH_USER}
+echo '  Creating user: '\${SSH_USER}'...'
+pct exec \${LXC_VMID} -- useradd -m -s /bin/bash -G \${SSH_USER_GROUPS} \${SSH_USER} 2>/dev/null || true
+pct exec \${LXC_VMID} -- bash -c \"echo \${PASS_B64} | base64 -d | chpasswd\"
+pct exec \${LXC_VMID} -- bash -c \"echo \${SUDOERS_B64} | base64 -d > /etc/sudoers.d/\${SSH_USER}\"
+pct exec \${LXC_VMID} -- chmod 440 /etc/sudoers.d/\${SSH_USER}
 
-echo "  Setting up SSH..."
-pct exec ${LXC_VMID} -- mkdir -p /home/${SSH_USER}/.ssh
-pct exec ${LXC_VMID} -- chmod 700 /home/${SSH_USER}/.ssh
+echo '  Setting up SSH...'
+pct exec \${LXC_VMID} -- mkdir -p /home/\${SSH_USER}/.ssh
+pct exec \${LXC_VMID} -- chmod 700 /home/\${SSH_USER}/.ssh
 
-echo "  Copying GitHub SSH key..."
-pct exec ${LXC_VMID} -- bash -c 'echo ${GITHUB_KEY_B64} | base64 -d > /home/${SSH_USER}/.ssh/github_deploy_key'
-pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/github_deploy_key
+echo '  Copying GitHub SSH key...'
+pct exec \${LXC_VMID} -- bash -c \"echo \${GITHUB_KEY_B64} | base64 -d > /home/\${SSH_USER}/.ssh/github_deploy_key\"
+pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/github_deploy_key
 
-echo "  Creating SSH config..."
-pct exec ${LXC_VMID} -- bash -c 'echo ${SSH_CONFIG_B64} | base64 -d > /home/${SSH_USER}/.ssh/config'
-pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/config
+echo '  Creating SSH config...'
+pct exec \${LXC_VMID} -- bash -c \"echo \${SSH_CONFIG_B64} | base64 -d > /home/\${SSH_USER}/.ssh/config\"
+pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/config
 
-echo "  Adding GitHub to known_hosts..."
-pct exec ${LXC_VMID} -- bash -c 'ssh-keyscan -t ed25519,rsa github.com >> /home/${SSH_USER}/.ssh/known_hosts 2>/dev/null'
-pct exec ${LXC_VMID} -- chmod 600 /home/${SSH_USER}/.ssh/known_hosts
+echo '  Adding GitHub to known_hosts...'
+pct exec \${LXC_VMID} -- bash -c 'ssh-keyscan -t ed25519,rsa github.com >> /home/'\${SSH_USER}'/.ssh/known_hosts 2>/dev/null'
+pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/known_hosts
 
-pct exec ${LXC_VMID} -- chown -R ${SSH_USER}:${SSH_USER} /home/${SSH_USER}/.ssh
+pct exec \${LXC_VMID} -- chown -R \${SSH_USER}:\${SSH_USER} /home/\${SSH_USER}/.ssh
 
-echo "  Starting SSH service..."
-pct exec ${LXC_VMID} -- sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-pct exec ${LXC_VMID} -- systemctl enable ssh
-pct exec ${LXC_VMID} -- systemctl start ssh
+echo '  Starting SSH service...'
+pct exec \${LXC_VMID} -- sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+pct exec \${LXC_VMID} -- systemctl enable ssh
+pct exec \${LXC_VMID} -- systemctl start ssh
 
-echo "  Bootstrap complete!"
-BOOTSTRAP_SCRIPT
+echo '  Bootstrap complete!'
+"
 
 echo -e "${GREEN}  Bootstrap complete - deploy user created${NC}"
 
 # ===========================================
 # FINISH SETUP VIA SSH AS DEPLOY USER
-# Use SSH multiplexing to reuse single connection
 # ===========================================
 
 echo -e "${GREEN}[5/5] Completing setup via SSH as ${SSH_USER}...${NC}"
@@ -352,23 +360,19 @@ echo -e "${GREEN}[5/5] Completing setup via SSH as ${SSH_USER}...${NC}"
 # Clear old host keys
 ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
 
-# Setup SSH multiplexing (reuse single connection, password only entered once)
-CONTROL_PATH="/tmp/ssh-deploy-${LXC_VMID}"
-SSH_MUX_OPTS="${SSH_OPTS} -o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
-
-# Helper: SSH to container (uses sshpass if available, otherwise prompts once)
+# Helper: SSH to container (uses sshpass if available)
 container_ssh() {
     if [ "$SSHPASS_AVAILABLE" = true ]; then
-        sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
+        sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
     else
-        ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
+        ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
     fi
 }
 
-# Wait for SSH and establish master connection
+# Wait for SSH to be ready
 echo "  Waiting for SSH..."
 if [ "$SSHPASS_AVAILABLE" = false ]; then
-    echo -e "${YELLOW}  Enter the deploy user password when prompted (only once due to multiplexing)${NC}"
+    echo -e "${YELLOW}  Enter the deploy user password when prompted${NC}"
 fi
 
 for i in {1..6}; do
@@ -379,39 +383,38 @@ for i in {1..6}; do
     sleep 5
 done
 
-# Cleanup function for SSH multiplexing
-cleanup_ssh() {
-    ssh -O exit -o ControlPath=${CONTROL_PATH} ${SSH_USER}@${CONTAINER_IP} 2>/dev/null || true
-}
-trap cleanup_ssh EXIT
-
-# Run the rest via multiplexed SSH (no more password prompts)
-ssh ${SSH_MUX_OPTS} ${SSH_USER}@${CONTAINER_IP} << REMOTE_SETUP
+# Run setup via SSH - use -t to force tty allocation
+# Use bash -l for login shell to get proper PATH
+container_ssh -t "bash -l -c '
 set -e
-export PATH="/usr/local/bin:\$PATH"
+export PATH=\"/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\\\$PATH\"
 export LANG=en_US.UTF-8
 
-echo "=== Testing GitHub connectivity ==="
-ssh -T git@github.com 2>&1 || true
+echo \"=== Checking SSH key ===\"
+/bin/ls -la ~/.ssh/
+/bin/cat ~/.ssh/config
 
-echo "=== Cloning repository ==="
-sudo mkdir -p /opt/Talos-CleanRoom
-sudo chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom
+echo \"=== Testing GitHub connectivity ===\"
+/usr/bin/ssh -vT git@github.com 2>&1 || true
 
-echo "=== Running setup script ==="
+echo \"=== Cloning repository ===\"
+/usr/bin/sudo /bin/mkdir -p /opt/Talos-CleanRoom
+/usr/bin/sudo /bin/chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
+/usr/bin/git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom
+
+echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
-chmod +x setup-lxc.sh
-sudo ./setup-lxc.sh --webui-password "${WEBUI_PASSWORD}"
+/bin/chmod +x setup-lxc.sh
+/usr/bin/sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}
 
-echo "=== Starting web UI service ==="
-sudo systemctl start deployment-webui || echo "Service may need manual start"
-sudo systemctl status deployment-webui --no-pager || true
+echo \"=== Starting web UI service ===\"
+/usr/bin/sudo /bin/systemctl start deployment-webui || echo \"Service may need manual start\"
+/usr/bin/sudo /bin/systemctl status deployment-webui --no-pager || true
 
-echo "=== Disabling root SSH login ==="
-sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sudo systemctl restart ssh
-REMOTE_SETUP
+echo \"=== Disabling root SSH login ===\"
+/usr/bin/sudo /bin/sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
+/usr/bin/sudo /bin/systemctl restart ssh
+'"
 
 # ===========================================
 # DONE
