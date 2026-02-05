@@ -148,11 +148,6 @@ proxmox_ssh() {
     fi
 }
 
-# Helper: Run command in container via pct exec
-pct_exec() {
-    proxmox_ssh "pct exec ${LXC_VMID} -- $1"
-}
-
 # ===========================================
 # CHECK LXC TEMPLATE
 # ===========================================
@@ -267,152 +262,89 @@ CONTAINER_IP="${LXC_IP%/*}"
 echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
 
 # ===========================================
-# BOOTSTRAP VIA PCT EXEC
-# Create deploy user, install SSH, copy keys
-# All done in ONE SSH session to avoid multiple password prompts
+# SETUP VIA SINGLE PCT EXEC SESSION
+# All setup in one SSH session to Proxmox
+# Using the proven approach from commit 51b544b
 # ===========================================
 
-echo -e "${GREEN}[4/5] Bootstrapping container via pct exec...${NC}"
-echo -e "${YELLOW}  (One Proxmox password prompt for entire bootstrap)${NC}"
+echo -e "${GREEN}[4/5] Setting up container via pct exec...${NC}"
+echo -e "${YELLOW}  (One Proxmox password prompt for entire setup)${NC}"
 
-# First, copy the GitHub SSH key to Proxmox host, then use pct push to get it into the container
-# This avoids base64 encoding issues
-echo "  Copying GitHub SSH key to Proxmox..."
-scp ${SSH_OPTS} "${GITHUB_SSH_KEY}" root@${PROXMOX_HOST}:/tmp/github_deploy_key
+# Read the GitHub SSH key content
+GITHUB_SSH_KEY_CONTENT=$(cat "${GITHUB_SSH_KEY}")
 
-# Prepare base64-encoded data for simple strings only
-PASS_B64=$(echo -n "${SSH_USER}:${SSH_USER_PASSWORD}" | base64 | tr -d '\n\r')
-SUDOERS_B64=$(echo -n "${SSH_USER} ALL=(ALL) NOPASSWD:ALL" | base64 | tr -d '\n\r')
-SSH_CONFIG_B64=$(printf "Host github.com\n    HostName github.com\n    User git\n    IdentityFile ~/.ssh/github_deploy_key\n    IdentitiesOnly yes\n    StrictHostKeyChecking accept-new" | base64 | tr -d '\n\r')
-
-# Run entire bootstrap in ONE SSH session to Proxmox
-proxmox_ssh "
-set -e
-
-PASS_B64='${PASS_B64}'
-SUDOERS_B64='${SUDOERS_B64}'
-SSH_CONFIG_B64='${SSH_CONFIG_B64}'
-LXC_VMID=${LXC_VMID}
-SSH_USER=${SSH_USER}
-SSH_USER_GROUPS=${SSH_USER_GROUPS}
-
-# Wait for container
-echo '  Waiting for container...'
-for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    if pct status \${LXC_VMID} 2>/dev/null | grep -q running; then
-        echo '  Container is running'
-        break
-    fi
-    sleep 5
-done
-
-echo '  Installing packages...'
-pct exec \${LXC_VMID} -- apt-get update
-pct exec \${LXC_VMID} -- apt-get install -y sudo git openssh-server locales curl wget gnupg ca-certificates coreutils
-
-echo '  Configuring locale...'
-pct exec \${LXC_VMID} -- sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-pct exec \${LXC_VMID} -- locale-gen en_US.UTF-8
-
-echo '  Creating user: '\${SSH_USER}'...'
-pct exec \${LXC_VMID} -- useradd -m -s /bin/bash -G \${SSH_USER_GROUPS} \${SSH_USER} 2>/dev/null || true
-pct exec \${LXC_VMID} -- bash -c \"echo \${PASS_B64} | base64 -d | chpasswd\"
-pct exec \${LXC_VMID} -- bash -c \"echo \${SUDOERS_B64} | base64 -d > /etc/sudoers.d/\${SSH_USER}\"
-pct exec \${LXC_VMID} -- chmod 440 /etc/sudoers.d/\${SSH_USER}
-
-echo '  Setting up SSH directory...'
-pct exec \${LXC_VMID} -- mkdir -p /home/\${SSH_USER}/.ssh
-pct exec \${LXC_VMID} -- chmod 700 /home/\${SSH_USER}/.ssh
-
-echo '  Copying GitHub SSH key via pct push...'
-pct push \${LXC_VMID} /tmp/github_deploy_key /home/\${SSH_USER}/.ssh/github_deploy_key
-pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/github_deploy_key
-rm -f /tmp/github_deploy_key
-
-echo '  Creating SSH config...'
-pct exec \${LXC_VMID} -- bash -c \"echo \${SSH_CONFIG_B64} | base64 -d > /home/\${SSH_USER}/.ssh/config\"
-pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/config
-
-echo '  Adding GitHub to known_hosts...'
-pct exec \${LXC_VMID} -- bash -c 'ssh-keyscan -t ed25519,rsa github.com >> /home/'\${SSH_USER}'/.ssh/known_hosts 2>/dev/null'
-pct exec \${LXC_VMID} -- chmod 600 /home/\${SSH_USER}/.ssh/known_hosts
-
-pct exec \${LXC_VMID} -- chown -R \${SSH_USER}:\${SSH_USER} /home/\${SSH_USER}/.ssh
-
-echo '  Starting SSH service...'
-pct exec \${LXC_VMID} -- sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-pct exec \${LXC_VMID} -- systemctl enable ssh
-pct exec \${LXC_VMID} -- systemctl start ssh
-
-echo '  Bootstrap complete!'
-"
-
-echo -e "${GREEN}  Bootstrap complete - deploy user created${NC}"
-
-# ===========================================
-# FINISH SETUP VIA SSH AS DEPLOY USER
-# ===========================================
-
-echo -e "${GREEN}[5/5] Completing setup via SSH as ${SSH_USER}...${NC}"
-
-# Clear old host keys
+# Clear old host keys for the container IP
 ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
 
-# Helper: SSH to container (uses sshpass if available)
-container_ssh() {
-    if [ "$SSHPASS_AVAILABLE" = true ]; then
-        sshpass -p "${SSH_USER_PASSWORD}" ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
-    else
-        ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "$@"
-    fi
-}
-
-# Wait for SSH to be ready
-echo "  Waiting for SSH..."
-if [ "$SSHPASS_AVAILABLE" = false ]; then
-    echo -e "${YELLOW}  Enter the deploy user password when prompted${NC}"
-fi
-
-for i in {1..6}; do
-    if container_ssh "echo ok" 2>/dev/null | grep -q ok; then
-        echo -e "${GREEN}  SSH connected${NC}"
-        break
-    fi
-    sleep 5
-done
-
-# Run setup via SSH - use -t to force tty allocation
-# Use bash -l for login shell to get proper PATH
-container_ssh -t "bash -l -c '
+# Use pct exec via Proxmox SSH - this bypasses container SSH authentication entirely
+# Everything runs in ONE session
+proxmox_ssh "pct exec ${LXC_VMID} -- bash -c '
 set -e
-export PATH=\"/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\\\$PATH\"
-export LANG=en_US.UTF-8
 
-echo \"=== Checking SSH key ===\"
-/bin/ls -la ~/.ssh/
-/bin/cat ~/.ssh/config
+echo \"=== Installing packages ===\"
+apt-get update && apt-get install -y sudo git locales
+
+# Fix locale warnings
+sed -i \"s/# en_US.UTF-8/en_US.UTF-8/\" /etc/locale.gen
+locale-gen en_US.UTF-8
+
+echo \"=== Creating non-root SSH user: ${SSH_USER} ===\"
+useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || echo \"User exists\"
+echo \"${SSH_USER}:${SSH_USER_PASSWORD}\" | chpasswd
+echo \"${SSH_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${SSH_USER}
+chmod 440 /etc/sudoers.d/${SSH_USER}
+
+echo \"=== Disabling root SSH login ===\"
+sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
+systemctl restart ssh
+
+echo \"=== Setting up GitHub SSH key for ${SSH_USER} ===\"
+SSH_USER_HOME=\"/home/${SSH_USER}\"
+mkdir -p \${SSH_USER_HOME}/.ssh
+chmod 700 \${SSH_USER_HOME}/.ssh
+
+cat > \${SSH_USER_HOME}/.ssh/github_deploy_key << \"KEYEOF\"
+${GITHUB_SSH_KEY_CONTENT}
+KEYEOF
+chmod 600 \${SSH_USER_HOME}/.ssh/github_deploy_key
+
+cat > \${SSH_USER_HOME}/.ssh/config << \"SSHCONFIG\"
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy_key
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+SSHCONFIG
+chmod 600 \${SSH_USER_HOME}/.ssh/config
+
+chown -R ${SSH_USER}:${SSH_USER} \${SSH_USER_HOME}/.ssh
 
 echo \"=== Testing GitHub connectivity ===\"
-/usr/bin/ssh -vT git@github.com 2>&1 || true
+su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
 echo \"=== Cloning repository ===\"
-/usr/bin/sudo /bin/mkdir -p /opt/Talos-CleanRoom
-/usr/bin/sudo /bin/chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-/usr/bin/git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom
+# Create /opt/Talos-CleanRoom with correct ownership before cloning
+mkdir -p /opt/Talos-CleanRoom
+chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
+su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
 
 echo \"=== Running setup script ===\"
 cd /opt/Talos-CleanRoom/deployment-webui/scripts
-/bin/chmod +x setup-lxc.sh
-/usr/bin/sudo ./setup-lxc.sh --webui-password ${WEBUI_PASSWORD}
+chmod +x setup-lxc.sh
+./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
 
 echo \"=== Starting web UI service ===\"
-/usr/bin/sudo /bin/systemctl start deployment-webui || echo \"Service may need manual start\"
-/usr/bin/sudo /bin/systemctl status deployment-webui --no-pager || true
+systemctl start deployment-webui || echo \"Service may need manual start\"
+systemctl status deployment-webui --no-pager || true
 
-echo \"=== Disabling root SSH login ===\"
-/usr/bin/sudo /bin/sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
-/usr/bin/sudo /bin/systemctl restart ssh
+echo \"\"
+echo \"=== Setup Complete ===\"
+echo \"SSH user: ${SSH_USER}\"
+echo \"Root SSH: disabled\"
 '"
+
+echo -e "${GREEN}[5/5] Container setup complete${NC}"
 
 # ===========================================
 # DONE
