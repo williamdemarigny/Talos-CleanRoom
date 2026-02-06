@@ -10,7 +10,7 @@ set -eo pipefail
 export PATH="/usr/local/bin:$PATH"
 
 # Default values
-REPO_PATH="/opt/Talos-CleanRoom"
+REPO_PATH="/opt/talos-cleanroom"
 WEBUI_USER="admin"
 WEBUI_PASSWORD="admin"
 WEBUI_PORT="8000"
@@ -226,7 +226,7 @@ echo ""
 echo "Next Steps:"
 echo ""
 echo "1. If using bind mount for repository, add to /etc/pve/lxc/<VMID>.conf:"
-echo "   mp0: /path/to/Talos-CleanRoom,mp=$REPO_PATH"
+echo "   mp0: /path/to/talos-cleanroom,mp=$REPO_PATH"
 echo ""
 echo "2. Copy SOPS age keys to: /root/.config/sops/age/keys.txt"
 echo ""
