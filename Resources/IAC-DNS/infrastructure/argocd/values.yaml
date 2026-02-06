@@ -165,8 +165,8 @@ configs:
     # Annotations for the secret
     annotations: {}
     # Admin password (bcrypt hash of 'admin')
-    # Generate new hash: htpasswd -nbBC 10 "" YOUR_PASSWORD | tr -d ':\n' | sed 's/$2y/$2a/'
-    argocdServerAdminPassword: "$2a$10$rRyBsGSHK6.uc8fntPwVIuLVHgsAhAX7TcdrqW/RADU0ez4OxyBy4"
+    # Generate new hash: python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt(rounds=10)).decode())"
+    argocdServerAdminPassword: "$2b$10$34yPsNLGvSW7jjktXUbR0OPh93HpSr0.VDCiRMZh4XsHcdWMYR4o2"
 
   # Known hosts for SSH (GitHub only - add other hosts as needed)
   ssh:
