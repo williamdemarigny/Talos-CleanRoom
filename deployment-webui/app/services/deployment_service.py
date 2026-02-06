@@ -583,21 +583,28 @@ class DeploymentService:
 
         max_wait = self.health_check_retries * self.health_check_interval
         await self.log(step_id, "info", f"Waiting for cluster health (max wait: {max_wait}s)...")
+        await self.log(step_id, "info", f"Using TALOSCONFIG: {talosconfig}")
+        await self.log(step_id, "info", f"Target node: {self.master_node}")
 
         for i in range(1, self.health_check_retries + 1):
             if self.current_deployment.status != DeploymentStatus.RUNNING:
                 return False
 
             result = await self.process_manager.run_command_simple(
-                ["talosctl", "health", f"--nodes={self.master_node}"],
+                ["talosctl", "health",
+                 f"--nodes={self.master_node}",
+                 f"--endpoints={self.master_node}"],
                 env=env,
-                timeout=30
+                timeout=60
             )
 
             if result.success:
                 await self.log(step_id, "info", "Cluster is healthy!")
                 return True
 
+            # Log the actual error to help diagnose issues
+            error_preview = (result.output or "no output")[:300].replace('\n', ' ')
+            await self.log(step_id, "info", f"Health check failed (rc={result.return_code}): {error_preview}")
             await self.log(step_id, "info", f"Retrying ({i}/{self.health_check_retries})...")
             await asyncio.sleep(self.health_check_interval)
 
