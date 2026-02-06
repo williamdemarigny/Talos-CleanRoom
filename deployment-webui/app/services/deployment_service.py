@@ -383,10 +383,10 @@ class DeploymentService:
 
                 # If we have a DHCP IP, check Talos API on that IP
                 if dhcp_ip:
-                    # Use 'talosctl disks --insecure' which is known to work in maintenance mode
-                    # See: https://www.talos.dev/v1.11/talos-guides/configuration/insecure/
+                    # Use 'talosctl disks' which works in maintenance mode
+                    # Note: In talosctl 1.12+, --insecure is a global flag (before command)
                     check_result = await self.process_manager.run_command_simple(
-                        ["talosctl", "disks", "--insecure", "--nodes", dhcp_ip, "--endpoints", dhcp_ip],
+                        ["talosctl", "--insecure", "-n", dhcp_ip, "-e", dhcp_ip, "disks"],
                         timeout=15
                     )
 
