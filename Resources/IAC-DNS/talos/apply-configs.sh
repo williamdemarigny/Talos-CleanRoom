@@ -53,15 +53,22 @@ wait_for_talos_api() {
         local output
         local exit_code
 
+        # Capture output and exit code without triggering set -e
         if [[ "$use_insecure" == "true" ]]; then
             # In maintenance mode, use 'disks' command which is known to work
             # Note: In talosctl 1.12+, --insecure is a global flag (before command)
-            output=$(talosctl --insecure -n "$ip" -e "$ip" disks 2>&1)
-            exit_code=$?
+            if output=$(talosctl --insecure -n "$ip" -e "$ip" disks 2>&1); then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
         else
             # For configured nodes, use TALOSCONFIG
-            output=$(talosctl version --nodes "$ip" --endpoints "$ip" 2>&1)
-            exit_code=$?
+            if output=$(talosctl version --nodes "$ip" --endpoints "$ip" 2>&1); then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
         fi
 
         # Debug: show what we got
@@ -409,8 +416,12 @@ while IFS= read -r line; do
 
                     for ((a=1; a<=apply_attempts; a++)); do
                         # In talosctl 1.12+, --insecure is a global flag (before command)
-                        apply_output=$(talosctl --insecure -n "$dhcp_ip" apply-config --file "$config_file" 2>&1)
-                        apply_exit=$?
+                        # Capture output and exit code without triggering set -e
+                        if apply_output=$(talosctl --insecure -n "$dhcp_ip" apply-config --file "$config_file" 2>&1); then
+                            apply_exit=0
+                        else
+                            apply_exit=$?
+                        fi
 
                         if [[ $apply_exit -eq 0 ]]; then
                             print_success "  Config applied successfully!"
