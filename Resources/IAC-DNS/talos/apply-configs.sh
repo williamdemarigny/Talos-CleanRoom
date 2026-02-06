@@ -55,9 +55,9 @@ wait_for_talos_api() {
 
         # Capture output and exit code without triggering set -e
         if [[ "$use_insecure" == "true" ]]; then
-            # In maintenance mode, use 'disks' command which is known to work
-            # Note: In talosctl 1.12+, --insecure is a global flag (before command)
-            if output=$(talosctl disks --insecure -n "$ip" -e "$ip" 2>&1); then
+            # In maintenance mode, use 'version --insecure' to check API readiness
+            # Note: talosctl 1.12+ doesn't support --insecure on disks command
+            if output=$(talosctl version --insecure -n "$ip" -e "$ip" 2>&1); then
                 exit_code=0
             else
                 exit_code=$?
@@ -74,14 +74,15 @@ wait_for_talos_api() {
         # Debug: show what we got
         print_info "    Response (exit=$exit_code): ${output:0:100}"
 
-        # API is ready if:
-        # 1. Command succeeds (exit code 0) - works for both modes
-        # 2. Response contains disk info (DEV, MODEL, etc.) - maintenance mode
-        # 3. Response contains "maintenance mode" - explicit maintenance indicator
+        # API is ready if command succeeds (exit code 0)
+        # The port check above ensures we only get here if the port is open
         if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
             return 0
-        elif echo "$output" | grep -qiE "(DEV|MODEL|SIZE|maintenance mode)"; then
+        fi
+
+        # Check for specific error messages that indicate API is responding but in maintenance mode
+        if echo "$output" | grep -qi "maintenance mode"; then
             print_success "  Talos API is ready on $ip (maintenance mode)"
             return 0
         fi
