@@ -45,7 +45,7 @@ opnsense_vms = [
 # ============================================================================
 # Talos ISOs uploaded to Proxmox ISO storage
 # Confirm filenames match Proxmox storage list.
-talos_iso_file = "cephfs:iso/metal-amd64.iso" # Talos v1.12.2 ISO
+talos_iso_file = "cephfs:iso/nocloud-amd64.iso" # Talos v1.12.2 with qemu-guest-agent
 
 # Datastore for all VM disks (primary + Longhorn secondary). Uses shared Ceph storage for HA compatibility.
 disk_storage = "CleanRoom_Storage"
