@@ -59,16 +59,14 @@ wait_for_talos_api() {
 
         # API is ready if:
         # 1. Command succeeds (exit code 0), OR
-        # 2. Response contains "maintenance mode" (API reachable but not configured yet), OR
-        # 3. Response contains version info (Tag:, Client:, Server:)
+        # 2. Response contains "maintenance mode" (API reachable but not configured yet)
+        # NOTE: Do NOT check for "Client:" or "Tag:" - talosctl always prints client info
+        #       even when the server is unreachable. We need actual server response.
         if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
             return 0
         elif echo "$output" | grep -qi "maintenance mode"; then
             print_success "  Talos API is ready on $ip (maintenance mode)"
-            return 0
-        elif echo "$output" | grep -qiE "(Tag:|Client:|Server:)"; then
-            print_success "  Talos API is ready on $ip (got version info)"
             return 0
         fi
 
