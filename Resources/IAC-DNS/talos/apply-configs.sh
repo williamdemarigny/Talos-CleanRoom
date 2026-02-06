@@ -400,12 +400,35 @@ while IFS= read -r line; do
                     print_info "  [DRY RUN] Would apply config to $dhcp_ip"
                 else
                     print_info "  Applying configuration..."
-                    if talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1; then
-                        print_success "  Config applied successfully!"
-                        print_info "  VM will reboot and come up at: $target_endpoint"
-                        APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
-                    else
-                        print_error "  Failed to apply config"
+
+                    # Retry apply-config up to 5 times with 10 second delays
+                    # The API check may pass but the node might not be fully ready for config
+                    local apply_success=false
+                    local apply_attempts=5
+                    local apply_interval=10
+
+                    for ((a=1; a<=apply_attempts; a++)); do
+                        local apply_output
+                        apply_output=$(talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1)
+                        local apply_exit=$?
+
+                        if [[ $apply_exit -eq 0 ]]; then
+                            print_success "  Config applied successfully!"
+                            print_info "  VM will reboot and come up at: $target_endpoint"
+                            APPLIED_VMS+=("$name:$dhcp_ip:$target_endpoint")
+                            apply_success=true
+                            break
+                        else
+                            print_warning "  Apply attempt $a/$apply_attempts failed: ${apply_output:0:100}"
+                            if [[ $a -lt $apply_attempts ]]; then
+                                print_info "  Retrying in ${apply_interval}s..."
+                                sleep "$apply_interval"
+                            fi
+                        fi
+                    done
+
+                    if [[ "$apply_success" == false ]]; then
+                        print_error "  Failed to apply config after $apply_attempts attempts"
                     fi
                 fi
 
