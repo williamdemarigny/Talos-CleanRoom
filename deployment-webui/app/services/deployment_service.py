@@ -203,6 +203,11 @@ class DeploymentService:
         """Step 0: Validate git repository."""
         await self.log(step_id, "info", "Validating git repository...")
 
+        # Log configured paths for debugging
+        await self.log(step_id, "info", f"REPO_ROOT configured as: {self.repo_root}")
+        await self.log(step_id, "info", f"Terraform directory: {self.terraform_dir}")
+        await self.log(step_id, "info", f"Talos directory: {self.talos_dir}")
+
         if not self.repo_root.exists():
             await self.log(step_id, "error", f"Repository root not found: {self.repo_root}")
             return False
@@ -427,6 +432,22 @@ class DeploymentService:
             os.path.expanduser("~/.config/sops/age/keys.txt")
         )
         env = {"SOPS_AGE_KEY_FILE": sops_key_file}
+
+        # Verify talos_dir exists (should contain talconfig.yaml, apply-configs.sh, etc.)
+        if not self.talos_dir.exists():
+            await self.log(step_id, "error", f"Talos directory not found: {self.talos_dir}")
+            await self.log(step_id, "error", f"REPO_ROOT may be misconfigured. Current value: {self.repo_root}")
+            await self.log(step_id, "error", "Check that REPO_ROOT in .env matches the actual repository path")
+            return False
+
+        # Verify talconfig.yaml exists (required for config generation)
+        talconfig_file = self.talos_dir / "talconfig.yaml"
+        if not talconfig_file.exists():
+            await self.log(step_id, "error", f"talconfig.yaml not found in {self.talos_dir}")
+            await self.log(step_id, "error", "This file is required for Talos config generation")
+            return False
+
+        await self.log(step_id, "info", f"Found talconfig.yaml in {self.talos_dir}")
 
         # Ensure clusterconfig directory exists
         clusterconfig_dir = self.talos_dir / "clusterconfig"
