@@ -37,8 +37,19 @@ wait_for_talos_api() {
     print_info "  Waiting for Talos API on $ip:50000..."
 
     for ((i=1; i<=max_attempts; i++)); do
-        if talosctl version --insecure --nodes "$ip" --endpoints "$ip" &>/dev/null; then
+        # Try to get version - capture both stdout and stderr
+        local output
+        output=$(talosctl version --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
+        local exit_code=$?
+
+        # API is ready if:
+        # 1. Command succeeds (exit code 0), OR
+        # 2. Response contains "maintenance mode" (API reachable but not configured yet)
+        if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
+            return 0
+        elif echo "$output" | grep -qi "maintenance mode"; then
+            print_success "  Talos API is ready on $ip (maintenance mode)"
             return 0
         fi
 

@@ -383,8 +383,16 @@ class DeploymentService:
                         timeout=10
                     )
 
+                    # The API is ready if:
+                    # 1. Command succeeds (exit code 0), OR
+                    # 2. We get a response indicating maintenance mode (API is reachable but not configured)
+                    #    "API is not implemented in maintenance mode" means the node is ready for config
                     if check_result.success:
                         await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip}")
+                        ready = True
+                        break
+                    elif check_result.output and "maintenance mode" in check_result.output.lower():
+                        await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip} (maintenance mode)")
                         ready = True
                         break
                     else:
