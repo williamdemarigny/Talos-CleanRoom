@@ -359,16 +359,16 @@ echo \"=== Testing GitHub connectivity ===\"
 su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
 echo \"=== Cloning repository ===\"
-# Create /opt/Talos-CleanRoom with correct ownership before cloning
-mkdir -p /opt/Talos-CleanRoom
-chown ${SSH_USER}:${SSH_USER} /opt/Talos-CleanRoom
-su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/Talos-CleanRoom\"
+# Create /opt/talos-cleanroom with correct ownership before cloning
+mkdir -p /opt/talos-cleanroom
+chown ${SSH_USER}:${SSH_USER} /opt/talos-cleanroom
+su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/talos-cleanroom\"
 
 # Add safe.directory for root (WebUI runs as root but repo owned by deploy user)
-git config --global --add safe.directory /opt/Talos-CleanRoom
+git config --global --add safe.directory /opt/talos-cleanroom
 
 echo \"=== Running setup script ===\"
-cd /opt/Talos-CleanRoom/deployment-webui/scripts
+cd /opt/talos-cleanroom/deployment-webui/scripts
 chmod +x setup-lxc.sh
 ./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
 
@@ -410,7 +410,7 @@ echo -e "${GREEN}  SOPS keys copied (deploy + root)${NC}"
 
 # Copy Terraform credentials
 echo "  Copying Terraform credentials..."
-scp ${SSH_OPTS} "${TF_CREDS_FILE}" ${SSH_USER}@${CONTAINER_IP}:/opt/Talos-CleanRoom/Resources/IAC-DNS/terraform/talos-cluster-create/
+scp ${SSH_OPTS} "${TF_CREDS_FILE}" ${SSH_USER}@${CONTAINER_IP}:/opt/talos-cleanroom/Resources/IAC-DNS/terraform/talos-cluster-create/
 echo -e "${GREEN}  Terraform credentials copied${NC}"
 
 # ===========================================

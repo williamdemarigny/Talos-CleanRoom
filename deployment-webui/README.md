@@ -95,10 +95,10 @@ If you prefer manual control, you can deploy step-by-step:
 5. **Clone the repository and run setup**:
    ```bash
    # Clone via SSH (private repository)
-   git clone git@github.com:williamdemarigny/Talos-CleanRoom.git /opt/Talos-CleanRoom
+   git clone git@github.com:williamdemarigny/Talos-CleanRoom.git /opt/talos-cleanroom
 
    # Run the setup script
-   cd /opt/Talos-CleanRoom/deployment-webui/scripts
+   cd /opt/talos-cleanroom/deployment-webui/scripts
    chmod +x setup-lxc.sh
    ./setup-lxc.sh --webui-password your-secure-password
    ```
@@ -116,7 +116,7 @@ For persistent repository access from the Proxmox host, add a bind mount:
 
 1. **On the Proxmox host**, edit `/etc/pve/lxc/<VMID>.conf`:
    ```
-   mp0: /path/to/Talos-CleanRoom,mp=/opt/Talos-CleanRoom
+   mp0: /path/to/talos-cleanroom,mp=/opt/talos-cleanroom
    ```
 
 2. **Restart the container**:
@@ -190,7 +190,7 @@ The following tools are installed in the LXC container (or Docker image):
 | `ADMIN_PASSWORD_HASH` | (bcrypt hash) | Bcrypt hash of admin password |
 | `SECRET_KEY` | (generated) | JWT signing key |
 | `ACCESS_TOKEN_EXPIRE_HOURS` | `8` | Token expiration time |
-| `REPO_ROOT` | `/opt/Talos-CleanRoom` | Path to repository |
+| `REPO_ROOT` | `/opt/talos-cleanroom` | Path to repository |
 | `MASTER_NODE` | `talos-CleanRoom-master-01.knowledgeondemand.net` | Master node FQDN |
 
 ### SOPS Keys
@@ -354,7 +354,7 @@ To update to a new version:
 
 ```bash
 # Pull latest changes (SSH key must be configured)
-cd /opt/Talos-CleanRoom
+cd /opt/talos-cleanroom
 git pull
 
 # Copy updated files
