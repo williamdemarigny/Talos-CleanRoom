@@ -40,13 +40,23 @@ wait_for_talos_api() {
     print_info "  Waiting for Talos API on $ip:50000..."
 
     for ((i=1; i<=max_attempts; i++)); do
-        # Try to get version - capture both stdout and stderr
+        # First, check if port 50000 is even accepting connections
+        if ! timeout 5 bash -c "echo > /dev/tcp/$ip/50000" 2>/dev/null; then
+            if [[ $i -lt $max_attempts ]]; then
+                print_info "    Attempt $i/$max_attempts - Port 50000 not open, waiting ${interval}s..."
+                sleep "$interval"
+                continue
+            fi
+        fi
+
+        # Port is open, now try talosctl commands
         local output
         local exit_code
 
         if [[ "$use_insecure" == "true" ]]; then
-            # For unconfigured nodes in maintenance mode
-            output=$(talosctl version --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
+            # In maintenance mode, use 'disks' command which is known to work
+            # See: https://www.talos.dev/v1.11/talos-guides/configuration/insecure/
+            output=$(talosctl disks --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
             exit_code=$?
         else
             # For configured nodes, use TALOSCONFIG
@@ -58,14 +68,13 @@ wait_for_talos_api() {
         print_info "    Response (exit=$exit_code): ${output:0:100}"
 
         # API is ready if:
-        # 1. Command succeeds (exit code 0), OR
-        # 2. Response contains "maintenance mode" (API reachable but not configured yet)
-        # NOTE: Do NOT check for "Client:" or "Tag:" - talosctl always prints client info
-        #       even when the server is unreachable. We need actual server response.
+        # 1. Command succeeds (exit code 0) - works for both modes
+        # 2. Response contains disk info (DEV, MODEL, etc.) - maintenance mode
+        # 3. Response contains "maintenance mode" - explicit maintenance indicator
         if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
             return 0
-        elif echo "$output" | grep -qi "maintenance mode"; then
+        elif echo "$output" | grep -qiE "(DEV|MODEL|SIZE|maintenance mode)"; then
             print_success "  Talos API is ready on $ip (maintenance mode)"
             return 0
         fi
