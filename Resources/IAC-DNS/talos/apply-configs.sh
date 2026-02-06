@@ -55,8 +55,8 @@ wait_for_talos_api() {
 
         if [[ "$use_insecure" == "true" ]]; then
             # In maintenance mode, use 'disks' command which is known to work
-            # See: https://www.talos.dev/v1.11/talos-guides/configuration/insecure/
-            output=$(talosctl disks --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
+            # Note: In talosctl 1.12+, --insecure is a global flag (before command)
+            output=$(talosctl --insecure -n "$ip" -e "$ip" disks 2>&1)
             exit_code=$?
         else
             # For configured nodes, use TALOSCONFIG
@@ -408,7 +408,8 @@ while IFS= read -r line; do
                     apply_interval=10
 
                     for ((a=1; a<=apply_attempts; a++)); do
-                        apply_output=$(talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1)
+                        # In talosctl 1.12+, --insecure is a global flag (before command)
+                        apply_output=$(talosctl --insecure -n "$dhcp_ip" apply-config --file "$config_file" 2>&1)
                         apply_exit=$?
 
                         if [[ $apply_exit -eq 0 ]]; then
