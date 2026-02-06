@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import re
+import subprocess
 import uuid
 import shutil
 import os
@@ -263,10 +265,17 @@ class DeploymentService:
         return result.success
 
     async def _step_wait_for_vms(self, step_id: int) -> bool:
-        """Step 3: Wait for VMs to boot and Talos API to be ready."""
-        await self.log(step_id, "info", "Waiting for VMs to boot and Talos API to become available...")
+        """Step 3: Wait for VMs to boot and Talos API to be ready.
 
-        # Get VM IPs from terraform output
+        Note: VMs boot with DHCP IPs initially. We need to query Proxmox guest agent
+        to get the actual DHCP IP, then check Talos API on that IP.
+        The FQDN won't work yet because it points to the static IP which isn't assigned
+        until after configs are applied.
+        """
+        await self.log(step_id, "info", "Waiting for VMs to boot and Talos API to become available...")
+        await self.log(step_id, "info", "Note: VMs are at DHCP IPs until config is applied")
+
+        # Get VM details from terraform output
         result = await self.process_manager.run_command_simple(
             ["terraform", "output", "-json"],
             cwd=self.terraform_dir
@@ -287,6 +296,23 @@ class DeploymentService:
             await self.log(step_id, "warn", "No VM details found in terraform output")
             return True
 
+        # Load Proxmox credentials for querying guest agent
+        credentials_file = self.terraform_dir / "credentials.auto.tfvars"
+        proxmox_endpoint = ""
+        proxmox_token = ""
+
+        if credentials_file.exists():
+            try:
+                content = credentials_file.read_text()
+                endpoint_match = re.search(r'proxmox_api_url\s*=\s*"([^"]*)"', content)
+                token_match = re.search(r'proxmox_api_token\s*=\s*"([^"]*)"', content)
+                if endpoint_match:
+                    proxmox_endpoint = endpoint_match.group(1).rstrip('/api2/json')
+                if token_match:
+                    proxmox_token = token_match.group(1)
+            except Exception as e:
+                await self.log(step_id, "warn", f"Could not read Proxmox credentials: {e}")
+
         # Wait for each VM's Talos API to be ready
         max_attempts = 30
         interval = 10
@@ -295,32 +321,54 @@ class DeploymentService:
         await self.log(step_id, "info", f"Checking Talos API readiness (max wait: {max_wait}s per VM)...")
 
         for vm_name, details in vm_details.items():
-            fqdn = details.get("fqdn", "")
-            if not fqdn:
-                await self.log(step_id, "warn", f"No FQDN for {vm_name}, skipping")
-                continue
-
-            await self.log(step_id, "info", f"Waiting for {vm_name} ({fqdn})...")
-
-            # First wait for QEMU guest agent to respond (VM booted)
             vmid = details.get("vmid")
             proxmox_node = details.get("proxmox_node", "")
+            fqdn = details.get("fqdn", vm_name)
 
-            # Poll for Talos API readiness using talosctl
+            await self.log(step_id, "info", f"Waiting for {vm_name} (VMID: {vmid})...")
+
+            # Poll for DHCP IP from Proxmox guest agent, then check Talos API
             ready = False
+            dhcp_ip = None
+
             for attempt in range(1, max_attempts + 1):
                 if self.current_deployment.status != DeploymentStatus.RUNNING:
                     return False
 
-                check_result = await self.process_manager.run_command_simple(
-                    ["talosctl", "version", "--insecure", "--nodes", fqdn, "--endpoints", fqdn],
-                    timeout=10
-                )
+                # Try to get DHCP IP from Proxmox guest agent if we have credentials
+                if proxmox_endpoint and proxmox_token and proxmox_node and not dhcp_ip:
+                    try:
+                        curl_result = subprocess.run(
+                            ["curl", "-s", "-k", "-H", f"Authorization: PVEAPIToken={proxmox_token}",
+                             f"{proxmox_endpoint}/api2/json/nodes/{proxmox_node}/qemu/{vmid}/agent/network-get-interfaces"],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if curl_result.returncode == 0:
+                            agent_data = json.loads(curl_result.stdout)
+                            if "data" in agent_data and "result" in agent_data["data"]:
+                                for iface in agent_data["data"]["result"]:
+                                    if iface.get("name") != "lo":
+                                        for ip_info in iface.get("ip-addresses", []):
+                                            if ip_info.get("ip-address-type") == "ipv4":
+                                                dhcp_ip = ip_info.get("ip-address")
+                                                await self.log(step_id, "info", f"  Found DHCP IP: {dhcp_ip}")
+                                                break
+                                    if dhcp_ip:
+                                        break
+                    except Exception as e:
+                        await self.log(step_id, "debug", f"  Guest agent query failed: {e}")
 
-                if check_result.success:
-                    await self.log(step_id, "info", f"  {vm_name}: Talos API ready")
-                    ready = True
-                    break
+                # If we have a DHCP IP, check Talos API on that IP
+                if dhcp_ip:
+                    check_result = await self.process_manager.run_command_simple(
+                        ["talosctl", "version", "--insecure", "--nodes", dhcp_ip, "--endpoints", dhcp_ip],
+                        timeout=10
+                    )
+
+                    if check_result.success:
+                        await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip}")
+                        ready = True
+                        break
 
                 await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
                 await asyncio.sleep(interval)
