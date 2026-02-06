@@ -383,23 +383,27 @@ class DeploymentService:
 
                 # If we have a DHCP IP, check Talos API on that IP
                 if dhcp_ip:
+                    # Use 'talosctl disks --insecure' which is known to work in maintenance mode
+                    # See: https://www.talos.dev/v1.11/talos-guides/configuration/insecure/
                     check_result = await self.process_manager.run_command_simple(
-                        ["talosctl", "version", "--insecure", "--nodes", dhcp_ip, "--endpoints", dhcp_ip],
+                        ["talosctl", "disks", "--insecure", "--nodes", dhcp_ip, "--endpoints", dhcp_ip],
                         timeout=15
                     )
 
                     # Log the actual response for debugging
                     output_preview = (check_result.output or "")[:200].replace('\n', ' ')
-                    await self.log(step_id, "info", f"  talosctl response (rc={check_result.return_code}): {output_preview}")
+                    await self.log(step_id, "info", f"  talosctl disks response (rc={check_result.return_code}): {output_preview}")
 
                     # The API is ready if:
                     # 1. Command succeeds (exit code 0), OR
-                    # 2. We get a response indicating maintenance mode (API is reachable but not configured)
-                    #    "API is not implemented in maintenance mode" means the node is ready for config
-                    # NOTE: Do NOT check for "client" or "tag:" - talosctl always prints client info
-                    #       even when the server is unreachable. We need exit code 0 or maintenance mode.
+                    # 2. Output contains disk info (DEV, MODEL, SIZE) indicating disks command worked
+                    # 3. Response contains "maintenance mode" (explicit maintenance indicator)
                     if check_result.success:
                         await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip}")
+                        ready = True
+                        break
+                    elif check_result.output and any(x in check_result.output.upper() for x in ["DEV", "MODEL", "SIZE"]):
+                        await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip} (got disk info)")
                         ready = True
                         break
                     elif check_result.output and "maintenance mode" in check_result.output.lower():
