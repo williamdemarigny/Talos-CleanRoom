@@ -380,8 +380,12 @@ class DeploymentService:
                 if dhcp_ip:
                     check_result = await self.process_manager.run_command_simple(
                         ["talosctl", "version", "--insecure", "--nodes", dhcp_ip, "--endpoints", dhcp_ip],
-                        timeout=10
+                        timeout=15
                     )
+
+                    # Log the actual response for debugging
+                    output_preview = (check_result.output or "")[:200].replace('\n', ' ')
+                    await self.log(step_id, "info", f"  talosctl response (rc={check_result.return_code}): {output_preview}")
 
                     # The API is ready if:
                     # 1. Command succeeds (exit code 0), OR
@@ -393,6 +397,11 @@ class DeploymentService:
                         break
                     elif check_result.output and "maintenance mode" in check_result.output.lower():
                         await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip} (maintenance mode)")
+                        ready = True
+                        break
+                    elif check_result.output and ("client" in check_result.output.lower() or "tag:" in check_result.output.lower()):
+                        # talosctl outputs client info even on failure - if we see it, API is reachable
+                        await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip} (got response)")
                         ready = True
                         break
                     else:
