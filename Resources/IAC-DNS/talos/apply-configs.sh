@@ -403,14 +403,13 @@ while IFS= read -r line; do
 
                     # Retry apply-config up to 5 times with 10 second delays
                     # The API check may pass but the node might not be fully ready for config
-                    local apply_success=false
-                    local apply_attempts=5
-                    local apply_interval=10
+                    apply_success=false
+                    apply_attempts=5
+                    apply_interval=10
 
                     for ((a=1; a<=apply_attempts; a++)); do
-                        local apply_output
                         apply_output=$(talosctl apply-config --insecure --nodes "$dhcp_ip" --file "$config_file" 2>&1)
-                        local apply_exit=$?
+                        apply_exit=$?
 
                         if [[ $apply_exit -eq 0 ]]; then
                             print_success "  Config applied successfully!"
