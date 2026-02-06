@@ -209,13 +209,14 @@ output "vm_details" {
   description = "Details of created VMs organized by role."
   value = {
     for k, v in proxmox_virtual_environment_vm.vm : k => {
-      vmid        = v.vm_id
-      fqdn        = local.all_nodes_transformed[k].fqdn
-      mac_address = v.network_device[0].mac_address
-      role        = local.all_nodes_transformed[k].role
-      cores       = v.cpu[0].cores
-      memory      = v.memory[0].dedicated
-      iso_used    = local.all_nodes_transformed[k].iso_file
+      vmid         = v.vm_id
+      fqdn         = local.all_nodes_transformed[k].fqdn
+      mac_address  = v.network_device[0].mac_address
+      role         = local.all_nodes_transformed[k].role
+      cores        = v.cpu[0].cores
+      memory       = v.memory[0].dedicated
+      iso_used     = local.all_nodes_transformed[k].iso_file
+      proxmox_node = v.node_name
     }
   }
 }
