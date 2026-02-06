@@ -1,5 +1,5 @@
-talosVersion: v1.11.0
-kubernetesVersion: v1.33.3
+talosVersion: v1.12.2
+kubernetesVersion: v1.32.3
 # Cluster configuration
 clusterName: proxmox-CleanRoom-cluster
 endpoint: https://${CONTROL_PLANE_ENDPOINT_FQDN}:6443
@@ -132,7 +132,7 @@ controlPlane:
   - |-
     machine:
       install:
-        image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.11.0
+        image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.12.2
 # Worker specific configuration
 worker:
   patches:
@@ -140,7 +140,7 @@ worker:
   - |-
     machine:
       install:
-        image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.11.0
+        image: factory.talos.dev/metal-installer/ddf38e55e30aa9b2bb0b765054ed63444dc00244ab8bb4ad4ad92486602285f8:v1.12.2
   # Note: node-role.kubernetes.io/* labels are protected and cannot be self-applied
   # The node-type: worker label is already set in per-node config above
   # Longhorn storage configuration - mount secondary disk for Longhorn
