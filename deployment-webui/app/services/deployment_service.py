@@ -336,7 +336,8 @@ class DeploymentService:
                     return False
 
                 # Try to get DHCP IP from Proxmox guest agent if we have credentials
-                if proxmox_endpoint and proxmox_token and proxmox_node and not dhcp_ip:
+                # Keep retrying until we get an IP (guest agent may not be ready yet)
+                if proxmox_endpoint and proxmox_token and proxmox_node:
                     try:
                         curl_result = subprocess.run(
                             ["curl", "-s", "-k", "-H", f"Authorization: PVEAPIToken={proxmox_token}",
@@ -350,13 +351,30 @@ class DeploymentService:
                                     if iface.get("name") != "lo":
                                         for ip_info in iface.get("ip-addresses", []):
                                             if ip_info.get("ip-address-type") == "ipv4":
-                                                dhcp_ip = ip_info.get("ip-address")
-                                                await self.log(step_id, "info", f"  Found DHCP IP: {dhcp_ip}")
+                                                new_ip = ip_info.get("ip-address")
+                                                if new_ip and new_ip != dhcp_ip:
+                                                    dhcp_ip = new_ip
+                                                    await self.log(step_id, "info", f"  Found DHCP IP: {dhcp_ip}")
                                                 break
                                     if dhcp_ip:
                                         break
+                            elif "data" in agent_data and agent_data["data"] is None:
+                                await self.log(step_id, "info", f"  Guest agent not ready yet...")
+                            elif "errors" in agent_data:
+                                await self.log(step_id, "info", f"  Guest agent error: {agent_data.get('errors', {})}")
+                        else:
+                            await self.log(step_id, "info", f"  Curl failed: {curl_result.stderr}")
+                    except json.JSONDecodeError as e:
+                        await self.log(step_id, "info", f"  Guest agent response not JSON: {curl_result.stdout[:100] if curl_result else 'N/A'}")
                     except Exception as e:
-                        await self.log(step_id, "debug", f"  Guest agent query failed: {e}")
+                        await self.log(step_id, "info", f"  Guest agent query failed: {e}")
+                else:
+                    if not proxmox_endpoint:
+                        await self.log(step_id, "warn", "  No Proxmox endpoint configured")
+                    if not proxmox_token:
+                        await self.log(step_id, "warn", "  No Proxmox token configured")
+                    if not proxmox_node:
+                        await self.log(step_id, "warn", f"  No Proxmox node for VM {vm_name}")
 
                 # If we have a DHCP IP, check Talos API on that IP
                 if dhcp_ip:
@@ -369,12 +387,17 @@ class DeploymentService:
                         await self.log(step_id, "info", f"  {vm_name}: Talos API ready at {dhcp_ip}")
                         ready = True
                         break
+                    else:
+                        await self.log(step_id, "info", f"  Talos API not responding at {dhcp_ip}")
 
                 await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
                 await asyncio.sleep(interval)
 
             if not ready:
-                await self.log(step_id, "error", f"  {vm_name}: Talos API not ready after {max_wait}s")
+                if not dhcp_ip:
+                    await self.log(step_id, "error", f"  {vm_name}: Could not get DHCP IP from guest agent after {max_wait}s")
+                else:
+                    await self.log(step_id, "error", f"  {vm_name}: Talos API not ready at {dhcp_ip} after {max_wait}s")
                 return False
 
         await self.log(step_id, "info", "All VMs are ready with Talos API available")
