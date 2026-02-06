@@ -428,6 +428,30 @@ class DeploymentService:
         )
         env = {"SOPS_AGE_KEY_FILE": sops_key_file}
 
+        # Ensure clusterconfig directory exists
+        clusterconfig_dir = self.talos_dir / "clusterconfig"
+        if not clusterconfig_dir.exists():
+            await self.log(step_id, "info", f"Creating clusterconfig directory: {clusterconfig_dir}")
+            clusterconfig_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clean up any existing generated configs for a fresh start
+        await self.log(step_id, "info", "Cleaning up old generated configs...")
+        for config_file in clusterconfig_dir.glob("*.yaml"):
+            try:
+                config_file.unlink()
+                await self.log(step_id, "info", f"  Removed: {config_file.name}")
+            except Exception as e:
+                await self.log(step_id, "warn", f"  Could not remove {config_file.name}: {e}")
+
+        # Also remove old talosconfig if it exists
+        talosconfig_file = clusterconfig_dir / "talosconfig"
+        if talosconfig_file.exists():
+            try:
+                talosconfig_file.unlink()
+                await self.log(step_id, "info", "  Removed: talosconfig")
+            except Exception as e:
+                await self.log(step_id, "warn", f"  Could not remove talosconfig: {e}")
+
         # Run tfvars-to-talos-env.sh
         await self.log(step_id, "info", "Running tfvars-to-talos-env.sh...")
         script_path = self.iac_dir / "tfvars-to-talos-env.sh"
@@ -439,11 +463,20 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
+            await self.log(step_id, "error", f"tfvars-to-talos-env.sh failed: {result.output}")
             return False
+
+        # Remove existing secret file to ensure fresh generation
+        secret_file = self.talos_dir / "talsecret.sops.yaml"
+        if secret_file.exists():
+            await self.log(step_id, "info", "Removing existing talsecret.sops.yaml for fresh generation...")
+            try:
+                secret_file.unlink()
+            except Exception as e:
+                await self.log(step_id, "warn", f"Could not remove old secret file: {e}")
 
         # Generate Talos secret
         await self.log(step_id, "info", "Generating Talos secret...")
-        secret_file = self.talos_dir / "talsecret.sops.yaml"
 
         result = await self.process_manager.run_command_simple(
             ["talhelper", "gensecret"],
@@ -451,11 +484,17 @@ class DeploymentService:
             env=env
         )
         if not result.success:
+            await self.log(step_id, "error", f"talhelper gensecret failed: {result.output}")
             return False
 
         # Write secret to file
-        with open(secret_file, 'w') as f:
-            f.write(result.output)
+        try:
+            with open(secret_file, 'w') as f:
+                f.write(result.output)
+            await self.log(step_id, "info", f"Secret written to {secret_file}")
+        except Exception as e:
+            await self.log(step_id, "error", f"Failed to write secret file: {e}")
+            return False
 
         # Encrypt with SOPS
         await self.log(step_id, "info", "Encrypting secret with SOPS...")
@@ -466,10 +505,11 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
         if not result.success:
+            await self.log(step_id, "error", f"SOPS encryption failed: {result.output}")
             return False
 
         # Generate Talos config
-        await self.log(step_id, "info", "Generating Talos config...")
+        await self.log(step_id, "info", "Generating Talos config with talhelper genconfig...")
         result = await self.process_manager.run_command(
             ["talhelper", "genconfig", "--env-file", "talenv.yaml"],
             cwd=self.talos_dir,
@@ -477,7 +517,27 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            await self.log(step_id, "error", f"talhelper genconfig failed: {result.output}")
+            return False
+
+        # Verify configs were generated
+        generated_configs = list(clusterconfig_dir.glob("*.yaml"))
+        talosconfig_exists = (clusterconfig_dir / "talosconfig").exists()
+
+        if not generated_configs:
+            await self.log(step_id, "error", "No config files were generated in clusterconfig/")
+            return False
+
+        if not talosconfig_exists:
+            await self.log(step_id, "error", "talosconfig was not generated")
+            return False
+
+        await self.log(step_id, "info", f"Generated {len(generated_configs)} config files and talosconfig")
+        for cfg in generated_configs:
+            await self.log(step_id, "info", f"  - {cfg.name}")
+
+        return True
 
     async def _step_apply_talos_configs(self, step_id: int) -> bool:
         """Step 4: Apply Talos configurations."""
