@@ -67,24 +67,27 @@ kubectl wait --for=condition=ready pod \
     -n "${NAMESPACE}" \
     --timeout=300s
 
-# Set admin password to 'admin' using ArgoCD's bcrypt tool
-# This ensures the password works regardless of Helm chart version
-# Wait a moment for argocd-server to fully initialize after pod ready
+# Set admin password to 'admin' using local bcrypt generation
+# The ArgoCD container doesn't include the argocd CLI, so we generate the hash locally
 echo "Setting admin password..."
-sleep 10
+
+# Generate bcrypt hash locally using Python (available in deployment container)
 ADMIN_HASH=""
-for attempt in 1 2 3 4 5; do
-    ADMIN_HASH=$(kubectl -n "${NAMESPACE}" exec deployment/argocd-server -- argocd account bcrypt --password admin 2>/dev/null) && break
-    echo "  Waiting for argocd-server to initialize... (attempt $attempt/5)"
-    sleep 5
-done
+if command -v python3 &> /dev/null; then
+    ADMIN_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null)
+elif command -v python &> /dev/null; then
+    ADMIN_HASH=$(python -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null)
+fi
+
 if [[ -n "${ADMIN_HASH}" ]]; then
+    # Wait for argocd-secret to exist
+    sleep 5
     kubectl -n "${NAMESPACE}" patch secret argocd-secret \
         -p "{\"stringData\": {\"admin.password\": \"${ADMIN_HASH}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
     echo "Admin password set to: admin"
 else
-    echo "Warning: Could not set admin password automatically"
-    echo "The password from values.yaml may still work, or set it manually"
+    echo "Warning: Could not generate bcrypt hash (python/bcrypt not available)"
+    echo "Using password hash from values.yaml"
 fi
 
 echo ""
