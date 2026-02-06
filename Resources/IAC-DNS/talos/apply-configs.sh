@@ -29,27 +29,46 @@ print_error() {
 }
 
 # Function to wait for Talos API to be ready on a node
+# For unconfigured nodes (maintenance mode), uses --insecure
+# For configured nodes (after config applied), uses TALOSCONFIG
 wait_for_talos_api() {
     local ip="$1"
     local max_attempts="${2:-30}"
     local interval="${3:-10}"
+    local use_insecure="${4:-true}"
 
     print_info "  Waiting for Talos API on $ip:50000..."
 
     for ((i=1; i<=max_attempts; i++)); do
         # Try to get version - capture both stdout and stderr
         local output
-        output=$(talosctl version --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
-        local exit_code=$?
+        local exit_code
+
+        if [[ "$use_insecure" == "true" ]]; then
+            # For unconfigured nodes in maintenance mode
+            output=$(talosctl version --insecure --nodes "$ip" --endpoints "$ip" 2>&1)
+            exit_code=$?
+        else
+            # For configured nodes, use TALOSCONFIG
+            output=$(talosctl version --nodes "$ip" --endpoints "$ip" 2>&1)
+            exit_code=$?
+        fi
+
+        # Debug: show what we got
+        print_info "    Response (exit=$exit_code): ${output:0:100}"
 
         # API is ready if:
         # 1. Command succeeds (exit code 0), OR
-        # 2. Response contains "maintenance mode" (API reachable but not configured yet)
+        # 2. Response contains "maintenance mode" (API reachable but not configured yet), OR
+        # 3. Response contains version info (Tag:, Client:, Server:)
         if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
             return 0
         elif echo "$output" | grep -qi "maintenance mode"; then
             print_success "  Talos API is ready on $ip (maintenance mode)"
+            return 0
+        elif echo "$output" | grep -qiE "(Tag:|Client:|Server:)"; then
+            print_success "  Talos API is ready on $ip (got version info)"
             return 0
         fi
 
@@ -343,8 +362,9 @@ while IFS= read -r line; do
                 print_success "  Current DHCP IP: $dhcp_ip"
 
                 # Wait for Talos API to be ready before applying config
+                # Use insecure mode since the node is still unconfigured (maintenance mode)
                 if [[ "$DRY_RUN" == false ]]; then
-                    if ! wait_for_talos_api "$dhcp_ip" 30 10; then
+                    if ! wait_for_talos_api "$dhcp_ip" 30 10 true; then
                         print_error "  Talos API not ready - skipping this VM"
                         echo ""
                         current_node=""
@@ -399,6 +419,15 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
         print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
         sleep 300
+
+        # Wait for Talos API to be ready at the static IP/FQDN before bootstrapping
+        # Use non-insecure mode since the node is now configured with certificates
+        print_info "Verifying Talos API is ready at $CONTROL_PLANE_ENDPOINT..."
+        if ! wait_for_talos_api "$CONTROL_PLANE_ENDPOINT" 60 10 false; then
+            print_error "Talos API not ready at $CONTROL_PLANE_ENDPOINT after waiting"
+            print_error "Bootstrap cannot proceed"
+            exit 1
+        fi
 
         print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
         if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
