@@ -20,8 +20,7 @@ nodes:
   ipAddress: ${TALOS_CONTROL_PLANE_FQDN_0}
   installDisk: /dev/vda
   networkInterfaces:
-  - deviceSelector:
-      hardwareAddr: "${TALOS_CONTROL_PLANE_MAC_0}"
+  - interface: eth0
     dhcp: true
   certSANs:
     - ${TALOS_CONTROL_PLANE_NAME_0}
@@ -33,8 +32,7 @@ nodes:
   ipAddress: ${TALOS_WORKER_FQDN_1}
   installDisk: /dev/vda
   networkInterfaces:
-  - deviceSelector:
-      hardwareAddr: "${TALOS_WORKER_MAC_1}"
+  - interface: eth0
     dhcp: true
   nodeLabels:
     node-type: worker
@@ -47,8 +45,7 @@ nodes:
   ipAddress: ${TALOS_WORKER_FQDN_2}
   installDisk: /dev/vda
   networkInterfaces:
-  - deviceSelector:
-      hardwareAddr: "${TALOS_WORKER_MAC_2}"
+  - interface: eth0
     dhcp: true
   nodeLabels:
     node-type: worker
@@ -61,8 +58,7 @@ nodes:
   ipAddress: ${TALOS_WORKER_FQDN_3}
   installDisk: /dev/vda
   networkInterfaces:
-  - deviceSelector:
-      hardwareAddr: "${TALOS_WORKER_MAC_3}"
+  - interface: eth0
     dhcp: true
   nodeLabels:
     node-type: worker
