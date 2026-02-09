@@ -19,9 +19,6 @@ nodes:
   controlPlane: true
   ipAddress: ${TALOS_CONTROL_PLANE_FQDN_0}
   installDisk: /dev/vda
-  networkInterfaces:
-  - interface: eth0
-    dhcp: true
   certSANs:
     - ${TALOS_CONTROL_PLANE_NAME_0}
     - ${TALOS_CONTROL_PLANE_FQDN_0}
@@ -31,9 +28,6 @@ nodes:
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_1}
   installDisk: /dev/vda
-  networkInterfaces:
-  - interface: eth0
-    dhcp: true
   nodeLabels:
     node-type: worker
   certSANs:
@@ -44,9 +38,6 @@ nodes:
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_2}
   installDisk: /dev/vda
-  networkInterfaces:
-  - interface: eth0
-    dhcp: true
   nodeLabels:
     node-type: worker
   certSANs:
@@ -57,9 +48,6 @@ nodes:
   controlPlane: false
   ipAddress: ${TALOS_WORKER_FQDN_3}
   installDisk: /dev/vda
-  networkInterfaces:
-  - interface: eth0
-    dhcp: true
   nodeLabels:
     node-type: worker
   certSANs:
@@ -68,10 +56,13 @@ nodes:
 
 # Global patches
 patches:
-# Network configuration
+# Network configuration - explicit DHCP on eth0
 - |-
   machine:
     network:
+      interfaces:
+        - interface: eth0
+          dhcp: true
       nameservers:
         - 1.1.1.1
         - 1.0.0.1
