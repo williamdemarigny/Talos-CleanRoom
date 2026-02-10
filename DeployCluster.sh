@@ -4,7 +4,8 @@ set -eo pipefail  # Exit immediately if any command exits with a non-zero status
 
 # Configuration variables
 MASTER_NODE="talos-CleanRoom-master-01.knowledgeondemand.net"
-HEALTH_CHECK_RETRIES=30
+MASTER_NODE_IP="10.83.3.10"
+HEALTH_CHECK_RETRIES=45
 HEALTH_CHECK_INTERVAL=10
 
 # Function to perform cleanup on failure (defined early so it's available for all error handlers)
@@ -69,18 +70,42 @@ export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
 ./apply-configs.sh --bootstrap || { echo "Error: Failed to apply Talos configurations."; cleanup; exit 1; }
 
 # Step 4: Verify Cluster Health
-echo "Waiting for cluster health (max wait: $((HEALTH_CHECK_RETRIES * HEALTH_CHECK_INTERVAL)) seconds)..."
-for ((i=1; i<=HEALTH_CHECK_RETRIES; i++)); do
-    if talosctl health --nodes="$MASTER_NODE" &>/dev/null; then
-        echo "Cluster is healthy."
+# After bootstrap, the node needs time for etcd and kubelet to fully initialize
+echo "Waiting for Talos API to be reachable on control plane..."
+API_READY=false
+for ((i=1; i<=60; i++)); do
+    if timeout 5 bash -c "echo > /dev/tcp/$MASTER_NODE_IP/50000" 2>/dev/null; then
+        echo "Talos API port 50000 is now reachable."
+        API_READY=true
         break
     else
-        echo "Cluster not yet healthy. Retrying ($i/$HEALTH_CHECK_RETRIES)..."
-        sleep "$HEALTH_CHECK_INTERVAL"
+        echo "Waiting for Talos API (attempt $i/60)..."
+        sleep 5
     fi
 done
 
-if ! talosctl health --nodes="$MASTER_NODE" &>/dev/null; then
+if [[ "$API_READY" != "true" ]]; then
+    echo "Error: Talos API not reachable after 5 minutes."
+    cleanup
+    exit 1
+fi
+
+# Additional stabilization time for etcd and kubelet initialization
+echo "Waiting 30 seconds for post-bootstrap stabilization..."
+sleep 30
+
+echo "Waiting for cluster health (max wait: $((HEALTH_CHECK_RETRIES * HEALTH_CHECK_INTERVAL)) seconds)..."
+for ((i=1; i<=HEALTH_CHECK_RETRIES; i++)); do
+    health_output=$(talosctl health --nodes="$MASTER_NODE" 2>&1) && {
+        echo "Cluster is healthy."
+        break
+    } || {
+        echo "Cluster not yet healthy (attempt $i/$HEALTH_CHECK_RETRIES): ${health_output:0:100}"
+        sleep "$HEALTH_CHECK_INTERVAL"
+    }
+done
+
+if ! talosctl health --nodes="$MASTER_NODE" 2>&1; then
     echo "Error: Cluster failed to become healthy within the allowed time."
     cleanup
     exit 1
