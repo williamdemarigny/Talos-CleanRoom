@@ -90,13 +90,14 @@ spec:
     server: https://kubernetes.default.svc
     namespace: longhorn-system
   ignoreDifferences:
-    # Ignore Helm hook jobs that complete and get recreated
+    # Ignore Helm hook jobs completely - prevents sync loop
     - group: batch
       kind: Job
       name: longhorn-post-upgrade
       jqPathExpressions:
         - .spec
         - .status
+        - .metadata
     # Ignore all CRD differences - Longhorn CRDs are managed by the operator and have runtime fields
     - group: apiextensions.k8s.io
       kind: CustomResourceDefinition
