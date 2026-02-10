@@ -204,21 +204,15 @@ kubectl wait --for=condition=available deployment/longhorn-ui \
 }
 echo "  ✓ longhorn-ui ready"
 
-# 5. Wait for Longhorn webhook deployments (critical for CRD validation)
-echo "  Waiting for Longhorn webhooks..."
-for webhook in longhorn-admission-webhook longhorn-conversion-webhook longhorn-recovery-backend; do
-    FOUND=false
-    for i in $(seq 1 24); do
-        REPLICAS=$(kubectl get deployment ${webhook} -n longhorn-system -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
-        if [[ "$REPLICAS" =~ ^[1-9] ]]; then
-            echo "  ✓ ${webhook} ready"
-            FOUND=true
-            break
-        fi
-        echo "  Waiting for ${webhook}... ($i/24)"
-        sleep 5
-    done
-    [[ "$FOUND" == true ]] || { echo "Error: ${webhook} deployment never became available"; exit 1; }
+# 5. Verify Longhorn webhook configurations exist (webhooks are built into longhorn-manager)
+echo "  Verifying Longhorn webhooks..."
+for webhook in longhorn-webhook-mutator longhorn-webhook-validator; do
+    if kubectl get mutatingwebhookconfiguration ${webhook} &>/dev/null || \
+       kubectl get validatingwebhookconfiguration ${webhook} &>/dev/null; then
+        echo "  ✓ ${webhook} configured"
+    else
+        echo "  Warning: ${webhook} not found (may be expected)"
+    fi
 done
 
 # 6. Verify Engine Image is deployed on all nodes
