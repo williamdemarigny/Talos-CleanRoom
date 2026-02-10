@@ -277,7 +277,19 @@ class DeploymentService:
         The FQDN won't work yet because it points to the static IP which isn't assigned
         until after configs are applied.
         """
-        await self.log(step_id, "info", "Waiting for VMs to boot and Talos API to become available...")
+        # Initial delay to allow VMs to fully boot before polling
+        initial_delay = 180  # seconds
+        await self.log(step_id, "info", f"Waiting {initial_delay}s for VMs to boot before checking Talos API...")
+
+        # Wait in 30-second increments so we can check for cancellation
+        for i in range(0, initial_delay, 30):
+            if self.current_deployment.status != DeploymentStatus.RUNNING:
+                return False
+            remaining = initial_delay - i
+            await self.log(step_id, "info", f"  Boot delay: {remaining}s remaining...")
+            await asyncio.sleep(min(30, remaining))
+
+        await self.log(step_id, "info", "Boot delay complete. Checking Talos API availability...")
         await self.log(step_id, "info", "Note: VMs are at DHCP IPs until config is applied")
 
         # Get VM details from terraform output
