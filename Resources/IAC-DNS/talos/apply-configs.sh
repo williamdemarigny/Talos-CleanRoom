@@ -97,6 +97,56 @@ wait_for_talos_api() {
     return 1
 }
 
+# Function to wait for controller to EXIT maintenance mode and be ready for bootstrap
+# This is critical: the controller must have etcd initialized before bootstrap can succeed
+wait_for_controller_ready() {
+    local endpoint="$1"
+    local max_attempts="${2:-60}"
+    local interval="${3:-10}"
+
+    print_info "Waiting for controller to exit maintenance mode and initialize etcd..."
+    print_info "(This may take several minutes after config is applied)"
+
+    for ((i=1; i<=max_attempts; i++)); do
+        # Primary check: verify etcd is initialized by checking etcd member list
+        # This is the definitive test that the controller is ready for bootstrap
+        if output=$(talosctl --nodes "$endpoint" --endpoints "$endpoint" etcd members 2>&1); then
+            if echo "$output" | grep -q "MEMBER\|started"; then
+                print_success "Controller etcd is ready (attempt $i/$max_attempts)"
+                return 0
+            fi
+        fi
+
+        # Secondary check: verify machine status is not in maintenance mode
+        if output=$(talosctl --nodes "$endpoint" --endpoints "$endpoint" get machinestatus -o yaml 2>&1); then
+            # Check if stage is "running" (not "maintenance" or "booting")
+            if echo "$output" | grep -q "stage: running"; then
+                print_success "Controller has exited maintenance mode (attempt $i/$max_attempts)"
+                # Give etcd a few more seconds to fully initialize
+                sleep 10
+                return 0
+            fi
+        fi
+
+        # Log current state for debugging
+        local state="unknown"
+        if echo "$output" | grep -q "maintenance"; then
+            state="maintenance mode"
+        elif echo "$output" | grep -q "booting"; then
+            state="booting"
+        elif echo "$output" | grep -q "running"; then
+            state="running (waiting for etcd)"
+        fi
+
+        print_info "  Attempt $i/$max_attempts - Controller state: $state, waiting ${interval}s..."
+        sleep "$interval"
+    done
+
+    print_error "Controller failed to become ready after $((max_attempts * interval)) seconds"
+    print_error "The controller may still be in maintenance mode or etcd failed to initialize"
+    return 1
+}
+
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TFVARS_FILE="../terraform/talos-cluster-create/cluster.auto.tfvars"
@@ -455,23 +505,34 @@ done < "$TFVARS_FILE"
 # Bootstrap cluster if requested
 if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
     echo ""
-    print_info "Waiting 300 seconds for VMs to reboot and become available..."
+    print_info "Waiting for controller to reboot and become ready for bootstrap..."
+    print_info "Target endpoint: $CONTROL_PLANE_ENDPOINT"
 
     if [[ "$DRY_RUN" == true ]]; then
         print_info "[DRY RUN] Would bootstrap cluster on $CONTROL_PLANE_ENDPOINT"
     else
-        sleep 300
-
-        # Wait for Talos API to be ready at the static IP/FQDN before bootstrapping
-        # Use non-insecure mode since the node is now configured with certificates
-        print_info "Verifying Talos API is ready at $CONTROL_PLANE_ENDPOINT..."
+        # Phase 1: Wait for the Talos API to be reachable at the new static IP/FQDN
+        # This confirms the VM has rebooted and the network is configured
+        print_info ""
+        print_info "Phase 1: Waiting for Talos API to be reachable..."
         if ! wait_for_talos_api "$CONTROL_PLANE_ENDPOINT" 60 10 false; then
-            print_error "Talos API not ready at $CONTROL_PLANE_ENDPOINT after waiting"
-            print_error "Bootstrap cannot proceed"
+            print_error "Talos API not reachable at $CONTROL_PLANE_ENDPOINT"
+            print_error "The VM may not have rebooted or network configuration failed"
             exit 1
         fi
 
-        print_info "Bootstrapping cluster on control plane: $CONTROL_PLANE_ENDPOINT"
+        # Phase 2: Wait for controller to fully exit maintenance mode and initialize etcd
+        # This is the critical step - bootstrap WILL FAIL if etcd is not ready
+        print_info ""
+        print_info "Phase 2: Waiting for controller to exit maintenance mode..."
+        if ! wait_for_controller_ready "$CONTROL_PLANE_ENDPOINT" 60 10; then
+            print_error "Controller failed to exit maintenance mode"
+            print_error "Check logs with: talosctl -n $CONTROL_PLANE_ENDPOINT -e $CONTROL_PLANE_ENDPOINT logs"
+            exit 1
+        fi
+
+        print_info ""
+        print_info "Controller is ready. Bootstrapping cluster on: $CONTROL_PLANE_ENDPOINT"
         if talosctl bootstrap --nodes "$CONTROL_PLANE_ENDPOINT" --endpoints "$CONTROL_PLANE_ENDPOINT"; then
             print_success "Cluster bootstrapped successfully!"
             echo ""
