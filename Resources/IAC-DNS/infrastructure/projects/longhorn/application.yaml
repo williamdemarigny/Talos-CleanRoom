@@ -59,12 +59,12 @@ spec:
 
         # Longhorn Manager - runs on worker nodes only (no control-plane tolerations)
         longhornManager:
-          priorityClass: ~
+          priorityClass: longhorn-critical
           tolerations: []
 
         # Longhorn Driver - runs on worker nodes only (no control-plane tolerations)
         longhornDriver:
-          priorityClass: ~
+          priorityClass: longhorn-critical
           tolerations: []
 
         # Longhorn UI - runs on worker nodes only
@@ -98,17 +98,6 @@ spec:
         - .spec
         - .status
         - .metadata
-    # Ignore priorityClassName differences - chart sets defaults that conflict with null values
-    - group: apps
-      kind: DaemonSet
-      name: longhorn-manager
-      jqPathExpressions:
-        - .spec.template.spec.priorityClassName
-    - group: apps
-      kind: Deployment
-      name: longhorn-driver-deployer
-      jqPathExpressions:
-        - .spec.template.spec.priorityClassName
     # Ignore all CRD differences - Longhorn CRDs are managed by the operator and have runtime fields
     - group: apiextensions.k8s.io
       kind: CustomResourceDefinition
