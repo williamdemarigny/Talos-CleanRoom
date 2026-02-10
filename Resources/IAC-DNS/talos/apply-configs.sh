@@ -98,52 +98,50 @@ wait_for_talos_api() {
 }
 
 # Function to wait for controller to EXIT maintenance mode and be ready for bootstrap
-# This is critical: the controller must have etcd initialized before bootstrap can succeed
+# IMPORTANT: Before bootstrap, the controller will be in "booting" stage with etcd NOT running.
+# This is CORRECT - etcd only starts AFTER bootstrap is executed on the first control plane.
+# We just need to verify the node has exited maintenance mode and is waiting for bootstrap.
 wait_for_controller_ready() {
     local endpoint="$1"
     local max_attempts="${2:-60}"
     local interval="${3:-10}"
 
-    print_info "Waiting for controller to exit maintenance mode and initialize etcd..."
-    print_info "(This may take several minutes after config is applied)"
+    print_info "Waiting for controller to exit maintenance mode..."
+    print_info "(Controller will be in 'booting' stage until bootstrap is executed)"
 
     for ((i=1; i<=max_attempts; i++)); do
-        # Primary check: verify etcd is initialized by checking etcd member list
-        # This is the definitive test that the controller is ready for bootstrap
-        if output=$(talosctl --nodes "$endpoint" --endpoints "$endpoint" etcd members 2>&1); then
-            if echo "$output" | grep -q "MEMBER\|started"; then
-                print_success "Controller etcd is ready (attempt $i/$max_attempts)"
-                return 0
-            fi
-        fi
-
-        # Secondary check: verify machine status is not in maintenance mode
+        # Check machine status to verify we're out of maintenance mode
         if output=$(talosctl --nodes "$endpoint" --endpoints "$endpoint" get machinestatus -o yaml 2>&1); then
-            # Check if stage is "running" (not "maintenance" or "booting")
-            if echo "$output" | grep -q "stage: running"; then
-                print_success "Controller has exited maintenance mode (attempt $i/$max_attempts)"
-                # Give etcd a few more seconds to fully initialize
-                sleep 10
+            # Success if stage is "booting" or "running" (anything except maintenance)
+            # "booting" = waiting for bootstrap (etcd not running yet) - this is the expected pre-bootstrap state
+            # "running" = fully operational (only after bootstrap completes)
+            if echo "$output" | grep -q "stage: booting"; then
+                print_success "Controller is ready for bootstrap (stage: booting, attempt $i/$max_attempts)"
+                # Check if it's waiting for etcd (expected state)
+                if echo "$output" | grep -q "etcd not running"; then
+                    print_info "  etcd waiting for bootstrap (expected)"
+                fi
+                return 0
+            elif echo "$output" | grep -q "stage: running"; then
+                # Already running - might be a re-bootstrap or cluster already exists
+                print_success "Controller is already running (attempt $i/$max_attempts)"
                 return 0
             fi
         fi
 
         # Log current state for debugging
         local state="unknown"
-        if echo "$output" | grep -q "maintenance"; then
-            state="maintenance mode"
-        elif echo "$output" | grep -q "booting"; then
-            state="booting"
-        elif echo "$output" | grep -q "running"; then
-            state="running (waiting for etcd)"
+        if echo "$output" | grep -q "stage: maintenance"; then
+            state="maintenance mode (still applying config)"
+        elif echo "$output" | grep -q "rpc error"; then
+            state="API not reachable"
         fi
 
         print_info "  Attempt $i/$max_attempts - Controller state: $state, waiting ${interval}s..."
         sleep "$interval"
     done
 
-    print_error "Controller failed to become ready after $((max_attempts * interval)) seconds"
-    print_error "The controller may still be in maintenance mode or etcd failed to initialize"
+    print_error "Controller failed to exit maintenance mode after $((max_attempts * interval)) seconds"
     return 1
 }
 
