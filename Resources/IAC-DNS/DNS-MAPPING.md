@@ -22,6 +22,19 @@
 | talos-CleanRoom-worker-02.knowledgeondemand.net | 10.83.3.16 | Worker | BC:24:21:4C:99:A2 |
 | talos-CleanRoom-worker-03.knowledgeondemand.net | 10.83.3.17 | Worker | BC:24:21:4C:99:A3 |
 
+### Kubernetes Services (via Traefik LoadBalancer)
+
+All services route through Traefik's MetalLB IP (10.83.3.200-250 range).
+
+| FQDN | Service |
+|------|---------|
+| traefik.knowledgeondemand.net | Traefik Dashboard |
+| argocd.knowledgeondemand.net | ArgoCD UI |
+| longhorn.knowledgeondemand.net | Longhorn Storage UI |
+| openvas.knowledgeondemand.net | OpenVAS Vulnerability Scanner |
+| faraday.knowledgeondemand.net | Faraday Collaboration Platform |
+| threatdragon.knowledgeondemand.net | OWASP Threat Dragon |
+
 ## Prerequisites for DNS-based Deployment
 
 1. **DNS Configuration**: All FQDNs must be resolvable in your network
