@@ -87,6 +87,8 @@ kubectl get scantypes -n securecodebox-system
 
 ## Usage
 
+> **Note:** Examples use `scanme.nmap.org` (a legitimate test target). Replace with your authorized target IP/hostname. Only scan systems you have permission to test.
+
 ### Running Scans
 
 Create a Scan custom resource to trigger an nmap scan:
@@ -101,7 +103,7 @@ spec:
   scanType: nmap
   parameters:
     - "-sV"           # Service version detection
-    - "10.83.3.1"     # Target IP/hostname
+    - "scanme.nmap.org"     # Target IP/hostname
 ```
 
 Apply with:
@@ -116,7 +118,7 @@ spec:
   scanType: nmap
   parameters:
     - "-sV"
-    - "10.83.3.1"
+    - "scanme.nmap.org"
 EOF
 ```
 
@@ -125,13 +127,13 @@ EOF
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | `-sn` | Ping scan (host discovery only) | `-sn 10.83.3.0/24` |
-| `-sV` | Service version detection | `-sV 10.83.3.1` |
-| `-sS` | TCP SYN scan (stealth) | `-sS 10.83.3.1` |
+| `-sV` | Service version detection | `-sV scanme.nmap.org` |
+| `-sS` | TCP SYN scan (stealth) | `-sS scanme.nmap.org` |
 | `-p` | Specific ports | `-p 22,80,443` |
-| `-F` | Fast scan (top 100 ports) | `-F 10.83.3.1` |
-| `-T4` | Aggressive timing | `-T4 10.83.3.1` |
-| `-A` | Aggressive (OS, version, scripts) | `-A 10.83.3.1` |
-| `-O` | OS detection (requires privileges) | `-O 10.83.3.1` |
+| `-F` | Fast scan (top 100 ports) | `-F scanme.nmap.org` |
+| `-T4` | Aggressive timing | `-T4 scanme.nmap.org` |
+| `-A` | Aggressive (OS, version, scripts) | `-A scanme.nmap.org` |
+| `-O` | OS detection (requires privileges) | `-O scanme.nmap.org` |
 
 ### Example Scans
 
@@ -163,7 +165,7 @@ spec:
     - "-T4"
     - "-p"
     - "22,80,443,8080,8443"
-    - "10.83.3.1"
+    - "scanme.nmap.org"
 ```
 
 #### Scheduled Daily Scan
