@@ -156,10 +156,7 @@ for i in $(seq 1 36); do
 done
 [[ "$READY" -eq "$DESIRED" && "$DESIRED" -gt 0 ]] || { echo "Error: longhorn-manager DaemonSet never became ready"; exit 1; }
 
-# 2. Wait for CSI controller deployments (attacher, provisioner, resizer, snapshotter)
-#    These are created by longhorn-driver-deployer several minutes after longhorn-manager is ready.
-#    kubectl wait fails immediately with NotFound if the resource doesn't exist yet, so we poll
-#    for existence first before checking availability.
+# 2. Poll for CSI controllers (created by longhorn-driver-deployer after manager is ready)
 echo "  Waiting for Longhorn CSI controllers..."
 for component in csi-attacher csi-provisioner csi-resizer csi-snapshotter; do
     # Poll until the deployment exists and is available (up to 6 min)
@@ -211,7 +208,7 @@ for webhook in longhorn-webhook-mutator longhorn-webhook-validator; do
        kubectl get validatingwebhookconfiguration ${webhook} &>/dev/null; then
         echo "  ✓ ${webhook} configured"
     else
-        echo "  Warning: ${webhook} not found (may be expected)"
+        echo "  Note: ${webhook} not found (webhooks built into longhorn-manager in v1.7+)"
     fi
 done
 

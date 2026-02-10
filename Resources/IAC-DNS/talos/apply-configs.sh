@@ -281,9 +281,6 @@ get_vm_ip() {
     # Query VM network interfaces via agent
     local response=$(proxmox_api "/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces")
 
-    # Debug: Show raw response
-    # echo "DEBUG Response: $response" >&2
-
     # Check if agent is available
     if echo "$response" | jq -e '.data' > /dev/null 2>&1; then
         # Extract IPv4 address (exclude loopback)
