@@ -204,7 +204,54 @@ kubectl wait --for=condition=available deployment/longhorn-ui \
 }
 echo "  ✓ longhorn-ui ready"
 
-# 5. Verify the Longhorn StorageClass exists — confirms CSI is registered
+# 5. Wait for Longhorn webhook deployments (critical for CRD validation)
+echo "  Waiting for Longhorn webhooks..."
+for webhook in longhorn-admission-webhook longhorn-conversion-webhook longhorn-recovery-backend; do
+    FOUND=false
+    for i in $(seq 1 24); do
+        REPLICAS=$(kubectl get deployment ${webhook} -n longhorn-system -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
+        if [[ "$REPLICAS" =~ ^[1-9] ]]; then
+            echo "  ✓ ${webhook} ready"
+            FOUND=true
+            break
+        fi
+        echo "  Waiting for ${webhook}... ($i/24)"
+        sleep 5
+    done
+    [[ "$FOUND" == true ]] || { echo "Error: ${webhook} deployment never became available"; exit 1; }
+done
+
+# 6. Verify Engine Image is deployed on all nodes
+echo "  Verifying Longhorn engine image..."
+for i in $(seq 1 24); do
+    STATE=$(kubectl get engineimages.longhorn.io -n longhorn-system -o jsonpath='{.items[0].status.state}' 2>/dev/null || echo "")
+    if [[ "$STATE" == "deployed" ]]; then
+        echo "  ✓ Engine image deployed"
+        break
+    fi
+    echo "  Engine image state: ${STATE:-pending}... ($i/24)"
+    sleep 5
+done
+[[ "$STATE" == "deployed" ]] || { echo "Error: Longhorn engine image never became deployed"; exit 1; }
+
+# 7. Verify Longhorn nodes are registered and schedulable
+echo "  Verifying Longhorn nodes..."
+WORKER_NODES=$(kubectl get nodes --no-headers -l '!node-role.kubernetes.io/control-plane' 2>/dev/null | wc -l || echo "0")
+if [[ "$WORKER_NODES" -eq 0 ]]; then
+    WORKER_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l || echo "1")
+fi
+for i in $(seq 1 24); do
+    READY_NODES=$(kubectl get nodes.longhorn.io -n longhorn-system --no-headers 2>/dev/null | grep -c "True" || echo "0")
+    if [[ "$READY_NODES" -ge "$WORKER_NODES" ]]; then
+        echo "  ✓ All $READY_NODES Longhorn nodes ready"
+        break
+    fi
+    echo "  Longhorn nodes: $READY_NODES/$WORKER_NODES ready... ($i/24)"
+    sleep 5
+done
+[[ "$READY_NODES" -ge "$WORKER_NODES" ]] || { echo "Warning: Not all Longhorn nodes are ready ($READY_NODES/$WORKER_NODES)"; }
+
+# 8. Verify the Longhorn StorageClass exists — confirms CSI is registered
 echo "  Verifying Longhorn StorageClass..."
 for i in $(seq 1 12); do
     if kubectl get storageclass longhorn &>/dev/null; then
@@ -216,7 +263,45 @@ for i in $(seq 1 12); do
 done
 kubectl get storageclass longhorn || { echo "Error: Longhorn StorageClass never appeared"; exit 1; }
 
-echo "✓ Longhorn fully deployed"
+# 9. Create and verify a test PVC — the definitive operational test
+echo "  Testing Longhorn with a test PVC..."
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-test-pvc
+  namespace: longhorn-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+# Wait for PVC to bind (up to 2 minutes)
+PVC_BOUND=false
+for i in $(seq 1 24); do
+    PHASE=$(kubectl get pvc longhorn-test-pvc -n longhorn-system -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    if [[ "$PHASE" == "Bound" ]]; then
+        echo "  ✓ Test PVC bound successfully"
+        PVC_BOUND=true
+        break
+    fi
+    echo "  Test PVC phase: ${PHASE:-Pending}... ($i/24)"
+    sleep 5
+done
+
+# Cleanup test PVC regardless of result
+kubectl delete pvc longhorn-test-pvc -n longhorn-system --ignore-not-found=true &>/dev/null
+
+if [[ "$PVC_BOUND" != true ]]; then
+    echo "Error: Test PVC failed to bind - Longhorn may not be fully operational"
+    exit 1
+fi
+
+echo "✓ Longhorn fully deployed and operational"
 echo ""
 
 # Get LoadBalancer IP
