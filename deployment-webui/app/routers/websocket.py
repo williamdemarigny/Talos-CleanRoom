@@ -32,14 +32,11 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         """Send message to all connected clients."""
-        print(f"[DEBUG] Broadcasting to {len(self.active_connections)} connections: {message.get('type', 'unknown')}")
         disconnected = set()
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-                print(f"[DEBUG] Message sent successfully")
-            except Exception as e:
-                print(f"[DEBUG] Send failed: {e}")
+            except Exception:
                 disconnected.add(connection)
 
         # Clean up disconnected clients
@@ -62,7 +59,6 @@ def create_message(msg_type: str, data: dict) -> dict:
 
 async def log_callback(entry: LogEntry):
     """Callback for log entries - broadcasts to all clients."""
-    print(f"[DEBUG] log_callback called: step={entry.step_id}, connections={len(manager.active_connections)}")
     message = create_message("log", {
         "step_id": entry.step_id,
         "level": entry.level,
@@ -110,13 +106,11 @@ async def websocket_endpoint(
         return
 
     await manager.connect(websocket)
-    print(f"[DEBUG] WebSocket connected, total connections: {len(manager.active_connections)}")
 
     # Get deployment service and register callbacks
     service = get_deployment_service()
     service.log_callback = log_callback
     service.step_callback = step_callback
-    print(f"[DEBUG] Callbacks registered on service: {id(service)}")
 
     try:
         # Send initial status
@@ -136,13 +130,23 @@ async def websocket_endpoint(
                         "completed_at": s.completed_at.isoformat() if s.completed_at else None
                     }
                     for s in deployment.steps
+                ],
+                "logs": [
+                    {
+                        "step_id": log.step_id,
+                        "level": log.level,
+                        "message": log.message,
+                        "timestamp": log.timestamp.isoformat()
+                    }
+                    for log in service.logs
                 ]
             }))
         else:
             await websocket.send_json(create_message("initial_state", {
                 "status": "idle",
                 "current_step": 0,
-                "steps": []
+                "steps": [],
+                "logs": []
             }))
 
         # Keep connection alive and handle client messages

@@ -67,13 +67,8 @@ class DeploymentService:
             message=message
         )
         self.logs.append(entry)
-        print(f"[DEBUG] Log entry created: step={step_id}, callback_set={self.log_callback is not None}")
         if self.log_callback:
-            try:
-                await self.log_callback(entry)
-                print(f"[DEBUG] Callback invoked successfully")
-            except Exception as e:
-                print(f"[DEBUG] Callback failed: {e}")
+            await self.log_callback(entry)
 
     async def update_step(self, step_id: int, status: StepStatus, error: Optional[str] = None):
         """Update step status and notify via callback."""
