@@ -111,7 +111,7 @@
                     <template x-for="log in getStepLogs(step.id)" :key="log.timestamp">
                         <div :class="logClass(log)">
                             <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
-                            <span x-html="linkifyUrls(log.message)"></span>
+                            <span x-text="log.message"></span>
                         </div>
                     </template>
                 </div>
@@ -147,7 +147,7 @@
                 <div :class="logClass(log)">
                     <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
                     <span class="text-gray-400" x-text="'[Step ' + log.step_id + ']'"></span>
-                    <span x-html="linkifyUrls(log.message)"></span>
+                    <span x-text="log.message"></span>
                 </div>
             </template>
             <div x-show="logs.length === 0" class="text-gray-500">

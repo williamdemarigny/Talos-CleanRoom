@@ -120,7 +120,7 @@
                         [<span x-text="log.level.toUpperCase()"></span>]
                     </span>
                     <span class="text-gray-400 w-12 flex-shrink-0" x-text="'[' + log.step_id + ']'"></span>
-                    <span class="flex-grow" :class="messageClass(log.level)" x-html="linkifyUrls(log.message)"></span>
+                    <span class="flex-grow" :class="messageClass(log.level)" x-text="log.message"></span>
                 </div>
             </template>
         </div>
@@ -224,19 +224,6 @@ function logsViewer() {
         formatTime(timestamp) {
             const date = new Date(timestamp);
             return date.toLocaleTimeString();
-        },
-
-        linkifyUrls(text) {
-            // Escape HTML entities first to prevent XSS
-            const escaped = text
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-            // Then linkify URLs
-            const urlRegex = /(https?:\/\/[^\s<>&"]+)/g;
-            return escaped.replace(urlRegex,
-                '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-400 underline hover:text-blue-300">$1</a>');
         },
 
         levelClass(level) {

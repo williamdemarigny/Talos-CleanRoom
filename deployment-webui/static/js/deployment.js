@@ -255,19 +255,6 @@ function deploymentMonitor() {
             return new Date(timestamp).toLocaleTimeString();
         },
 
-        linkifyUrls(text) {
-            // Escape HTML entities first to prevent XSS
-            const escaped = text
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-            // Then linkify URLs
-            const urlRegex = /(https?:\/\/[^\s<>&"]+)/g;
-            return escaped.replace(urlRegex,
-                '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-400 underline hover:text-blue-300">$1</a>');
-        },
-
         stepClass(step) {
             switch (step.status) {
                 case 'running': return 'bg-yellow-900/20 border-l-4 border-yellow-500';
