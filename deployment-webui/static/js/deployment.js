@@ -92,6 +92,20 @@ function deploymentMonitor() {
                         });
                     }
 
+                    // Load existing logs when reconnecting
+                    if (data.logs && data.logs.length > 0) {
+                        this.logs = data.logs;
+                        // Auto-scroll to bottom after loading logs
+                        if (this.autoScroll) {
+                            this.$nextTick(() => {
+                                const container = this.$refs.logContainer;
+                                if (container) {
+                                    container.scrollTop = container.scrollHeight;
+                                }
+                            });
+                        }
+                    }
+
                     if (this.isRunning) {
                         this.startElapsedTimer();
                     }
@@ -207,6 +221,32 @@ function deploymentMonitor() {
                 }
             } catch (e) {
                 alert('Failed to abort deployment: ' + e.message);
+            }
+        },
+
+        async runCleanup() {
+            if (this.isRunning) return;
+
+            if (!confirm('Are you sure you want to run cleanup? This will destroy all Terraform-managed resources.')) return;
+
+            try {
+                const response = await fetch('/api/deployment/cleanup', { method: 'POST' });
+                const data = await response.json();
+                if (response.ok) {
+                    alert(data.message);
+                    // Reset status after cleanup
+                    this.status = 'idle';
+                    this.steps.forEach(s => {
+                        s.status = 'pending';
+                        s.started_at = null;
+                        s.completed_at = null;
+                        s.error_message = null;
+                    });
+                } else {
+                    alert('Cleanup failed: ' + data.detail);
+                }
+            } catch (e) {
+                alert('Failed to run cleanup: ' + e.message);
             }
         },
 
