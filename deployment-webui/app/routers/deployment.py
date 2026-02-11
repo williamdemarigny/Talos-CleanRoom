@@ -38,6 +38,7 @@ async def start_deployment(
     service: DeploymentService = Depends(get_deployment_service)
 ):
     """Start a new deployment."""
+    print(f"[DEBUG] HTTP start_deployment called, service: {id(service)}, log_callback_set: {service.log_callback is not None}")
     if service.is_running():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -46,6 +47,7 @@ async def start_deployment(
 
     try:
         deployment = await service.start_deployment()
+        print(f"[DEBUG] Deployment started, log_callback_set: {service.log_callback is not None}")
         return DeploymentResponse(
             success=True,
             message="Deployment started",
