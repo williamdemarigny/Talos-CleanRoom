@@ -111,7 +111,8 @@ function deploymentMonitor() {
                     }
                 },
                 onLog: (data) => {
-                    this.logs.push(data);
+                    // Use spread to create new array for Alpine.js reactivity
+                    this.logs = [...this.logs, data];
                     if (this.autoScroll) {
                         this.$nextTick(() => {
                             const container = this.$refs.logContainer;
@@ -135,7 +136,7 @@ function deploymentMonitor() {
                         this.currentStep = data.step_id;
                         this.isRunning = true;
                         this.status = 'running';
-                        this.expandedSteps.push(data.step_id);
+                        this.expandedSteps = [...this.expandedSteps, data.step_id];
                     } else if (data.status === 'failed') {
                         this.status = 'failed';
                         this.isRunning = false;
@@ -316,9 +317,9 @@ function deploymentMonitor() {
         toggleStep(stepId) {
             const index = this.expandedSteps.indexOf(stepId);
             if (index === -1) {
-                this.expandedSteps.push(stepId);
+                this.expandedSteps = [...this.expandedSteps, stepId];
             } else {
-                this.expandedSteps.splice(index, 1);
+                this.expandedSteps = this.expandedSteps.filter((_, i) => i !== index);
             }
         },
 
