@@ -354,6 +354,13 @@ fi
 print_info "Loading VM information from $TFVARS_FILE"
 echo ""
 
+# On fresh deployments, VMs need time to boot after Terraform creates them
+# Wait for VMs to boot before attempting to query them
+print_info "Waiting 60 seconds for VMs to boot and initialize..."
+print_info "(This ensures QEMU guest agent and Talos API are ready)"
+sleep 60
+echo ""
+
 CONTROL_PLANE_ENDPOINT=""
 declare -a APPLIED_VMS
 
@@ -424,7 +431,7 @@ while IFS= read -r line; do
                 # Wait for Talos API to be ready before applying config
                 # Use insecure mode since the node is still unconfigured (maintenance mode)
                 if [[ "$DRY_RUN" == false ]]; then
-                    if ! wait_for_talos_api "$dhcp_ip" 30 10 true; then
+                    if ! wait_for_talos_api "$dhcp_ip" 45 10 true; then
                         print_error "  Talos API not ready - skipping this VM"
                         echo ""
                         current_node=""
@@ -510,7 +517,7 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
         # This confirms the VM has rebooted and the network is configured
         print_info ""
         print_info "Phase 1: Waiting for Talos API to be reachable..."
-        if ! wait_for_talos_api "$CONTROL_PLANE_ENDPOINT" 60 10 false; then
+        if ! wait_for_talos_api "$CONTROL_PLANE_ENDPOINT" 90 10 false; then
             print_error "Talos API not reachable at $CONTROL_PLANE_ENDPOINT"
             print_error "The VM may not have rebooted or network configuration failed"
             exit 1
@@ -520,7 +527,7 @@ if [[ "$BOOTSTRAP" == true && -n "$CONTROL_PLANE_ENDPOINT" ]]; then
         # This is the critical step - bootstrap WILL FAIL if etcd is not ready
         print_info ""
         print_info "Phase 2: Waiting for controller to exit maintenance mode..."
-        if ! wait_for_controller_ready "$CONTROL_PLANE_ENDPOINT" 60 10; then
+        if ! wait_for_controller_ready "$CONTROL_PLANE_ENDPOINT" 90 10; then
             print_error "Controller failed to exit maintenance mode"
             print_error "Check logs with: talosctl -n $CONTROL_PLANE_ENDPOINT -e $CONTROL_PLANE_ENDPOINT logs"
             exit 1

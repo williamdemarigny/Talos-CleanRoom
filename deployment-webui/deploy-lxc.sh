@@ -40,6 +40,7 @@ SSH_USER_GROUPS="sudo"           # Groups for the SSH user
 # GitHub SSH Settings (for private repository access)
 GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
 GITHUB_REPO_URL="git@github.com:williamdemarigny/Talos-CleanRoom.git"
+GIT_BRANCH="Clickable-URLs"      # Branch to clone (use "main" for default)
 
 # Colors for output
 RED='\033[0;31m'
@@ -358,11 +359,11 @@ ssh-keyscan -t ed25519,rsa github.com >> /root/.ssh/known_hosts 2>/dev/null
 echo \"=== Testing GitHub connectivity ===\"
 su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
 
-echo \"=== Cloning repository ===\"
+echo \"=== Cloning repository (branch: ${GIT_BRANCH}) ===\"
 # Create /opt/talos-cleanroom with correct ownership before cloning
 mkdir -p /opt/talos-cleanroom
 chown ${SSH_USER}:${SSH_USER} /opt/talos-cleanroom
-su - ${SSH_USER} -c \"git clone ${GITHUB_REPO_URL} /opt/talos-cleanroom\"
+su - ${SSH_USER} -c \"git clone -b ${GIT_BRANCH} ${GITHUB_REPO_URL} /opt/talos-cleanroom\"
 
 # Add safe.directory for root (WebUI runs as root but repo owned by deploy user)
 git config --global --add safe.directory /opt/talos-cleanroom
