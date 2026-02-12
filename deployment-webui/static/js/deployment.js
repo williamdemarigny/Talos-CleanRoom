@@ -92,12 +92,27 @@ function deploymentMonitor() {
                         });
                     }
 
+                    // Load existing logs when reconnecting
+                    if (data.logs && data.logs.length > 0) {
+                        this.logs = data.logs;
+                        // Auto-scroll to bottom after loading logs
+                        if (this.autoScroll) {
+                            this.$nextTick(() => {
+                                const container = this.$refs.logContainer;
+                                if (container) {
+                                    container.scrollTop = container.scrollHeight;
+                                }
+                            });
+                        }
+                    }
+
                     if (this.isRunning) {
                         this.startElapsedTimer();
                     }
                 },
                 onLog: (data) => {
-                    this.logs.push(data);
+                    // Use spread to create new array for Alpine.js reactivity
+                    this.logs = [...this.logs, data];
                     if (this.autoScroll) {
                         this.$nextTick(() => {
                             const container = this.$refs.logContainer;
@@ -121,7 +136,7 @@ function deploymentMonitor() {
                         this.currentStep = data.step_id;
                         this.isRunning = true;
                         this.status = 'running';
-                        this.expandedSteps.push(data.step_id);
+                        this.expandedSteps = [...this.expandedSteps, data.step_id];
                     } else if (data.status === 'failed') {
                         this.status = 'failed';
                         this.isRunning = false;
@@ -210,6 +225,32 @@ function deploymentMonitor() {
             }
         },
 
+        async runCleanup() {
+            if (this.isRunning) return;
+
+            if (!confirm('Are you sure you want to run cleanup? This will destroy all Terraform-managed resources.')) return;
+
+            try {
+                const response = await fetch('/api/deployment/cleanup', { method: 'POST' });
+                const data = await response.json();
+                if (response.ok) {
+                    alert(data.message);
+                    // Reset status after cleanup
+                    this.status = 'idle';
+                    this.steps.forEach(s => {
+                        s.status = 'pending';
+                        s.started_at = null;
+                        s.completed_at = null;
+                        s.error_message = null;
+                    });
+                } else {
+                    alert('Cleanup failed: ' + data.detail);
+                }
+            } catch (e) {
+                alert('Failed to run cleanup: ' + e.message);
+            }
+        },
+
         startElapsedTimer() {
             if (!this.startTime) {
                 this.startTime = new Date();
@@ -276,9 +317,9 @@ function deploymentMonitor() {
         toggleStep(stepId) {
             const index = this.expandedSteps.indexOf(stepId);
             if (index === -1) {
-                this.expandedSteps.push(stepId);
+                this.expandedSteps = [...this.expandedSteps, stepId];
             } else {
-                this.expandedSteps.splice(index, 1);
+                this.expandedSteps = this.expandedSteps.filter((_, i) => i !== index);
             }
         },
 
