@@ -102,8 +102,11 @@ class DeploymentService:
         if self.is_running():
             raise RuntimeError("Deployment already in progress")
 
-        self.log_callback = log_callback
-        self.step_callback = step_callback
+        # Only update callbacks if new ones are provided (preserves WebSocket callbacks)
+        if log_callback is not None:
+            self.log_callback = log_callback
+        if step_callback is not None:
+            self.step_callback = step_callback
         self.logs = []
 
         # Initialize deployment state

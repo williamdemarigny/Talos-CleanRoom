@@ -130,13 +130,23 @@ async def websocket_endpoint(
                         "completed_at": s.completed_at.isoformat() if s.completed_at else None
                     }
                     for s in deployment.steps
+                ],
+                "logs": [
+                    {
+                        "step_id": log.step_id,
+                        "level": log.level,
+                        "message": log.message,
+                        "timestamp": log.timestamp.isoformat()
+                    }
+                    for log in service.logs
                 ]
             }))
         else:
             await websocket.send_json(create_message("initial_state", {
                 "status": "idle",
                 "current_step": 0,
-                "steps": []
+                "steps": [],
+                "logs": []
             }))
 
         # Keep connection alive and handle client messages
