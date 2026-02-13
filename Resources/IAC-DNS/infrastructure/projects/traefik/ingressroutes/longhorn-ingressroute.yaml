@@ -5,6 +5,8 @@
 #
 # WARNING: Longhorn UI does not have built-in authentication
 # Basic auth middleware is applied for security
+#
+# TLS: Uses wildcard certificate from default TLSStore
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -25,21 +27,5 @@ spec:
           namespace: traefik
         - name: secure-headers
           namespace: traefik
-  tls:
-    secretName: longhorn-ui-tls
----
-# Certificate for Longhorn (requires cert-manager)
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: longhorn-ui-cert
-  namespace: longhorn-system
-spec:
-  secretName: longhorn-ui-tls
-  issuerRef:
-    # Use letsencrypt-staging for testing, letsencrypt-prod for production
-    name: selfsigned-issuer
-    kind: ClusterIssuer
-  commonName: longhorn.knowledgeondemand.net
-  dnsNames:
-    - longhorn.knowledgeondemand.net
+  tls: {}
+  # Uses default TLSStore with knowledgeondemand-wildcard-tls certificate

@@ -1,0 +1,48 @@
+# Wildcard Certificate for *.knowledgeondemand.net
+#
+# This certificate covers all subdomains and the apex domain.
+# Uses Let's Encrypt with DNS-01 challenge via Cloudflare.
+#
+# Initially configured for staging - switch to letsencrypt-prod after testing.
+#
+# To switch to production:
+#   1. Update issuerRef.name to "letsencrypt-prod"
+#   2. Delete the existing certificate secret: kubectl delete secret knowledgeondemand-wildcard-tls -n traefik
+#   3. Wait for cert-manager to issue new certificate
+#
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: knowledgeondemand-wildcard
+  namespace: traefik
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # Secret name where the certificate will be stored
+  secretName: knowledgeondemand-wildcard-tls
+
+  # Certificate issuer - start with staging, switch to prod after testing
+  issuerRef:
+    name: letsencrypt-staging
+    kind: ClusterIssuer
+
+  # Common name (primary domain)
+  commonName: "*.knowledgeondemand.net"
+
+  # Subject Alternative Names (SANs)
+  # Includes both wildcard and apex domain
+  dnsNames:
+    - "*.knowledgeondemand.net"
+    - "knowledgeondemand.net"
+
+  # Certificate validity duration (Let's Encrypt issues 90-day certs)
+  # cert-manager will renew when 2/3 of the validity period has passed
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days before expiry
+
+  # Private key settings
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always

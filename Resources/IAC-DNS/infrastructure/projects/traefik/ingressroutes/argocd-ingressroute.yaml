@@ -4,6 +4,8 @@
 # Access ArgoCD at: https://argocd.knowledgeondemand.net
 #
 # Note: ArgoCD uses gRPC for some features, so we need both HTTP and gRPC routes
+#
+# TLS: Uses wildcard certificate from default TLSStore
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -33,21 +35,5 @@ spec:
         - name: argocd-server
           port: 80
           scheme: h2c
-  tls:
-    secretName: argocd-server-tls
----
-# Certificate for ArgoCD (requires cert-manager)
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: argocd-server-cert
-  namespace: argocd
-spec:
-  secretName: argocd-server-tls
-  issuerRef:
-    # Use letsencrypt-staging for testing, letsencrypt-prod for production
-    name: selfsigned-issuer
-    kind: ClusterIssuer
-  commonName: argocd.knowledgeondemand.net
-  dnsNames:
-    - argocd.knowledgeondemand.net
+  tls: {}
+  # Uses default TLSStore with knowledgeondemand-wildcard-tls certificate
