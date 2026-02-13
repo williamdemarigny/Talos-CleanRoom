@@ -1,5 +1,8 @@
 # Threat Dragon IngressRoute
 # Access via: https://threatdragon.knowledgeondemand.net
+#
+# TLS: Uses wildcard certificate from default TLSStore
+---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -19,20 +22,5 @@ spec:
           namespace: traefik
         - name: secure-headers
           namespace: traefik
-  tls:
-    secretName: threat-dragon-tls
----
-# TLS Certificate
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: threat-dragon-cert
-  namespace: threat-dragon
-spec:
-  secretName: threat-dragon-tls
-  issuerRef:
-    name: selfsigned-issuer
-    kind: ClusterIssuer
-  commonName: threatdragon.knowledgeondemand.net
-  dnsNames:
-    - threatdragon.knowledgeondemand.net
+  tls: {}
+  # Uses default TLSStore with knowledgeondemand-wildcard-tls certificate
