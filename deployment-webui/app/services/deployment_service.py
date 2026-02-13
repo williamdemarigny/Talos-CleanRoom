@@ -503,14 +503,16 @@ class DeploymentService:
             await self.log(step_id, "error", f"tfvars-to-talos-env.sh failed: {result.output}")
             return False
 
-        # Remove existing secret file to ensure fresh generation
-        secret_file = self.talos_dir / "talsecret.sops.yaml"
-        if secret_file.exists():
-            await self.log(step_id, "info", "Removing existing talsecret.sops.yaml for fresh generation...")
-            try:
-                secret_file.unlink()
-            except Exception as e:
-                await self.log(step_id, "warn", f"Could not remove old secret file: {e}")
+        # Remove existing secret files to ensure fresh generation
+        # talhelper genconfig checks: talsecret.yaml, talsecret.sops.yaml, talsecret.yml, talsecret.sops.yml
+        for secret_filename in ["talsecret.yaml", "talsecret.sops.yaml", "talsecret.yml", "talsecret.sops.yml"]:
+            secret_file = self.talos_dir / secret_filename
+            if secret_file.exists():
+                await self.log(step_id, "info", f"Removing existing {secret_filename} for fresh generation...")
+                try:
+                    secret_file.unlink()
+                except Exception as e:
+                    await self.log(step_id, "warn", f"Could not remove {secret_filename}: {e}")
 
         # Generate Talos secret
         await self.log(step_id, "info", "Generating Talos secret...")
