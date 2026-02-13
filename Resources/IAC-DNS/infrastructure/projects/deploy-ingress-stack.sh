@@ -94,15 +94,27 @@ kubectl wait --for=condition=available deployment/cert-manager-webhook \
 echo "✓ cert-manager deployed"
 echo ""
 
+# Apply Cloudflare API token secret (required for DNS-01 challenge)
+echo "[5/12] Applying Cloudflare API token secret..."
+if [[ -f "${SCRIPT_DIR}/cert-manager/cloudflare-secret.sops.yaml" ]]; then
+    sops -d "${SCRIPT_DIR}/cert-manager/cloudflare-secret.sops.yaml" | kubectl apply -f -
+    echo "✓ Cloudflare secret applied"
+else
+    echo "Warning: cloudflare-secret.sops.yaml not found"
+    echo "  Create from template: cert-manager/cloudflare-secret.yaml"
+    echo "  Then encrypt with: sops -e cloudflare-secret.yaml > cloudflare-secret.sops.yaml"
+fi
+echo ""
+
 # Configure ClusterIssuers
-echo "[5/10] Configuring ClusterIssuers..."
+echo "[6/12] Configuring ClusterIssuers..."
 sleep 5  # Give webhook time to fully initialize
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/cluster-issuers.yaml"
 echo "✓ ClusterIssuers configured"
 echo ""
 
 # Deploy Traefik
-echo "[6/10] Deploying Traefik..."
+echo "[7/12] Deploying Traefik..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 
 echo "Waiting for Traefik to be ready..."
@@ -122,13 +134,20 @@ echo "✓ Traefik deployed"
 echo ""
 
 # Apply Middlewares
-echo "[7/10] Configuring Traefik Middlewares..."
+echo "[8/12] Configuring Traefik Middlewares..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/middlewares.yaml"
 echo "✓ Middlewares configured"
 echo ""
 
+# Apply Wildcard Certificate
+echo "[9/12] Applying Wildcard Certificate..."
+kubectl apply -f "${SCRIPT_DIR}/cert-manager/wildcard-certificate.yaml"
+echo "✓ Wildcard certificate applied (uses letsencrypt-staging by default)"
+echo "  Note: Switch to letsencrypt-prod after testing"
+echo ""
+
 # Deploy Longhorn
-echo "[8/10] Deploying Longhorn..."
+echo "[10/12] Deploying Longhorn..."
 kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
 
 echo "Waiting for Longhorn to be ready..."
@@ -296,12 +315,12 @@ echo "✓ Longhorn fully deployed and operational"
 echo ""
 
 # Get LoadBalancer IP
-echo "[9/10] Retrieving Traefik LoadBalancer IP..."
+echo "[11/12] Retrieving Traefik LoadBalancer IP..."
 sleep 5
 TRAEFIK_IP=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
 
 # Apply IngressRoutes (excluding OpenVAS which will be added later)
-echo "[10/10] Applying IngressRoutes..."
+echo "[12/12] Applying IngressRoutes..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
 kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/argocd-ingressroute.yaml"
 kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/longhorn-ingressroute.yaml"

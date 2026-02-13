@@ -4,7 +4,7 @@
 # Apply manually with: kubectl apply -f cluster-issuers.yaml
 # Or create a separate ArgoCD Application for post-install configuration
 #
-# IMPORTANT: Update the email address for Let's Encrypt notifications
+# IMPORTANT: Requires cloudflare-api-token-secret in cert-manager namespace
 ---
 # Self-signed issuer for internal/development certificates
 apiVersion: cert-manager.io/v1
@@ -15,35 +15,49 @@ spec:
   selfSigned: {}
 ---
 # Let's Encrypt Staging (for testing - higher rate limits, untrusted certs)
+# Uses DNS-01 challenge via Cloudflare for wildcard certificate support
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt-staging
 spec:
   acme:
-    # Update this email to receive certificate expiration notifications
+    # Email for certificate expiration notifications
     email: admin@knowledgeondemand.net
     server: https://acme-staging-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
       name: letsencrypt-staging-account-key
     solvers:
-      - http01:
-          ingress:
-            class: traefik
+      # DNS-01 challenge using Cloudflare (required for wildcard certs)
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+        selector:
+          dnsZones:
+            - "knowledgeondemand.net"
 ---
 # Let's Encrypt Production (trusted certificates - lower rate limits)
+# Uses DNS-01 challenge via Cloudflare for wildcard certificate support
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt-prod
 spec:
   acme:
-    # Update this email to receive certificate expiration notifications
+    # Email for certificate expiration notifications
     email: admin@knowledgeondemand.net
     server: https://acme-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
-      - http01:
-          ingress:
-            class: traefik
+      # DNS-01 challenge using Cloudflare (required for wildcard certs)
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+        selector:
+          dnsZones:
+            - "knowledgeondemand.net"
