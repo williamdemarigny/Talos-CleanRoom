@@ -5,6 +5,8 @@
 #
 # IMPORTANT: This exposes the Traefik dashboard with basic auth protection
 # Create the basic-auth-secret first (see middlewares.yaml for instructions)
+#
+# TLS: Uses wildcard certificate from default TLSStore
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -25,22 +27,5 @@ spec:
           namespace: traefik
         - name: secure-headers
           namespace: traefik
-  tls:
-    # Use cert-manager to generate certificate
-    secretName: traefik-dashboard-tls
----
-# Certificate for the dashboard (requires cert-manager)
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: traefik-dashboard-cert
-  namespace: traefik
-spec:
-  secretName: traefik-dashboard-tls
-  issuerRef:
-    # Use letsencrypt-staging for testing, letsencrypt-prod for production
-    name: selfsigned-issuer
-    kind: ClusterIssuer
-  commonName: traefik.knowledgeondemand.net
-  dnsNames:
-    - traefik.knowledgeondemand.net
+  tls: {}
+  # Uses default TLSStore with knowledgeondemand-wildcard-tls certificate
