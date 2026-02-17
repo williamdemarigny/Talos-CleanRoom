@@ -1,12 +1,64 @@
 #!/bin/bash
+#######################################
+# DeployCluster.sh - Talos CleanRoom Cluster Deployment Orchestrator
+#######################################
+# This script orchestrates the complete deployment of a Talos Kubernetes
+# cluster including infrastructure provisioning, Talos configuration,
+# ArgoCD installation, and security tool deployment.
+#
+# Prerequisites:
+#   - terraform, talhelper, talosctl, sops, jq, curl, kubectl, helm, yq, age
+#   - Proxmox credentials in credentials.auto.tfvars
+#   - SOPS age keys configured (~/.config/sops/age/keys.txt)
+#   - Network connectivity to Proxmox and target VLAN
+#
+# Usage:
+#   ./DeployCluster.sh
+#
+# Environment Variables:
+#   SOPS_AGE_KEY_FILE - Path to SOPS age key (default: ~/.config/sops/age/keys.txt)
+#
+# Directory Structure:
+#   Resources/IAC-DNS/terraform/    - Terraform configurations
+#   Resources/IAC-DNS/talos/        - Talos cluster configurations
+#   Resources/IAC-DNS/infrastructure/ - ArgoCD and application manifests
+#
+# Deployment Steps:
+#   1. Validate git repository and prerequisites
+#   2. Run Terraform to provision VMs on Proxmox
+#   3. Wait for VMs to boot and become reachable
+#   4. Generate Talos configuration with talhelper
+#   5. Apply Talos configs and bootstrap the cluster
+#   6. Install ArgoCD and deploy infrastructure stack
+#   7. Deploy security tools (OpenVAS, Faraday, Metasploit, Threat Dragon)
+#
+# Exit Codes:
+#   0 - Success
+#   1 - Prerequisites check failed or general error
+#   2 - Terraform deployment failed
+#   3 - Talos configuration failed
+#   4 - Cluster health check failed
+#
+# Cleanup:
+#   On failure, the script attempts to run terraform destroy to clean up
+#   any partially created infrastructure.
+#######################################
 
-set -eo pipefail  # Exit immediately if any command exits with a non-zero status and handle errors in pipes.
+set -euo pipefail  # Exit on error, undefined variables, and pipe failures
 
-# Configuration variables
-MASTER_NODE="talos-CleanRoom-master-01.knowledgeondemand.net"
-MASTER_NODE_IP="10.83.3.10"
-HEALTH_CHECK_RETRIES=45
-HEALTH_CHECK_INTERVAL=10
+#######################################
+# Configuration
+#######################################
+# Cluster topology
+readonly MASTER_NODE="talos-CleanRoom-master-01.knowledgeondemand.net"
+readonly MASTER_NODE_IP="10.83.3.10"
+
+# Timing configuration (seconds)
+readonly HEALTH_CHECK_RETRIES=45        # Number of health check attempts
+readonly HEALTH_CHECK_INTERVAL=10       # Seconds between health checks
+readonly VM_BOOT_WAIT=60                # Initial wait for VM boot
+readonly TALOS_API_TIMEOUT=15           # Timeout for Talos API checks
+readonly ARGOCD_SYNC_WAIT=10            # Wait for ArgoCD sync operations
 
 # Function to perform cleanup on failure (defined early so it's available for all error handlers)
 cleanup() {
