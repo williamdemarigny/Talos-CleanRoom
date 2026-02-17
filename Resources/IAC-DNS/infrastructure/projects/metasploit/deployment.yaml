@@ -26,11 +26,13 @@ spec:
     type: Recreate  # Required for RWO PVCs
   selector:
     matchLabels:
-      app: metasploit
+      app.kubernetes.io/name: metasploit
   template:
     metadata:
       labels:
-        app: metasploit
+        app.kubernetes.io/name: metasploit
+        app.kubernetes.io/component: framework
+        app.kubernetes.io/part-of: security-platform
     spec:
       # ============================================================
       # INIT CONTAINERS
