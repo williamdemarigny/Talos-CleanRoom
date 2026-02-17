@@ -389,8 +389,8 @@ spec:
             memory: "256Mi"
             cpu: "100m"
           limits:
-            memory: "2Gi"
-            cpu: "2"
+            memory: "1Gi"
+            cpu: "1"
         startupProbe:
           exec:
             command: ["test", "-S", "/run/ospd/ospd-openvas.sock"]
@@ -468,8 +468,8 @@ spec:
             memory: "1Gi"
             cpu: "200m"
           limits:
-            memory: "4Gi"
-            cpu: "2"
+            memory: "2Gi"
+            cpu: "1"
         # GVMD takes significant time to sync feeds on first start
         startupProbe:
           exec:
