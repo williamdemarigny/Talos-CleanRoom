@@ -203,31 +203,19 @@ spec:
       - name: postgres-data
         persistentVolumeClaim:
           claimName: metasploit-db
----
-# Database credentials secret
-# Default password: admin (CHANGE IN PRODUCTION!)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: metasploit-db-credentials
-  namespace: metasploit
-  labels:
-    app.kubernetes.io/name: metasploit
-    app.kubernetes.io/component: credentials
-type: Opaque
-stringData:
-  password: "admin"
----
-# RPC credentials secret for msfrpcd
-# Default password: admin (CHANGE IN PRODUCTION!)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: metasploit-rpc-credentials
-  namespace: metasploit
-  labels:
-    app.kubernetes.io/name: metasploit
-    app.kubernetes.io/component: credentials
-type: Opaque
-stringData:
-  password: "admin"
+# =============================================================================
+# SECRETS - Managed externally via SOPS encryption
+# =============================================================================
+# The secrets referenced by this deployment are stored in:
+#   secrets.sops.yaml (SOPS-encrypted)
+#
+# To generate new secrets:
+#   ../../../scripts/generate-secrets.sh
+#
+# To apply secrets (decrypts and applies):
+#   sops -d secrets.sops.yaml | kubectl apply -f -
+#
+# Required secrets:
+#   - metasploit-db-credentials: PostgreSQL password (key: password)
+#   - metasploit-rpc-credentials: msfrpcd RPC password (key: password)
+# =============================================================================
