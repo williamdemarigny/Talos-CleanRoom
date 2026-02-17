@@ -1,4 +1,12 @@
-"""Deployment service for orchestrating cluster deployment."""
+"""Deployment service for orchestrating cluster deployment.
+
+This module provides the DeploymentService class which orchestrates the
+complete deployment of a Talos Kubernetes cluster including:
+- Infrastructure provisioning via Terraform
+- Talos configuration generation and application
+- ArgoCD installation and GitOps setup
+- Security tool deployment (OpenVAS, Faraday, Metasploit, Threat Dragon)
+"""
 
 import asyncio
 import json
@@ -18,6 +26,24 @@ from app.models.deployment import (
     LogEntry, DEPLOYMENT_STEPS
 )
 from app.services.process_manager import ProcessManager
+
+
+# =============================================================================
+# Timing Constants (seconds)
+# =============================================================================
+# These constants control various wait times and retry intervals throughout
+# the deployment process. Adjust based on your infrastructure performance.
+
+VM_BOOT_INITIAL_DELAY = 180       # Initial wait for VMs to boot after Terraform
+BOOT_DELAY_CHECK_INTERVAL = 30    # Interval for countdown during boot delay
+PROXMOX_API_TIMEOUT = 10          # Timeout for Proxmox API requests
+TALOS_API_CHECK_TIMEOUT = 15      # Timeout for Talos API health checks
+ARGOCD_SYNC_WAIT = 10             # Wait time after ArgoCD sync operations
+THREAT_DRAGON_SYNC_WAIT = 30      # Extra wait for Threat Dragon deployment
+
+# Retry configuration
+VM_READY_MAX_ATTEMPTS = 30        # Maximum attempts to check VM readiness
+VM_READY_RETRY_INTERVAL = 10      # Seconds between VM readiness checks
 
 
 @dataclass
@@ -203,7 +229,19 @@ class DeploymentService:
             self.current_deployment.completed_at = datetime.utcnow()
 
     async def _step_validate_git(self, step_id: int) -> bool:
-        """Step 0: Validate git repository."""
+        """Step 0: Validate git repository and configured paths.
+
+        Verifies that:
+        - REPO_ROOT exists and is accessible
+        - The directory is a valid git repository
+        - Required subdirectories (terraform, talos) are present
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if validation passes, False otherwise.
+        """
         await self.log(step_id, "info", "Validating git repository...")
 
         # Log configured paths for debugging
@@ -228,7 +266,17 @@ class DeploymentService:
             return False
 
     async def _step_check_dependencies(self, step_id: int) -> bool:
-        """Step 1: Check required dependencies."""
+        """Step 1: Check that all required CLI tools are available.
+
+        Verifies the presence of: terraform, talhelper, talosctl, kubectl,
+        helm, sops, jq, curl, yq, age.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if all dependencies are found, False if any are missing.
+        """
         await self.log(step_id, "info", "Checking dependencies...")
 
         all_found = True
@@ -243,7 +291,17 @@ class DeploymentService:
         return all_found
 
     async def _step_terraform_deploy(self, step_id: int) -> bool:
-        """Step 2: Terraform deployment."""
+        """Step 2: Provision VMs on Proxmox using Terraform.
+
+        Executes terraform init, plan, and apply to create the cluster VMs.
+        Uses cluster.auto.tfvars and credentials.auto.tfvars for configuration.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if Terraform succeeds, False otherwise.
+        """
         await self.log(step_id, "info", "Running terraform init...")
 
         result = await self.process_manager.run_command(
@@ -281,16 +339,15 @@ class DeploymentService:
         until after configs are applied.
         """
         # Initial delay to allow VMs to fully boot before polling
-        initial_delay = 180  # seconds
-        await self.log(step_id, "info", f"Waiting {initial_delay}s for VMs to boot before checking Talos API...")
+        await self.log(step_id, "info", f"Waiting {VM_BOOT_INITIAL_DELAY}s for VMs to boot before checking Talos API...")
 
-        # Wait in 30-second increments so we can check for cancellation
-        for i in range(0, initial_delay, 30):
+        # Wait in increments so we can check for cancellation
+        for i in range(0, VM_BOOT_INITIAL_DELAY, BOOT_DELAY_CHECK_INTERVAL):
             if self.current_deployment.status != DeploymentStatus.RUNNING:
                 return False
-            remaining = initial_delay - i
+            remaining = VM_BOOT_INITIAL_DELAY - i
             await self.log(step_id, "info", f"  Boot delay: {remaining}s remaining...")
-            await asyncio.sleep(min(30, remaining))
+            await asyncio.sleep(min(BOOT_DELAY_CHECK_INTERVAL, remaining))
 
         await self.log(step_id, "info", "Boot delay complete. Checking Talos API availability...")
         await self.log(step_id, "info", "Note: VMs are at DHCP IPs until config is applied")
@@ -334,9 +391,7 @@ class DeploymentService:
                 await self.log(step_id, "warn", f"Could not read Proxmox credentials: {e}")
 
         # Wait for each VM's Talos API to be ready
-        max_attempts = 30
-        interval = 10
-        max_wait = max_attempts * interval
+        max_wait = VM_READY_MAX_ATTEMPTS * VM_READY_RETRY_INTERVAL
 
         await self.log(step_id, "info", f"Checking Talos API readiness (max wait: {max_wait}s per VM)...")
 
@@ -351,7 +406,7 @@ class DeploymentService:
             ready = False
             dhcp_ip = None
 
-            for attempt in range(1, max_attempts + 1):
+            for attempt in range(1, VM_READY_MAX_ATTEMPTS + 1):
                 if self.current_deployment.status != DeploymentStatus.RUNNING:
                     return False
 
@@ -362,7 +417,7 @@ class DeploymentService:
                         curl_result = subprocess.run(
                             ["curl", "-s", "-k", "-H", f"Authorization: PVEAPIToken={proxmox_token}",
                              f"{proxmox_endpoint}/api2/json/nodes/{proxmox_node}/qemu/{vmid}/agent/network-get-interfaces"],
-                            capture_output=True, text=True, timeout=10
+                            capture_output=True, text=True, timeout=PROXMOX_API_TIMEOUT
                         )
                         if curl_result.returncode == 0:
                             agent_data = json.loads(curl_result.stdout)
@@ -402,7 +457,7 @@ class DeploymentService:
                     # Note: In talosctl 1.12+, --insecure is only supported for version and apply-config
                     check_result = await self.process_manager.run_command_simple(
                         ["talosctl", "version", "--insecure", "-n", dhcp_ip, "-e", dhcp_ip],
-                        timeout=15
+                        timeout=TALOS_API_CHECK_TIMEOUT
                     )
 
                     # Log the actual response for debugging
@@ -429,7 +484,7 @@ class DeploymentService:
                         await self.log(step_id, "info", f"  Talos API not responding at {dhcp_ip}")
 
                 await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
-                await asyncio.sleep(interval)
+                await asyncio.sleep(VM_READY_RETRY_INTERVAL)
 
             if not ready:
                 if not dhcp_ip:
@@ -442,7 +497,21 @@ class DeploymentService:
         return True
 
     async def _step_generate_talos_config(self, step_id: int) -> bool:
-        """Step 4: Generate Talos configuration."""
+        """Step 4: Generate Talos configuration using talhelper.
+
+        This step:
+        1. Runs tfvars-to-talos-env.sh to convert Terraform vars to Talos format
+        2. Cleans up old configuration files
+        3. Generates Talos secrets with talhelper gensecret
+        4. Encrypts secrets with SOPS
+        5. Generates full Talos config with talhelper genconfig
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if configuration generation succeeds, False otherwise.
+        """
         sops_key_file = os.environ.get(
             "SOPS_AGE_KEY_FILE",
             os.path.expanduser("~/.config/sops/age/keys.txt")
@@ -506,13 +575,16 @@ class DeploymentService:
         # Remove existing secret files to ensure fresh generation
         # talhelper genconfig checks: talsecret.yaml, talsecret.sops.yaml, talsecret.yml, talsecret.sops.yml
         for secret_filename in ["talsecret.yaml", "talsecret.sops.yaml", "talsecret.yml", "talsecret.sops.yml"]:
-            secret_file = self.talos_dir / secret_filename
-            if secret_file.exists():
+            old_secret = self.talos_dir / secret_filename
+            if old_secret.exists():
                 await self.log(step_id, "info", f"Removing existing {secret_filename} for fresh generation...")
                 try:
-                    secret_file.unlink()
+                    old_secret.unlink()
                 except Exception as e:
                     await self.log(step_id, "warn", f"Could not remove {secret_filename}: {e}")
+
+        # Define the secret file path we'll write to
+        secret_file = self.talos_dir / "talsecret.sops.yaml"
 
         # Generate Talos secret
         await self.log(step_id, "info", "Generating Talos secret...")
@@ -538,7 +610,7 @@ class DeploymentService:
         # Encrypt with SOPS
         await self.log(step_id, "info", "Encrypting secret with SOPS...")
         result = await self.process_manager.run_command(
-            ["sops", "-e", "-i", "talsecret.sops.yaml"],
+            ["sops", "-e", "-i", str(secret_file.name)],
             cwd=self.talos_dir,
             env=env,
             on_output=lambda line: self.log(step_id, "info", line)
@@ -579,7 +651,19 @@ class DeploymentService:
         return True
 
     async def _step_apply_talos_configs(self, step_id: int) -> bool:
-        """Step 4: Apply Talos configurations."""
+        """Step 5: Apply Talos configurations to cluster nodes.
+
+        Runs apply-configs.sh with --bootstrap flag to:
+        1. Apply machine configs to each node
+        2. Bootstrap the first control plane node
+        3. Wait for etcd and Kubernetes to initialize
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if configs are applied successfully, False otherwise.
+        """
         talosconfig = self.talos_dir / "clusterconfig" / "talosconfig"
         env = {"TALOSCONFIG": str(talosconfig)}
 
@@ -594,7 +678,17 @@ class DeploymentService:
         return result.success
 
     async def _step_verify_cluster_health(self, step_id: int) -> bool:
-        """Step 5: Verify cluster health."""
+        """Step 6: Verify cluster health using talosctl health.
+
+        Polls the cluster health endpoint until the cluster reports healthy
+        or the maximum retry count is exceeded.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if cluster is healthy, False if health check times out.
+        """
         talosconfig = self.talos_dir / "clusterconfig" / "talosconfig"
         env = {"TALOSCONFIG": str(talosconfig)}
 
@@ -629,7 +723,17 @@ class DeploymentService:
         return False
 
     async def _step_get_kubeconfig(self, step_id: int) -> bool:
-        """Step 6: Get kubeconfig."""
+        """Step 7: Retrieve kubeconfig from the cluster.
+
+        Gets the kubeconfig from the master node and saves it to ~/.kube/config
+        for kubectl access.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if kubeconfig is retrieved, False otherwise.
+        """
         talosconfig = self.talos_dir / "clusterconfig" / "talosconfig"
         env = {"TALOSCONFIG": str(talosconfig)}
         kubeconfig_path = Path.home() / ".kube" / "config"
@@ -647,7 +751,17 @@ class DeploymentService:
         return result.success
 
     async def _step_install_argocd(self, step_id: int) -> bool:
-        """Step 7: Install ArgoCD."""
+        """Step 8: Install ArgoCD GitOps platform.
+
+        Runs the ArgoCD install script which installs ArgoCD via Helm
+        with custom values including admin credentials.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if ArgoCD installs successfully, False otherwise.
+        """
         await self.log(step_id, "info", "Running ArgoCD install script...")
 
         result = await self.process_manager.run_command(
@@ -659,7 +773,20 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_infrastructure(self, step_id: int) -> bool:
-        """Step 8: Deploy infrastructure stack."""
+        """Step 9: Deploy infrastructure stack (MetalLB, cert-manager, Traefik, Longhorn).
+
+        Runs deploy-ingress-stack.sh which deploys and configures:
+        - MetalLB for load balancer IPs
+        - cert-manager for TLS certificates
+        - Traefik as ingress controller
+        - Longhorn for distributed storage
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if infrastructure deploys successfully, False otherwise.
+        """
         await self.log(step_id, "info", "Running deploy-ingress-stack.sh...")
 
         result = await self.process_manager.run_command(
@@ -671,7 +798,17 @@ class DeploymentService:
         return result.success
 
     async def _step_argocd_self_management(self, step_id: int) -> bool:
-        """Step 9: Enable ArgoCD self-management."""
+        """Step 10: Enable ArgoCD self-management via GitOps.
+
+        Applies the ArgoCD Application resource that makes ArgoCD manage itself,
+        enabling GitOps-based updates to the ArgoCD configuration.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if self-management is enabled, False otherwise.
+        """
         await self.log(step_id, "info", "Enabling ArgoCD self-management...")
 
         app_yaml = self.projects_dir / "argocd" / "application.yaml"
@@ -682,12 +819,22 @@ class DeploymentService:
 
         if result.success:
             await self.log(step_id, "info", "Waiting for ArgoCD self-management...")
-            await asyncio.sleep(10)
+            await asyncio.sleep(ARGOCD_SYNC_WAIT)
 
         return result.success
 
     async def _step_deploy_openvas(self, step_id: int) -> bool:
-        """Step 10: Deploy OpenVAS."""
+        """Step 11: Deploy OpenVAS vulnerability scanner.
+
+        Deploys the Greenbone OpenVAS stack via ArgoCD Application.
+        OpenVAS provides vulnerability scanning capabilities.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if deployment initiated, False otherwise.
+        """
         await self.log(step_id, "info", "Deploying OpenVAS...")
 
         app_yaml = self.projects_dir / "openvas" / "application.yaml"
@@ -699,7 +846,18 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_faraday(self, step_id: int) -> bool:
-        """Step 11: Deploy Faraday."""
+        """Step 12: Deploy Faraday vulnerability management platform.
+
+        Deploys Faraday via ArgoCD Application. Faraday aggregates
+        vulnerability data from multiple sources including OpenVAS
+        and Metasploit.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if deployment initiated, False otherwise.
+        """
         await self.log(step_id, "info", "Deploying Faraday...")
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
@@ -711,7 +869,17 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_metasploit(self, step_id: int) -> bool:
-        """Step 12: Deploy Metasploit."""
+        """Step 13: Deploy Metasploit penetration testing framework.
+
+        Deploys Metasploit via ArgoCD Application. Metasploit provides
+        exploit development and penetration testing capabilities.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if deployment initiated, False otherwise.
+        """
         await self.log(step_id, "info", "Deploying Metasploit...")
 
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
@@ -723,7 +891,18 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_threat_dragon(self, step_id: int) -> bool:
-        """Step 13: Deploy Threat Dragon."""
+        """Step 14: Deploy Threat Dragon and finalize deployment.
+
+        Deploys Threat Dragon (threat modeling tool) via ArgoCD Application,
+        waits for sync, and logs the deployment summary including access
+        URLs and default credentials.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+
+        Returns:
+            True if deployment completes, False otherwise.
+        """
         await self.log(step_id, "info", "Deploying Threat Dragon...")
 
         app_yaml = self.projects_dir / "threat-dragon" / "application.yaml"
@@ -734,7 +913,7 @@ class DeploymentService:
 
         # Wait for applications to sync
         await self.log(step_id, "info", "Waiting for applications to sync...")
-        await asyncio.sleep(30)
+        await asyncio.sleep(THREAT_DRAGON_SYNC_WAIT)
 
         # Log deployment summary
         await self.log(step_id, "info", "")

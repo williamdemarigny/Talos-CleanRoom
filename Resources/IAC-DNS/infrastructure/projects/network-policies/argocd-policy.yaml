@@ -1,0 +1,76 @@
+# ArgoCD Network Policy
+# =============================================================================
+# ArgoCD is a GitOps continuous delivery tool that:
+# - Receives traffic from Traefik ingress (web UI and API access)
+# - Needs to connect to Git repositories (GitHub, GitLab, etc.)
+# - Needs to connect to the Kubernetes API server
+# - Components communicate internally within the namespace
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-traffic
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from Traefik namespace (web UI access)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 80    # ArgoCD server HTTP
+        - protocol: TCP
+          port: 443   # ArgoCD server HTTPS
+        - protocol: TCP
+          port: 8080  # ArgoCD server API
+    # Allow internal namespace communication (server, repo-server, etc.)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS egress for Git repository access
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443   # HTTPS (GitHub, GitLab, etc.)
+        - protocol: TCP
+          port: 22    # SSH (Git over SSH)
+    # Allow access to Kubernetes API server
+    # The API server is typically at kubernetes.default.svc
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: default
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Allow internal namespace communication
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd

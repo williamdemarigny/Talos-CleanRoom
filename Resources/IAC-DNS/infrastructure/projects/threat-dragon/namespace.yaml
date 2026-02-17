@@ -6,3 +6,8 @@ metadata:
   labels:
     app.kubernetes.io/name: threat-dragon
     app.kubernetes.io/component: threat-modeling
+    # Pod Security Standards: restricted (simple web application, no privileges)
+    # Threat Dragon is a Node.js web app that doesn't need elevated privileges
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

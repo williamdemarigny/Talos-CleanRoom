@@ -22,11 +22,13 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: faraday
+      app.kubernetes.io/name: faraday
   template:
     metadata:
       labels:
-        app: faraday
+        app.kubernetes.io/name: faraday
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: security-platform
     spec:
       # ============================================================
       # INIT CONTAINERS
@@ -98,7 +100,10 @@ spec:
         - name: POSTGRES_USER
           value: "faraday"
         - name: POSTGRES_PASSWORD
-          value: "admin"
+          valueFrom:
+            secretKeyRef:
+              name: faraday-credentials
+              key: postgres-password
         - name: POSTGRES_DB
           value: "faraday"
         - name: PGDATA
@@ -180,9 +185,9 @@ spec:
             echo "Creating database tables..."
             faraday-manage create-tables || echo "Tables may already exist"
 
-            # Create admin user if not exists
+            # Create admin user if not exists (password from environment variable)
             echo "Creating admin user..."
-            faraday-manage create-superuser --username faraday --password admin --email admin@localhost 2>/dev/null || echo "User may already exist"
+            faraday-manage create-superuser --username faraday --password "${ADMIN_PASSWORD}" --email admin@localhost 2>/dev/null || echo "User may already exist"
 
             # Run migrations
             echo "Running migrations..."
@@ -199,11 +204,19 @@ spec:
         - name: PGSQL_USER
           value: "faraday"
         - name: PGSQL_PASSWD
-          value: "admin"
+          valueFrom:
+            secretKeyRef:
+              name: faraday-credentials
+              key: postgres-password
         - name: PGSQL_DBNAME
           value: "faraday"
         - name: REDIS_SERVER
           value: "redis://127.0.0.1:6379"
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: faraday-credentials
+              key: admin-password
         volumeMounts:
         - name: faraday-data
           mountPath: /home/faraday/.faraday
@@ -215,7 +228,7 @@ spec:
             memory: "512Mi"
             cpu: "250m"
           limits:
-            memory: "4Gi"
+            memory: "2Gi"
             cpu: "1"
         startupProbe:
           tcpSocket:
@@ -251,6 +264,8 @@ spec:
           name: faraday-server-config
 ---
 # Faraday server.ini configuration
+# Note: Database password is injected via PGSQL_PASSWD environment variable
+# The connection_string here uses a placeholder that Faraday overrides with env vars
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -262,7 +277,8 @@ metadata:
 data:
   server.ini: |
     [database]
-    connection_string = postgresql+psycopg2://faraday:admin@127.0.0.1/faraday
+    # Connection string is overridden by PGSQL_* environment variables
+    connection_string = postgresql+psycopg2://faraday@127.0.0.1/faraday
 
     [faraday_server]
     bind_address = 0.0.0.0
@@ -275,29 +291,18 @@ data:
 
     [logger]
     level = INFO
----
-# Database credentials secret (kept for reference, values now inline)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: faraday-db-credentials
-  namespace: faraday
-  labels:
-    app.kubernetes.io/name: faraday
-    app.kubernetes.io/component: credentials
-type: Opaque
-stringData:
-  password: "admin"
----
-# Admin credentials secret
-apiVersion: v1
-kind: Secret
-metadata:
-  name: faraday-admin-credentials
-  namespace: faraday
-  labels:
-    app.kubernetes.io/name: faraday
-    app.kubernetes.io/component: credentials
-type: Opaque
-stringData:
-  password: "admin"
+# =============================================================================
+# SECRETS - Managed externally via SOPS encryption
+# =============================================================================
+# The secrets referenced by this deployment are stored in:
+#   secrets.sops.yaml (SOPS-encrypted)
+#
+# To generate new secrets:
+#   ../../../scripts/generate-secrets.sh
+#
+# To apply secrets (decrypts and applies):
+#   sops -d secrets.sops.yaml | kubectl apply -f -
+#
+# Required secrets:
+#   - faraday-credentials: (keys: postgres-password, admin-password)
+# =============================================================================

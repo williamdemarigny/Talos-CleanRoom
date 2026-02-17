@@ -1,0 +1,53 @@
+# Faraday Network Policy
+# =============================================================================
+# Faraday is a vulnerability management platform that:
+# - Receives traffic from Traefik ingress (web UI access)
+# - Connects to Metasploit for integration
+# - Uses local PostgreSQL and Redis (sidecar containers - localhost)
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-faraday-traffic
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: faraday
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: faraday
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from Traefik namespace (web UI access)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 5985  # Faraday HTTP port
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow connection to Metasploit RPC
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: metasploit
+      ports:
+        - protocol: TCP
+          port: 55553  # msfrpcd port
+    # Note: PostgreSQL and Redis are sidecar containers accessed via localhost
+    # Localhost traffic is not subject to NetworkPolicy

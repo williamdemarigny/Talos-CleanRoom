@@ -4,7 +4,7 @@
 #
 # Usage: ./deploy-lxc.sh
 
-set -eo pipefail
+set -euo pipefail
 
 # Disable bash history expansion to handle '!' in API tokens (e.g., user@pam!tokenid=secret)
 set +H

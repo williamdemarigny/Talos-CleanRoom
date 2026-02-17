@@ -14,11 +14,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: threat-dragon
+      app.kubernetes.io/name: threat-dragon
   template:
     metadata:
       labels:
-        app: threat-dragon
+        app.kubernetes.io/name: threat-dragon
+        app.kubernetes.io/component: web-ui
+        app.kubernetes.io/part-of: security-platform
     spec:
       containers:
       - name: threat-dragon
