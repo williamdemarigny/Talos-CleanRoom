@@ -415,9 +415,10 @@ spec:
 
             # Create admin user if it doesn't exist (first run only)
             # Run as gvmd user via gosu to connect to PostgreSQL properly
+            # Password is injected via GVMD_ADMIN_PASSWORD environment variable
             if ! gosu gvmd gvmd --get-users 2>/dev/null | grep -q "^admin$"; then
               echo "Creating admin user..."
-              gosu gvmd gvmd --create-user=admin --password=admin || echo "User creation failed or already exists"
+              gosu gvmd gvmd --create-user=admin --password="${GVMD_ADMIN_PASSWORD}" || echo "User creation failed or already exists"
             else
               echo "Admin user already exists."
             fi
@@ -437,6 +438,12 @@ spec:
             # Note: --listen-group removed as gvm group doesn't exist in container
             # Socket permissions handled via emptyDir shared volume
             exec /usr/local/bin/entrypoint gvmd -f
+        env:
+        - name: GVMD_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: openvas-credentials
+              key: admin-password
         volumeMounts:
         - name: gvmd-data
           mountPath: /var/lib/gvm
@@ -557,3 +564,18 @@ spec:
         emptyDir: {}
       - name: ospd-socket
         emptyDir: {}
+# =============================================================================
+# SECRETS - Managed externally via SOPS encryption
+# =============================================================================
+# The secrets referenced by this deployment are stored in:
+#   secrets.sops.yaml (SOPS-encrypted)
+#
+# To generate new secrets:
+#   ../../../scripts/generate-secrets.sh
+#
+# To apply secrets (decrypts and applies):
+#   sops -d secrets.sops.yaml | kubectl apply -f -
+#
+# Required secrets:
+#   - openvas-credentials: (keys: admin-password, postgres-password)
+# =============================================================================

@@ -157,15 +157,24 @@ configs:
       p, role:admin, projects, *, *, allow
       g, admin, role:admin
 
+  # ===========================================================================
   # Secret configuration
-  # WARNING: Default password is 'admin' - CHANGE IN PRODUCTION!
+  # ===========================================================================
+  # WARNING: Default password below is 'admin' - FOR DEVELOPMENT ONLY!
+  #
+  # For production, use SOPS-encrypted secrets instead:
+  #   1. Generate secrets: ../scripts/generate-secrets.sh
+  #   2. Apply: sops -d secrets.sops.yaml | kubectl apply -f -
+  #
+  # Alternatively, generate a new bcrypt hash:
+  #   python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt(rounds=10)).decode())"
+  # ===========================================================================
   secret:
     # Create the argocd-secret
     createSecret: true
     # Annotations for the secret
     annotations: {}
-    # Admin password (bcrypt hash of 'admin')
-    # Generate new hash: python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt(rounds=10)).decode())"
+    # Admin password (bcrypt hash of 'admin') - CHANGE IN PRODUCTION!
     argocdServerAdminPassword: "$2b$10$34yPsNLGvSW7jjktXUbR0OPh93HpSr0.VDCiRMZh4XsHcdWMYR4o2"
 
   # Known hosts for SSH (GitHub only - add other hosts as needed)
