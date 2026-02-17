@@ -5,3 +5,9 @@ metadata:
   labels:
     app.kubernetes.io/name: faraday
     app.kubernetes.io/component: security-platform
+    # Pod Security Standards: baseline (web application, no special privileges needed)
+    # - enforce: reject pods that don't meet baseline
+    # - audit/warn: log pods that don't meet restricted (for future migration)
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
