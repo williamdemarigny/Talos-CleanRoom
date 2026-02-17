@@ -4,7 +4,7 @@
 #
 # Usage: ./setup-lxc.sh [--repo-path /path/to/repo] [--webui-password admin]
 
-set -eo pipefail
+set -euo pipefail
 
 # Ensure /usr/local/bin is in PATH
 export PATH="/usr/local/bin:$PATH"
