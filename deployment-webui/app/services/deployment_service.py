@@ -506,13 +506,16 @@ class DeploymentService:
         # Remove existing secret files to ensure fresh generation
         # talhelper genconfig checks: talsecret.yaml, talsecret.sops.yaml, talsecret.yml, talsecret.sops.yml
         for secret_filename in ["talsecret.yaml", "talsecret.sops.yaml", "talsecret.yml", "talsecret.sops.yml"]:
-            secret_file = self.talos_dir / secret_filename
-            if secret_file.exists():
+            old_secret = self.talos_dir / secret_filename
+            if old_secret.exists():
                 await self.log(step_id, "info", f"Removing existing {secret_filename} for fresh generation...")
                 try:
-                    secret_file.unlink()
+                    old_secret.unlink()
                 except Exception as e:
                     await self.log(step_id, "warn", f"Could not remove {secret_filename}: {e}")
+
+        # Define the secret file path we'll write to
+        secret_file = self.talos_dir / "talsecret.sops.yaml"
 
         # Generate Talos secret
         await self.log(step_id, "info", "Generating Talos secret...")
@@ -538,7 +541,7 @@ class DeploymentService:
         # Encrypt with SOPS
         await self.log(step_id, "info", "Encrypting secret with SOPS...")
         result = await self.process_manager.run_command(
-            ["sops", "-e", "-i", "talsecret.sops.yaml"],
+            ["sops", "-e", "-i", str(secret_file.name)],
             cwd=self.talos_dir,
             env=env,
             on_output=lambda line: self.log(step_id, "info", line)
