@@ -17,7 +17,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: metasploit
+      app.kubernetes.io/name: metasploit
   policyTypes:
     - Ingress
   ingress:

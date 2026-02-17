@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: security-platform
 spec:
   selector:
-    app: faraday
+    app.kubernetes.io/name: faraday
   ports:
   - port: 5985
     targetPort: 5985

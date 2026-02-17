@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: penetration-testing
 spec:
   selector:
-    app: metasploit
+    app.kubernetes.io/name: metasploit
   ports:
   # msfrpcd RPC API (for web UI and remote access)
   - port: 55553

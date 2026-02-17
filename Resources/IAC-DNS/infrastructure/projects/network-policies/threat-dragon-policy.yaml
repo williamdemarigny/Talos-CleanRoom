@@ -17,7 +17,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: threat-dragon
+      app.kubernetes.io/name: threat-dragon
   policyTypes:
     - Ingress
     - Egress

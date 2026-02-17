@@ -17,7 +17,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: greenbone
+      app.kubernetes.io/name: greenbone
   policyTypes:
     - Ingress
     - Egress
