@@ -1,4 +1,12 @@
-"""Deployment service for orchestrating cluster deployment."""
+"""Deployment service for orchestrating cluster deployment.
+
+This module provides the DeploymentService class which orchestrates the
+complete deployment of a Talos Kubernetes cluster including:
+- Infrastructure provisioning via Terraform
+- Talos configuration generation and application
+- ArgoCD installation and GitOps setup
+- Security tool deployment (OpenVAS, Faraday, Metasploit, Threat Dragon)
+"""
 
 import asyncio
 import json
@@ -18,6 +26,24 @@ from app.models.deployment import (
     LogEntry, DEPLOYMENT_STEPS
 )
 from app.services.process_manager import ProcessManager
+
+
+# =============================================================================
+# Timing Constants (seconds)
+# =============================================================================
+# These constants control various wait times and retry intervals throughout
+# the deployment process. Adjust based on your infrastructure performance.
+
+VM_BOOT_INITIAL_DELAY = 180       # Initial wait for VMs to boot after Terraform
+BOOT_DELAY_CHECK_INTERVAL = 30    # Interval for countdown during boot delay
+PROXMOX_API_TIMEOUT = 10          # Timeout for Proxmox API requests
+TALOS_API_CHECK_TIMEOUT = 15      # Timeout for Talos API health checks
+ARGOCD_SYNC_WAIT = 10             # Wait time after ArgoCD sync operations
+THREAT_DRAGON_SYNC_WAIT = 30      # Extra wait for Threat Dragon deployment
+
+# Retry configuration
+VM_READY_MAX_ATTEMPTS = 30        # Maximum attempts to check VM readiness
+VM_READY_RETRY_INTERVAL = 10      # Seconds between VM readiness checks
 
 
 @dataclass
@@ -281,16 +307,15 @@ class DeploymentService:
         until after configs are applied.
         """
         # Initial delay to allow VMs to fully boot before polling
-        initial_delay = 180  # seconds
-        await self.log(step_id, "info", f"Waiting {initial_delay}s for VMs to boot before checking Talos API...")
+        await self.log(step_id, "info", f"Waiting {VM_BOOT_INITIAL_DELAY}s for VMs to boot before checking Talos API...")
 
-        # Wait in 30-second increments so we can check for cancellation
-        for i in range(0, initial_delay, 30):
+        # Wait in increments so we can check for cancellation
+        for i in range(0, VM_BOOT_INITIAL_DELAY, BOOT_DELAY_CHECK_INTERVAL):
             if self.current_deployment.status != DeploymentStatus.RUNNING:
                 return False
-            remaining = initial_delay - i
+            remaining = VM_BOOT_INITIAL_DELAY - i
             await self.log(step_id, "info", f"  Boot delay: {remaining}s remaining...")
-            await asyncio.sleep(min(30, remaining))
+            await asyncio.sleep(min(BOOT_DELAY_CHECK_INTERVAL, remaining))
 
         await self.log(step_id, "info", "Boot delay complete. Checking Talos API availability...")
         await self.log(step_id, "info", "Note: VMs are at DHCP IPs until config is applied")
@@ -334,9 +359,7 @@ class DeploymentService:
                 await self.log(step_id, "warn", f"Could not read Proxmox credentials: {e}")
 
         # Wait for each VM's Talos API to be ready
-        max_attempts = 30
-        interval = 10
-        max_wait = max_attempts * interval
+        max_wait = VM_READY_MAX_ATTEMPTS * VM_READY_RETRY_INTERVAL
 
         await self.log(step_id, "info", f"Checking Talos API readiness (max wait: {max_wait}s per VM)...")
 
@@ -351,7 +374,7 @@ class DeploymentService:
             ready = False
             dhcp_ip = None
 
-            for attempt in range(1, max_attempts + 1):
+            for attempt in range(1, VM_READY_MAX_ATTEMPTS + 1):
                 if self.current_deployment.status != DeploymentStatus.RUNNING:
                     return False
 
@@ -362,7 +385,7 @@ class DeploymentService:
                         curl_result = subprocess.run(
                             ["curl", "-s", "-k", "-H", f"Authorization: PVEAPIToken={proxmox_token}",
                              f"{proxmox_endpoint}/api2/json/nodes/{proxmox_node}/qemu/{vmid}/agent/network-get-interfaces"],
-                            capture_output=True, text=True, timeout=10
+                            capture_output=True, text=True, timeout=PROXMOX_API_TIMEOUT
                         )
                         if curl_result.returncode == 0:
                             agent_data = json.loads(curl_result.stdout)
@@ -402,7 +425,7 @@ class DeploymentService:
                     # Note: In talosctl 1.12+, --insecure is only supported for version and apply-config
                     check_result = await self.process_manager.run_command_simple(
                         ["talosctl", "version", "--insecure", "-n", dhcp_ip, "-e", dhcp_ip],
-                        timeout=15
+                        timeout=TALOS_API_CHECK_TIMEOUT
                     )
 
                     # Log the actual response for debugging
@@ -429,7 +452,7 @@ class DeploymentService:
                         await self.log(step_id, "info", f"  Talos API not responding at {dhcp_ip}")
 
                 await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
-                await asyncio.sleep(interval)
+                await asyncio.sleep(VM_READY_RETRY_INTERVAL)
 
             if not ready:
                 if not dhcp_ip:
@@ -685,7 +708,7 @@ class DeploymentService:
 
         if result.success:
             await self.log(step_id, "info", "Waiting for ArgoCD self-management...")
-            await asyncio.sleep(10)
+            await asyncio.sleep(ARGOCD_SYNC_WAIT)
 
         return result.success
 
@@ -737,7 +760,7 @@ class DeploymentService:
 
         # Wait for applications to sync
         await self.log(step_id, "info", "Waiting for applications to sync...")
-        await asyncio.sleep(30)
+        await asyncio.sleep(THREAT_DRAGON_SYNC_WAIT)
 
         # Log deployment summary
         await self.log(step_id, "info", "")
