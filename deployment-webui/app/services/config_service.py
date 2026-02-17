@@ -1,18 +1,16 @@
-"""Configuration service for reading/writing cluster configuration files."""
+"""Configuration service for reading/writing cluster configuration files.
+
+This module provides the ConfigService class for managing Talos cluster
+configuration files including Terraform tfvars and Talos YAML configs.
+"""
 
 import yaml
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any
 import hcl2
-import json
-import re
 
 from app.config import get_settings
-from app.models.config import (
-    TerraformConfig, NodeConfig, NetworkConfig,
-    TalosEnvConfig, TalosClusterConfig, TalosNodeDef,
-    ConfigValidationResult
-)
+from app.models.config import ConfigValidationResult
 
 
 class ConfigService:
@@ -48,18 +46,24 @@ class ConfigService:
         return self.talos_dir / "talconfig.yaml"
 
     async def get_terraform_config(self) -> Dict[str, Any]:
-        """Read and parse cluster.auto.tfvars."""
+        """Read and parse cluster.auto.tfvars.
+
+        Returns:
+            Dict containing either:
+            - {"success": True, "config": parsed_dict, "raw": raw_content}
+            - {"success": False, "error": error_message}
+        """
         if not self.tfvars_path.exists():
-            return {"error": f"File not found: {self.tfvars_path}"}
+            return {"success": False, "error": f"File not found: {self.tfvars_path}"}
 
         try:
             with open(self.tfvars_path, 'r') as f:
                 content = f.read()
                 # Parse HCL2 format
                 parsed = hcl2.loads(content)
-                return {"config": parsed, "raw": content}
+                return {"success": True, "config": parsed, "raw": content}
         except Exception as e:
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
 
     async def update_terraform_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Update cluster.auto.tfvars with new configuration."""
@@ -123,38 +127,56 @@ class ConfigService:
         return '\n'.join(lines)
 
     async def get_talos_env(self) -> Dict[str, Any]:
-        """Read and parse talenv.yaml."""
+        """Read and parse talenv.yaml.
+
+        Returns:
+            Dict containing either:
+            - {"success": True, "config": parsed_content}
+            - {"success": False, "error": error_message}
+        """
         if not self.talenv_path.exists():
-            return {"error": f"File not found: {self.talenv_path}"}
+            return {"success": False, "error": f"File not found: {self.talenv_path}"}
 
         try:
             with open(self.talenv_path, 'r') as f:
                 content = yaml.safe_load(f)
-                return {"config": content}
+                return {"success": True, "config": content}
         except Exception as e:
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
 
     async def get_talos_config(self) -> Dict[str, Any]:
-        """Read and parse talconfig.yaml."""
+        """Read and parse talconfig.yaml.
+
+        Returns:
+            Dict containing either:
+            - {"success": True, "config": parsed_content}
+            - {"success": False, "error": error_message}
+        """
         if not self.talconfig_path.exists():
-            return {"error": f"File not found: {self.talconfig_path}"}
+            return {"success": False, "error": f"File not found: {self.talconfig_path}"}
 
         try:
             with open(self.talconfig_path, 'r') as f:
                 content = yaml.safe_load(f)
-                return {"config": content}
+                return {"success": True, "config": content}
         except Exception as e:
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
 
     async def validate_config(self) -> ConfigValidationResult:
-        """Validate all configuration files."""
+        """Validate all configuration files.
+
+        Checks that required files exist and contain valid configuration.
+
+        Returns:
+            ConfigValidationResult with validation status, errors, and warnings.
+        """
         errors = []
         warnings = []
 
         # Check tfvars
         tf_result = await self.get_terraform_config()
-        if "error" in tf_result:
-            errors.append(f"Terraform config: {tf_result['error']}")
+        if not tf_result.get("success"):
+            errors.append(f"Terraform config: {tf_result.get('error', 'Unknown error')}")
         else:
             config = tf_result.get("config", {})
             if not config.get("nodes"):
@@ -162,13 +184,13 @@ class ConfigService:
 
         # Check talenv.yaml
         env_result = await self.get_talos_env()
-        if "error" in env_result:
-            warnings.append(f"Talos env: {env_result['error']} (will be regenerated)")
+        if not env_result.get("success"):
+            warnings.append(f"Talos env: {env_result.get('error', 'Unknown error')} (will be regenerated)")
 
         # Check talconfig.yaml
         tc_result = await self.get_talos_config()
-        if "error" in tc_result:
-            warnings.append(f"Talos config: {tc_result['error']} (will be regenerated)")
+        if not tc_result.get("success"):
+            warnings.append(f"Talos config: {tc_result.get('error', 'Unknown error')} (will be regenerated)")
 
         return ConfigValidationResult(
             valid=len(errors) == 0,

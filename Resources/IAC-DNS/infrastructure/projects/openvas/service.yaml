@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: vulnerability-scanner
 spec:
   selector:
-    app: greenbone
+    app.kubernetes.io/name: greenbone
   ports:
   # GSA Web UI
   - port: 80
