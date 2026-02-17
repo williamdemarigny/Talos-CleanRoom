@@ -68,19 +68,23 @@ spec:
     scheme: https
     permanent: true
 ---
-# Basic auth secret for UI access
-# Default credentials: admin / admin (CHANGE IN PRODUCTION!)
-# To regenerate: python -c "import hashlib; import base64; print('admin:' + '{SHA}' + base64.b64encode(hashlib.sha1(b'YOUR_PASSWORD'.encode()).digest()).decode())"
-apiVersion: v1
-kind: Secret
-metadata:
-  name: basic-auth-secret
-  namespace: traefik
-type: Opaque
-stringData:
-  users: "admin:{SHA}0DPiKuNIrrVmD8IUCuw1hQxNqZc="
+# =============================================================================
+# BASIC AUTH SECRET - Managed externally via SOPS encryption
+# =============================================================================
+# The basic-auth-secret is stored in:
+#   basic-auth-secret.sops.yaml (SOPS-encrypted)
+#
+# To generate new credentials:
+#   ../../../scripts/generate-secrets.sh
+#
+# To apply secret (decrypts and applies):
+#   sops -d basic-auth-secret.sops.yaml | kubectl apply -f -
+#
+# The secret must contain a 'users' key with htpasswd-formatted entries:
+#   users: "admin:{SHA}base64hash"
+# =============================================================================
 ---
-# Basic auth middleware - references the secret above
+# Basic auth middleware - references the basic-auth-secret
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:

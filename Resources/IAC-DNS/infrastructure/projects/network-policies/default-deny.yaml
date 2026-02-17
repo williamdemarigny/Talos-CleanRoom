@@ -1,0 +1,83 @@
+# Default Deny Network Policies
+# =============================================================================
+# These policies implement a zero-trust network model by denying all traffic
+# by default. Specific allow rules are defined in per-namespace policy files.
+#
+# Apply these BEFORE namespace-specific policies to ensure default-deny.
+# =============================================================================
+---
+# Faraday namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Threat Dragon namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: threat-dragon
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# OpenVAS namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Metasploit namespace - deny all ingress by default
+# Note: Egress is intentionally NOT denied as Metasploit needs
+# unrestricted outbound access for penetration testing
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# ArgoCD namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

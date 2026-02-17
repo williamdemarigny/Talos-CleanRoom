@@ -5,7 +5,8 @@ metadata:
   name: threat-dragon
   namespace: threat-dragon
   labels:
-    app: threat-dragon
+    app.kubernetes.io/name: threat-dragon
+    app.kubernetes.io/component: service
 spec:
   type: ClusterIP
   ports:
@@ -14,4 +15,4 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: threat-dragon
+    app.kubernetes.io/name: threat-dragon

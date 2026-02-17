@@ -1,0 +1,44 @@
+# Threat Dragon Network Policy
+# =============================================================================
+# Threat Dragon is a threat modeling web application that:
+# - Receives traffic from Traefik ingress (web UI access)
+# - Is a standalone Node.js app with no external dependencies
+# - Stores data locally (no database connections needed)
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-threat-dragon-traffic
+  namespace: threat-dragon
+  labels:
+    app.kubernetes.io/name: threat-dragon
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: threat-dragon
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from Traefik namespace (web UI access)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 3000  # Threat Dragon HTTP port
+  egress:
+    # Allow DNS resolution only
+    # Threat Dragon doesn't need any other external connectivity
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
