@@ -23,11 +23,13 @@ spec:
     type: Recreate  # Required for RWO PVCs
   selector:
     matchLabels:
-      app: greenbone
+      app.kubernetes.io/name: greenbone
   template:
     metadata:
       labels:
-        app: greenbone
+        app.kubernetes.io/name: greenbone
+        app.kubernetes.io/component: scanner
+        app.kubernetes.io/part-of: security-platform
     spec:
       # ============================================================
       # INIT CONTAINERS - Data feeds and configuration

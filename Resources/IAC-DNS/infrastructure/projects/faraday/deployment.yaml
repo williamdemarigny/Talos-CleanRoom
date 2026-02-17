@@ -22,11 +22,13 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: faraday
+      app.kubernetes.io/name: faraday
   template:
     metadata:
       labels:
-        app: faraday
+        app.kubernetes.io/name: faraday
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: security-platform
     spec:
       # ============================================================
       # INIT CONTAINERS
