@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     health_check_retries: int = 30
     health_check_interval: int = 10
 
+    # Node IPs for cleanup operations (DHCP reservations)
+    # These are used to reset Talos nodes before Terraform destroy
+    node_ips: list[str] = [
+        "10.83.3.10",   # talos-CleanRoom-master-01
+        "10.83.3.15",   # talos-CleanRoom-worker-01
+        "10.83.3.16",   # talos-CleanRoom-worker-02
+        "10.83.3.17",   # talos-CleanRoom-worker-03
+    ]
+
     # Dependencies required for deployment
     dependencies: list[str] = [
         "terraform", "talhelper", "talosctl", "sops",
