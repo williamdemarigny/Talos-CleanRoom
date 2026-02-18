@@ -11,6 +11,7 @@ complete deployment of a Talos Kubernetes cluster including:
 import asyncio
 import json
 import re
+import secrets
 import subprocess
 import uuid
 import shutil
@@ -84,6 +85,63 @@ class DeploymentService:
     @property
     def projects_dir(self) -> Path:
         return self.iac_dir / "infrastructure" / "projects"
+
+    def _generate_password(self, length: int = 24) -> str:
+        """Generate a cryptographically secure random password.
+
+        Args:
+            length: Length of the password to generate.
+
+        Returns:
+            A random alphanumeric password string.
+        """
+        alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+    async def _create_secret(
+        self,
+        step_id: int,
+        namespace: str,
+        secret_name: str,
+        data: dict[str, str]
+    ) -> bool:
+        """Create a Kubernetes secret if it doesn't already exist.
+
+        Args:
+            step_id: The deployment step identifier for logging.
+            namespace: Kubernetes namespace for the secret.
+            secret_name: Name of the secret to create.
+            data: Dictionary of key-value pairs for the secret.
+
+        Returns:
+            True if secret exists or was created, False on error.
+        """
+        # Check if secret already exists
+        check_result = await self.process_manager.run_command(
+            ["kubectl", "get", "secret", secret_name, "-n", namespace],
+            on_output=lambda _: None  # Suppress output
+        )
+
+        if check_result.success:
+            await self.log(step_id, "info", f"Secret '{secret_name}' already exists in {namespace}")
+            return True
+
+        # Build kubectl create secret command
+        cmd = ["kubectl", "create", "secret", "generic", secret_name, "-n", namespace]
+        for key, value in data.items():
+            cmd.append(f"--from-literal={key}={value}")
+
+        result = await self.process_manager.run_command(
+            cmd,
+            on_output=lambda line: self.log(step_id, "info", line)
+        )
+
+        if result.success:
+            await self.log(step_id, "info", f"Created secret '{secret_name}' in {namespace}")
+        else:
+            await self.log(step_id, "error", f"Failed to create secret '{secret_name}': {result.output}")
+
+        return result.success
 
     async def log(self, step_id: int, level: str, message: str):
         """Log a message and notify via callback."""
@@ -888,8 +946,9 @@ class DeploymentService:
     async def _step_deploy_openvas(self, step_id: int) -> bool:
         """Step 11: Deploy OpenVAS vulnerability scanner.
 
-        Deploys the Greenbone OpenVAS stack via ArgoCD Application.
-        OpenVAS provides vulnerability scanning capabilities.
+        Creates required secrets and deploys the Greenbone OpenVAS stack
+        via ArgoCD Application. OpenVAS provides vulnerability scanning
+        capabilities.
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -898,6 +957,27 @@ class DeploymentService:
             True if deployment initiated, False otherwise.
         """
         await self.log(step_id, "info", "Deploying OpenVAS...")
+
+        # Create namespace if it doesn't exist (ignore error if already exists)
+        await self.process_manager.run_command(
+            ["kubectl", "create", "namespace", "openvas"],
+            on_output=lambda _: None
+        )
+
+        # Create required secret
+        await self.log(step_id, "info", "Creating OpenVAS credentials secret...")
+        secret_created = await self._create_secret(
+            step_id,
+            namespace="openvas",
+            secret_name="openvas-credentials",
+            data={
+                "admin-password": self._generate_password(),
+                "postgres-password": self._generate_password()
+            }
+        )
+
+        if not secret_created:
+            await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
 
         app_yaml = self.projects_dir / "openvas" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -910,9 +990,9 @@ class DeploymentService:
     async def _step_deploy_faraday(self, step_id: int) -> bool:
         """Step 12: Deploy Faraday vulnerability management platform.
 
-        Deploys Faraday via ArgoCD Application. Faraday aggregates
-        vulnerability data from multiple sources including OpenVAS
-        and Metasploit.
+        Creates required secrets and deploys Faraday via ArgoCD Application.
+        Faraday aggregates vulnerability data from multiple sources including
+        OpenVAS and Metasploit.
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -921,6 +1001,27 @@ class DeploymentService:
             True if deployment initiated, False otherwise.
         """
         await self.log(step_id, "info", "Deploying Faraday...")
+
+        # Create namespace if it doesn't exist (ignore error if already exists)
+        await self.process_manager.run_command(
+            ["kubectl", "create", "namespace", "faraday"],
+            on_output=lambda _: None
+        )
+
+        # Create required secret
+        await self.log(step_id, "info", "Creating Faraday credentials secret...")
+        secret_created = await self._create_secret(
+            step_id,
+            namespace="faraday",
+            secret_name="faraday-credentials",
+            data={
+                "postgres-password": self._generate_password(),
+                "admin-password": self._generate_password()
+            }
+        )
+
+        if not secret_created:
+            await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -933,8 +1034,9 @@ class DeploymentService:
     async def _step_deploy_metasploit(self, step_id: int) -> bool:
         """Step 13: Deploy Metasploit penetration testing framework.
 
-        Deploys Metasploit via ArgoCD Application. Metasploit provides
-        exploit development and penetration testing capabilities.
+        Creates required secrets and deploys Metasploit via ArgoCD Application.
+        Metasploit provides exploit development and penetration testing
+        capabilities.
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -943,6 +1045,32 @@ class DeploymentService:
             True if deployment initiated, False otherwise.
         """
         await self.log(step_id, "info", "Deploying Metasploit...")
+
+        # Create namespace if it doesn't exist (ignore error if already exists)
+        await self.process_manager.run_command(
+            ["kubectl", "create", "namespace", "metasploit"],
+            on_output=lambda _: None
+        )
+
+        # Create required secrets
+        await self.log(step_id, "info", "Creating Metasploit credentials secrets...")
+
+        db_secret_created = await self._create_secret(
+            step_id,
+            namespace="metasploit",
+            secret_name="metasploit-db-credentials",
+            data={"password": self._generate_password()}
+        )
+
+        rpc_secret_created = await self._create_secret(
+            step_id,
+            namespace="metasploit",
+            secret_name="metasploit-rpc-credentials",
+            data={"password": self._generate_password()}
+        )
+
+        if not (db_secret_created and rpc_secret_created):
+            await self.log(step_id, "warn", "Could not create all secrets, continuing anyway...")
 
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -983,11 +1111,16 @@ class DeploymentService:
         await self.log(step_id, "info", "Deployment complete!")
         await self.log(step_id, "info", "==========================================")
         await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Default Credentials (CHANGE IN PRODUCTION!):")
-        await self.log(step_id, "info", "  - ArgoCD:     admin / admin")
-        await self.log(step_id, "info", "  - OpenVAS:    admin / admin")
-        await self.log(step_id, "info", "  - Faraday:    faraday / admin")
-        await self.log(step_id, "info", "  - Traefik/Longhorn: Uses basic-auth-secret")
+        await self.log(step_id, "info", "Credentials:")
+        await self.log(step_id, "info", "  - ArgoCD:     admin / (use 'argocd admin initial-password -n argocd')")
+        await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
+        await self.log(step_id, "info", "  - Faraday:    (auto-generated)")
+        await self.log(step_id, "info", "  - Metasploit: (auto-generated)")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Retrieve auto-generated passwords:")
+        await self.log(step_id, "info", "  kubectl get secret openvas-credentials -n openvas -o jsonpath='{.data.admin-password}' | base64 -d")
+        await self.log(step_id, "info", "  kubectl get secret faraday-credentials -n faraday -o jsonpath='{.data.admin-password}' | base64 -d")
+        await self.log(step_id, "info", "  kubectl get secret metasploit-db-credentials -n metasploit -o jsonpath='{.data.password}' | base64 -d")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Access services at:")
         await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
