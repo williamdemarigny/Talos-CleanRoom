@@ -63,6 +63,7 @@ class DeploymentService:
         self.health_check_retries = settings.health_check_retries
         self.health_check_interval = settings.health_check_interval
         self.dependencies = settings.dependencies
+        self.node_ips = settings.node_ips
 
     @property
     def terraform_dir(self) -> Path:
@@ -166,14 +167,75 @@ class DeploymentService:
         return True
 
     async def cleanup(self) -> bool:
-        """Run cleanup (terraform destroy)."""
-        await self.log(-1, "info", "Running cleanup (terraform destroy)...")
+        """Run cleanup with Talos reset and Terraform destroy.
+
+        This method performs a complete cleanup by:
+        1. Resetting all Talos nodes to wipe ephemeral partitions (CNI IPAM state)
+        2. Running Terraform destroy to remove all infrastructure
+
+        The Talos reset prevents stale CNI/IPAM state from causing IP exhaustion
+        on subsequent deployments.
+        """
+        await self.log(-1, "info", "Starting cleanup process...")
+
+        # Step 1: Reset Talos nodes to wipe ephemeral state (prevents IPAM exhaustion)
+        await self.log(-1, "info", "Step 1: Resetting Talos nodes to wipe ephemeral state...")
+
+        talosconfig = self.talos_dir / "clusterconfig" / "talosconfig"
+        env = {"TALOSCONFIG": str(talosconfig)}
+
+        # Try to reset each node - continue even if some fail (VMs might already be down)
+        reset_count = 0
+        for node_ip in self.node_ips:
+            await self.log(-1, "info", f"  Attempting to reset node {node_ip}...")
+
+            # First check if the node is reachable
+            check_result = await self.process_manager.run_command_simple(
+                ["talosctl", "version", "--insecure", "-n", node_ip, "-e", node_ip],
+                timeout=5
+            )
+
+            if not check_result.success and "Server:" not in (check_result.output or ""):
+                await self.log(-1, "info", f"    Node {node_ip} not reachable (may already be down)")
+                continue
+
+            # Reset the node - wipe ephemeral partition, no reboot (we're destroying anyway)
+            reset_result = await self.process_manager.run_command_simple(
+                ["talosctl", "reset",
+                 "--graceful=false",
+                 "--reboot=false",
+                 "--system-labels-to-wipe=EPHEMERAL",
+                 "-n", node_ip, "-e", node_ip],
+                env=env,
+                timeout=60
+            )
+
+            if reset_result.success:
+                await self.log(-1, "info", f"    Node {node_ip}: Reset successful (ephemeral wiped)")
+                reset_count += 1
+            else:
+                # Log but continue - the node might be in maintenance mode or already reset
+                error_preview = (reset_result.output or "unknown error")[:100]
+                await self.log(-1, "warn", f"    Node {node_ip}: Reset failed ({error_preview})")
+
+        await self.log(-1, "info", f"  Reset complete: {reset_count}/{len(self.node_ips)} nodes wiped")
+
+        # Brief pause to allow reset operations to complete
+        await asyncio.sleep(5)
+
+        # Step 2: Terraform destroy
+        await self.log(-1, "info", "Step 2: Running Terraform destroy...")
 
         result = await self.process_manager.run_command(
             ["terraform", "destroy", "-auto-approve"],
             cwd=self.terraform_dir,
             on_output=lambda line: self.log(-1, "info", line)
         )
+
+        if result.success:
+            await self.log(-1, "info", "Cleanup completed successfully")
+        else:
+            await self.log(-1, "error", "Terraform destroy failed")
 
         return result.success
 
