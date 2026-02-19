@@ -1010,9 +1010,9 @@ class DeploymentService:
     async def _step_deploy_faraday(self, step_id: int) -> bool:
         """Step 12: Deploy Faraday vulnerability management platform.
 
-        Creates required secrets and deploys Faraday via ArgoCD Application.
-        Faraday aggregates vulnerability data from multiple sources including
-        OpenVAS and Metasploit.
+        Creates required secrets, deploys Faraday via ArgoCD Application,
+        and creates the initial admin user. Faraday aggregates vulnerability
+        data from multiple sources including OpenVAS and Metasploit.
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -1028,6 +1028,9 @@ class DeploymentService:
             on_output=lambda _: None
         )
 
+        # Generate and store admin password for user creation
+        admin_password = self._generate_password()
+
         # Create required secret
         await self.log(step_id, "info", "Creating Faraday credentials secret...")
         secret_created = await self._create_secret(
@@ -1036,7 +1039,7 @@ class DeploymentService:
             secret_name="faraday-credentials",
             data={
                 "postgres-password": self._generate_password(),
-                "admin-password": self._generate_password()
+                "admin-password": admin_password
             }
         )
 
@@ -1049,7 +1052,49 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Wait for Faraday deployment to be ready before creating user
+        await self.log(step_id, "info", "Waiting for Faraday deployment to be ready...")
+        for attempt in range(1, 31):  # Max 5 minutes (30 * 10s)
+            if self.current_deployment.status != DeploymentStatus.RUNNING:
+                return False
+
+            ready_result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "deployment", "faraday", "-n", "faraday",
+                 "-o", "jsonpath={.status.readyReplicas}"],
+                timeout=30
+            )
+
+            if ready_result.success and ready_result.output.strip() == "1":
+                await self.log(step_id, "info", "Faraday deployment is ready")
+                break
+
+            await self.log(step_id, "info", f"Waiting for Faraday pod... ({attempt}/30)")
+            await asyncio.sleep(10)
+        else:
+            await self.log(step_id, "warn", "Faraday not ready after 5 minutes, skipping user creation")
+            return True
+
+        # Create initial admin user
+        await self.log(step_id, "info", "Creating Faraday admin user...")
+        user_result = await self.process_manager.run_command(
+            ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+             "--", "faraday-manage", "create-superuser",
+             "--username", "admin",
+             "--email", "admin@knowledgeondemand.net",
+             "--password", admin_password],
+            on_output=lambda line: self.log(step_id, "info", line),
+            timeout=60
+        )
+
+        if user_result.success:
+            await self.log(step_id, "info", "Faraday admin user created successfully")
+        else:
+            await self.log(step_id, "warn", f"Could not create Faraday admin user: {user_result.output}")
+
+        return True
 
     async def _step_deploy_metasploit(self, step_id: int) -> bool:
         """Step 13: Deploy Metasploit penetration testing framework.
@@ -1134,13 +1179,13 @@ class DeploymentService:
         await self.log(step_id, "info", "Credentials:")
         await self.log(step_id, "info", "  - ArgoCD:     admin / (use 'argocd admin initial-password -n argocd')")
         await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
-        await self.log(step_id, "info", "  - Faraday:    (auto-generated)")
-        await self.log(step_id, "info", "  - Metasploit: (auto-generated)")
+        await self.log(step_id, "info", "  - Faraday:    admin / (auto-generated, user auto-created)")
+        await self.log(step_id, "info", "  - Metasploit: msf / (auto-generated)")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Retrieve auto-generated passwords:")
-        await self.log(step_id, "info", "  kubectl get secret openvas-credentials -n openvas -o jsonpath='{.data.admin-password}' | base64 -d")
-        await self.log(step_id, "info", "  kubectl get secret faraday-credentials -n faraday -o jsonpath='{.data.admin-password}' | base64 -d")
-        await self.log(step_id, "info", "  kubectl get secret metasploit-db-credentials -n metasploit -o jsonpath='{.data.password}' | base64 -d")
+        await self.log(step_id, "info", "  OpenVAS:    kubectl get secret openvas-credentials -n openvas -o jsonpath='{.data.admin-password}' | base64 -d")
+        await self.log(step_id, "info", "  Faraday:    kubectl get secret faraday-credentials -n faraday -o jsonpath='{.data.admin-password}' | base64 -d")
+        await self.log(step_id, "info", "  Metasploit: kubectl get secret metasploit-db-credentials -n metasploit -o jsonpath='{.data.password}' | base64 -d")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Access services at:")
         await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
