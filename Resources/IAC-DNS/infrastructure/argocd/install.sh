@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="argocd"
 RELEASE_NAME="argocd"
-CHART_VERSION="9.3.4"  # ArgoCD v3.2.5 - matches application.yaml
+CHART_VERSION="9.4.3"  # ArgoCD v3.3.x - matches application.yaml
 
 echo "=== ArgoCD Installation ==="
 

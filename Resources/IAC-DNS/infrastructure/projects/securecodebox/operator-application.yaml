@@ -14,7 +14,7 @@ spec:
   project: default
   source:
     repoURL: ghcr.io/securecodebox/helm
-    targetRevision: 4.9.0
+    targetRevision: 5.5.0
     chart: operator
     helm:
       valuesObject:
