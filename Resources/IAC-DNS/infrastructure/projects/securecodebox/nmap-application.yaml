@@ -17,7 +17,7 @@ spec:
   project: default
   source:
     repoURL: ghcr.io/securecodebox/helm
-    targetRevision: 4.9.0
+    targetRevision: 5.5.0
     chart: nmap
     helm:
       valuesObject:
@@ -25,7 +25,7 @@ spec:
         scanner:
           image:
             # Use specific version for reproducibility
-            tag: "4.9.0"
+            tag: "5.5.0"
           resources:
             requests:
               cpu: 100m
@@ -42,7 +42,7 @@ spec:
         # Parser configuration (processes scan results)
         parser:
           image:
-            tag: "4.9.0"
+            tag: "5.5.0"
           resources:
             requests:
               cpu: 50m

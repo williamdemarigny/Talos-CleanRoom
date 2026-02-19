@@ -159,7 +159,7 @@ spec:
       # 9. PostgreSQL Data Directory Setup
       # Initialize PostgreSQL data directory with proper structure for pg-gvm
       - name: psql-data-setup
-        image: registry.community.greenbone.net/community/pg-gvm:stable
+        image: registry.community.greenbone.net/community/pg-gvm:24.10
         command: ["/bin/bash", "-c"]
         args:
           - |
@@ -201,7 +201,7 @@ spec:
       # 10. GVMD Data Directory Setup
       # Initialize GVMD data directory with proper structure and permissions
       - name: gvmd-data-setup
-        image: registry.community.greenbone.net/community/gvmd:stable
+        image: registry.community.greenbone.net/community/gvmd:24.10
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -232,7 +232,7 @@ spec:
 
       # 11. Configure OpenVAS
       - name: configure-openvas
-        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        image: registry.community.greenbone.net/community/openvas-scanner:24.10
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -286,7 +286,7 @@ spec:
 
       # 2. PostgreSQL with GVM extensions
       - name: pg-gvm
-        image: registry.community.greenbone.net/community/pg-gvm:stable
+        image: registry.community.greenbone.net/community/pg-gvm:24.10
         volumeMounts:
         - name: psql-data
           mountPath: /var/lib/postgresql
@@ -313,7 +313,7 @@ spec:
 
       # 3. OpenVAS Scanner Daemon (Notus mode)
       - name: openvasd
-        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        image: registry.community.greenbone.net/community/openvas-scanner:24.10
         env:
         - name: OPENVASD_MODE
           value: service_notus
@@ -356,7 +356,7 @@ spec:
 
       # 4. OSPD-OpenVAS (Scanner Protocol Daemon)
       - name: ospd-openvas
-        image: registry.community.greenbone.net/community/ospd-openvas:stable
+        image: registry.community.greenbone.net/community/ospd-openvas:24.10
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -405,7 +405,7 @@ spec:
 
       # 5. GVMD (Greenbone Vulnerability Manager Daemon)
       - name: gvmd
-        image: registry.community.greenbone.net/community/gvmd:stable
+        image: registry.community.greenbone.net/community/gvmd:24.10
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -485,7 +485,7 @@ spec:
 
       # 6. GSA (Greenbone Security Assistant - Web UI)
       - name: gsa
-        image: registry.community.greenbone.net/community/gsa:stable
+        image: registry.community.greenbone.net/community/gsa:24.10
         command: ["/bin/sh", "-c"]
         args:
           - |
