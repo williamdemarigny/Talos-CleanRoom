@@ -901,6 +901,8 @@ class DeploymentService:
         - Traefik as ingress controller
         - Longhorn for distributed storage
 
+        Also creates the basic-auth-secret for Traefik middleware.
+
         Args:
             step_id: The deployment step identifier for logging.
 
@@ -915,7 +917,25 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Create basic-auth-secret for Traefik middleware
+        # This secret is used for protecting dashboards (Traefik, Longhorn)
+        # Password hash is for 'admin' (change in production via generate-secrets.sh)
+        await self.log(step_id, "info", "Creating Traefik basic-auth-secret...")
+        auth_result = await self._create_secret(
+            step_id,
+            namespace="traefik",
+            secret_name="basic-auth-secret",
+            # htpasswd hash for admin:admin (APR1 format)
+            data={"users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"}
+        )
+
+        if not auth_result:
+            await self.log(step_id, "warn", "Could not create basic-auth-secret, continuing...")
+
+        return True
 
     async def _step_argocd_self_management(self, step_id: int) -> bool:
         """Step 10: Enable ArgoCD self-management via GitOps.
