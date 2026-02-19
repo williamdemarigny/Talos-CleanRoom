@@ -35,7 +35,7 @@ spec:
       # ============================================================
       initContainers:
       - name: init-postgres
-        image: postgres:17-alpine
+        image: postgres:15-alpine
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -95,7 +95,7 @@ spec:
       containers:
       # 1. PostgreSQL Database
       - name: postgres
-        image: postgres:17-alpine
+        image: postgres:15-alpine
         env:
         - name: POSTGRES_USER
           value: "faraday"
