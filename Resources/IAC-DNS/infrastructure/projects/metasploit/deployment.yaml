@@ -40,7 +40,7 @@ spec:
       initContainers:
       # Initialize PostgreSQL data directory
       - name: init-postgres
-        image: postgres:15-alpine
+        image: postgres:17-alpine
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -72,7 +72,7 @@ spec:
       containers:
       # 1. PostgreSQL Database
       - name: postgres
-        image: postgres:15-alpine
+        image: postgres:17-alpine
         env:
         - name: POSTGRES_USER
           value: "msf"
