@@ -922,14 +922,14 @@ class DeploymentService:
 
         # Create basic-auth-secret for Traefik middleware
         # This secret is used for protecting dashboards (Traefik, Longhorn)
-        # Password hash is for 'admin' (change in production via generate-secrets.sh)
+        # Default credentials: admin / admin (change in production)
         await self.log(step_id, "info", "Creating Traefik basic-auth-secret...")
         auth_result = await self._create_secret(
             step_id,
             namespace="traefik",
             secret_name="basic-auth-secret",
-            # htpasswd hash for admin:admin (APR1 format)
-            data={"users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"}
+            # htpasswd bcrypt hash for admin:admin (generated with htpasswd -nbB)
+            data={"users": "admin:$2y$05$ol3jkw2coZieHvhoho3k8uEFlDWcCzOvtZvxPu9MVv1.mpAp8x3Uu"}
         )
 
         if not auth_result:
