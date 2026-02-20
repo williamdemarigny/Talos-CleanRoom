@@ -14,6 +14,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Helper: wait for a deployment to exist and become available via polling.
+# Unlike 'kubectl wait', this handles the resource not existing yet gracefully.
+wait_for_deployment() {
+    local name="$1"
+    local namespace="$2"
+    local timeout="${3:-300}"
+    local elapsed=0
+    local interval=10
+
+    local avail
+    while [[ $elapsed -lt $timeout ]]; do
+        # Check if deployment exists and has available replicas
+        avail=$(kubectl get deployment "$name" -n "$namespace" \
+            -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
+        if [[ "$avail" =~ ^[1-9] ]]; then
+            echo "  ✓ $name is available ($avail replicas)"
+            return 0
+        fi
+
+        echo "  Waiting for deployment $name in $namespace... (${elapsed}/${timeout}s)"
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+
+    echo "  Error: deployment $name in $namespace not available after ${timeout}s"
+    # Dump ArgoCD Application status for diagnostics
+    echo "  --- ArgoCD Application status ---"
+    kubectl get application "$name" -n argocd \
+        -o jsonpath='  sync={.status.sync.status} health={.status.health.status} conditions={.status.conditions[*].message}' 2>/dev/null || true
+    echo ""
+    return 1
+}
+
 echo "=============================================="
 echo "  Kubernetes Infrastructure Stack Deployment"
 echo "=============================================="
@@ -39,7 +72,24 @@ if ! kubectl get namespace argocd &> /dev/null; then
     exit 1
 fi
 
+# Wait for ArgoCD repo-server — must be operational to fetch/render Helm charts.
+# The ArgoCD install script uses --wait, but there can be a brief gap before
+# the reconciliation loop starts processing new Applications.
+echo "Waiting for ArgoCD repo-server to be ready..."
+kubectl wait --for=condition=available deployment/argocd-repo-server \
+    -n argocd --timeout=300s
+
 echo "✓ Prerequisites met"
+echo ""
+
+# Pre-create namespaces so deployments don't depend on ArgoCD's async sync to create them.
+# ArgoCD's CreateNamespace=true only creates the namespace AFTER fetching and rendering the
+# Helm chart, which can be slow. Pre-creating avoids that race condition entirely.
+echo "Pre-creating namespaces..."
+for ns in metallb-system cert-manager traefik longhorn-system; do
+    kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null
+done
+echo "✓ Namespaces ready"
 echo ""
 
 # Deploy MetalLB
@@ -47,18 +97,7 @@ echo "[2/10] Deploying MetalLB..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/application.yaml"
 
 echo "Waiting for MetalLB to be ready..."
-sleep 10  # Give ArgoCD time to create resources
-
-# Wait for MetalLB controller
-kubectl wait --for=condition=available deployment/metallb-controller \
-    -n metallb-system \
-    --timeout=300s 2>/dev/null || {
-    echo "Waiting for MetalLB deployment to be created..."
-    sleep 30
-    kubectl wait --for=condition=available deployment/metallb-controller \
-        -n metallb-system \
-        --timeout=300s
-}
+wait_for_deployment metallb-controller metallb-system 300
 
 echo "✓ MetalLB deployed"
 echo ""
@@ -74,22 +113,10 @@ echo "[4/10] Deploying cert-manager..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/application.yaml"
 
 echo "Waiting for cert-manager to be ready..."
-sleep 10
-
-kubectl wait --for=condition=available deployment/cert-manager \
-    -n cert-manager \
-    --timeout=300s 2>/dev/null || {
-    echo "Waiting for cert-manager deployment to be created..."
-    sleep 30
-    kubectl wait --for=condition=available deployment/cert-manager \
-        -n cert-manager \
-        --timeout=300s
-}
+wait_for_deployment cert-manager cert-manager 300
 
 # Wait for webhook to be ready (required before creating issuers)
-kubectl wait --for=condition=available deployment/cert-manager-webhook \
-    -n cert-manager \
-    --timeout=300s
+wait_for_deployment cert-manager-webhook cert-manager 300
 
 echo "✓ cert-manager deployed"
 echo ""
@@ -118,25 +145,7 @@ echo "[7/12] Deploying Traefik..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 
 echo "Waiting for Traefik to be ready..."
-sleep 10
-
-# Wait for the traefik namespace to exist (ArgoCD creates it via CreateNamespace=true)
-for i in $(seq 1 12); do
-    kubectl get namespace traefik &>/dev/null && break
-    echo "  Waiting for traefik namespace... ($i/12)"
-    sleep 10
-done
-kubectl get namespace traefik || { echo "Error: traefik namespace never created"; exit 1; }
-
-kubectl wait --for=condition=available deployment/traefik \
-    -n traefik \
-    --timeout=300s 2>/dev/null || {
-    echo "Waiting for Traefik deployment to be created..."
-    sleep 30
-    kubectl wait --for=condition=available deployment/traefik \
-        -n traefik \
-        --timeout=300s
-}
+wait_for_deployment traefik traefik 300
 
 echo "✓ Traefik deployed"
 echo ""
@@ -159,15 +168,6 @@ echo "[10/12] Deploying Longhorn..."
 kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
 
 echo "Waiting for Longhorn to be ready..."
-sleep 15  # Give ArgoCD time to create namespace and initial resources
-
-# Wait for the longhorn-system namespace to exist (ArgoCD creates it)
-for i in $(seq 1 12); do
-    kubectl get namespace longhorn-system &>/dev/null && break
-    echo "  Waiting for longhorn-system namespace... ($i/12)"
-    sleep 10
-done
-kubectl get namespace longhorn-system || { echo "Error: longhorn-system namespace never created"; exit 1; }
 
 # 1. Wait for longhorn-manager DaemonSet — one pod per node, core of Longhorn
 echo "  Waiting for longhorn-manager DaemonSet..."
@@ -217,16 +217,7 @@ done
 
 # 4. Wait for Longhorn UI
 echo "  Waiting for Longhorn UI..."
-kubectl wait --for=condition=available deployment/longhorn-ui \
-    -n longhorn-system \
-    --timeout=300s 2>/dev/null || {
-    echo "  Waiting for longhorn-ui deployment to be created..."
-    sleep 30
-    kubectl wait --for=condition=available deployment/longhorn-ui \
-        -n longhorn-system \
-        --timeout=300s
-}
-echo "  ✓ longhorn-ui ready"
+wait_for_deployment longhorn-ui longhorn-system 300
 
 # 5. Verify Longhorn webhook configurations exist (webhooks are built into longhorn-manager)
 echo "  Verifying Longhorn webhooks..."
