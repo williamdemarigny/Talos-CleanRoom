@@ -67,6 +67,13 @@
                 Edit Configuration
             </a>
             <button
+                @click="downloadKubeconfig"
+                :disabled="deploymentStatus !== 'Completed'"
+                class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Download Kubeconfig
+            </button>
+            <button
                 @click="runCleanup"
                 :disabled="isRunning"
                 class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -214,6 +221,28 @@ function dashboard() {
                 } catch (e) {
                     alert('Failed to start deployment: ' + e.message);
                 }
+            }
+        },
+
+        async downloadKubeconfig() {
+            try {
+                const response = await fetch('/api/deployment/kubeconfig');
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert('Failed to download kubeconfig: ' + error.detail);
+                    return;
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'kubeconfig.yaml';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Failed to download kubeconfig: ' + e.message);
             }
         },
 
