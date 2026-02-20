@@ -1,6 +1,9 @@
 """Deployment API router."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -124,6 +127,35 @@ async def get_deployment_logs(
     return LogsResponse(
         logs=[log.model_dump() for log in logs],
         total=total
+    )
+
+
+@router.get("/kubeconfig")
+async def download_kubeconfig(
+    user: dict = Depends(get_current_user),
+    service: DeploymentService = Depends(get_deployment_service)
+):
+    """Download the kubeconfig file after a successful deployment."""
+    deployment = service.get_status()
+
+    if deployment is None or deployment.status != DeploymentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kubeconfig is only available after a successful deployment"
+        )
+
+    kubeconfig_path = Path.home() / ".kube" / "config"
+
+    if not kubeconfig_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Kubeconfig file not found on server"
+        )
+
+    return FileResponse(
+        path=str(kubeconfig_path),
+        media_type="application/yaml",
+        filename="kubeconfig.yaml"
     )
 
 
