@@ -120,6 +120,14 @@ kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 echo "Waiting for Traefik to be ready..."
 sleep 10
 
+# Wait for the traefik namespace to exist (ArgoCD creates it via CreateNamespace=true)
+for i in $(seq 1 12); do
+    kubectl get namespace traefik &>/dev/null && break
+    echo "  Waiting for traefik namespace... ($i/12)"
+    sleep 10
+done
+kubectl get namespace traefik || { echo "Error: traefik namespace never created"; exit 1; }
+
 kubectl wait --for=condition=available deployment/traefik \
     -n traefik \
     --timeout=300s 2>/dev/null || {
