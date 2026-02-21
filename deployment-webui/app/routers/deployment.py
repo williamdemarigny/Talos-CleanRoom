@@ -35,6 +35,18 @@ class LogsResponse(BaseModel):
     total: int
 
 
+class ServiceCredential(BaseModel):
+    """A single service's credentials."""
+    username: str
+    password: str
+    note: Optional[str] = None
+
+
+class CredentialsResponse(BaseModel):
+    """Response for service credentials."""
+    credentials: dict[str, ServiceCredential]
+
+
 @router.post("/start", response_model=DeploymentResponse)
 async def start_deployment(
     user: dict = Depends(get_current_user),
@@ -157,6 +169,29 @@ async def download_kubeconfig(
         media_type="application/yaml",
         filename="kubeconfig.yaml"
     )
+
+
+@router.get("/credentials", response_model=CredentialsResponse)
+async def get_credentials(
+    user: dict = Depends(get_current_user),
+    service: DeploymentService = Depends(get_deployment_service)
+):
+    """Get service credentials after a successful deployment."""
+    deployment = service.get_status()
+
+    if deployment is None or deployment.status != DeploymentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credentials are only available after a successful deployment"
+        )
+
+    if not service.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No credentials available"
+        )
+
+    return CredentialsResponse(credentials=service.credentials)
 
 
 @router.post("/cleanup", response_model=DeploymentResponse)
