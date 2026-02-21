@@ -56,6 +56,7 @@ class DeploymentService:
     log_callback: Optional[Callable[[LogEntry], Awaitable[None]]] = None
     step_callback: Optional[Callable[[DeploymentStep], Awaitable[None]]] = None
     logs: List[LogEntry] = field(default_factory=list)
+    credentials: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self):
         settings = get_settings()
@@ -193,6 +194,7 @@ class DeploymentService:
         if step_callback is not None:
             self.step_callback = step_callback
         self.logs = []
+        self.credentials = {}
 
         # Initialize deployment state
         self.current_deployment = DeploymentState(
@@ -235,6 +237,7 @@ class DeploymentService:
         on subsequent deployments.
         """
         await self.log(-1, "info", "Starting cleanup process...")
+        self.credentials = {}
 
         # Step 1: Reset Talos nodes to wipe ephemeral state (prevents IPAM exhaustion)
         await self.log(-1, "info", "Step 1: Resetting Talos nodes to wipe ephemeral state...")
@@ -890,6 +893,12 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
+        if result.success:
+            self.credentials["argocd"] = {
+                "username": "admin", "password": "admin",
+                "note": "Default - change via ArgoCD CLI"
+            }
+
         return result.success
 
     async def _step_deploy_infrastructure(self, step_id: int) -> bool:
@@ -934,6 +943,11 @@ class DeploymentService:
 
         if not auth_result:
             await self.log(step_id, "warn", "Could not create basic-auth-secret, continuing...")
+
+        self.credentials["traefik"] = {
+            "username": "admin", "password": "admin",
+            "note": "Also protects Longhorn and Threat Dragon"
+        }
 
         return True
 
@@ -986,15 +1000,19 @@ class DeploymentService:
 
         # Create required secret
         await self.log(step_id, "info", "Creating OpenVAS credentials secret...")
+        openvas_admin_password = self._generate_password()
         secret_created = await self._create_secret(
             step_id,
             namespace="openvas",
             secret_name="openvas-credentials",
             data={
-                "admin-password": self._generate_password(),
+                "admin-password": openvas_admin_password,
                 "postgres-password": self._generate_password()
             }
         )
+        self.credentials["openvas"] = {
+            "username": "admin", "password": openvas_admin_password
+        }
 
         if not secret_created:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
@@ -1045,6 +1063,10 @@ class DeploymentService:
 
         if not secret_created:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
+
+        self.credentials["faraday"] = {
+            "username": "admin", "password": admin_password
+        }
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -1119,23 +1141,34 @@ class DeploymentService:
 
         # Create required secrets
         await self.log(step_id, "info", "Creating Metasploit credentials secrets...")
+        msf_db_password = self._generate_password()
+        msf_rpc_password = self._generate_password()
 
         db_secret_created = await self._create_secret(
             step_id,
             namespace="metasploit",
             secret_name="metasploit-db-credentials",
-            data={"password": self._generate_password()}
+            data={"password": msf_db_password}
         )
 
         rpc_secret_created = await self._create_secret(
             step_id,
             namespace="metasploit",
             secret_name="metasploit-rpc-credentials",
-            data={"password": self._generate_password()}
+            data={"password": msf_rpc_password}
         )
 
         if not (db_secret_created and rpc_secret_created):
             await self.log(step_id, "warn", "Could not create all secrets, continuing anyway...")
+
+        self.credentials["metasploit_db"] = {
+            "username": "msf", "password": msf_db_password,
+            "note": "Database"
+        }
+        self.credentials["metasploit_rpc"] = {
+            "username": "admin", "password": msf_rpc_password,
+            "note": "RPC access"
+        }
 
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
         result = await self.process_manager.run_command(

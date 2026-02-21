@@ -105,32 +105,119 @@
 
     <!-- Services Info -->
     <div class="bg-gray-800 rounded-lg p-6 mt-8">
-        <h2 class="text-lg font-medium text-white mb-4">Deployed Services</h2>
-        <p class="text-gray-400 mb-4">After deployment, these services will be available:</p>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">ArgoCD</span>
-                <a href="https://argocd.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://argocd.knowledgeondemand.net</a>
-            </div>
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">Traefik</span>
-                <a href="https://traefik.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://traefik.knowledgeondemand.net</a>
-            </div>
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">Longhorn</span>
-                <a href="https://longhorn.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://longhorn.knowledgeondemand.net</a>
-            </div>
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">OpenVAS</span>
-                <a href="https://openvas.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://openvas.knowledgeondemand.net</a>
-            </div>
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">Faraday</span>
-                <a href="https://faraday.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://faraday.knowledgeondemand.net</a>
-            </div>
-            <div class="flex justify-between items-center p-3 bg-gray-700 rounded">
-                <span class="text-gray-300">Threat Dragon</span>
-                <a href="https://threatdragon.knowledgeondemand.net" target="_blank" rel="noopener noreferrer" class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer">https://threatdragon.knowledgeondemand.net</a>
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-white">Deployed Services</h2>
+            <button
+                x-show="deploymentStatus === 'Completed' && Object.keys(credentials).length > 0"
+                @click="allPasswordsVisible = !allPasswordsVisible; Object.keys(passwordVisible).forEach(k => passwordVisible[k] = allPasswordsVisible)"
+                class="text-xs px-3 py-1 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition-colors"
+                x-text="allPasswordsVisible ? 'Hide All Passwords' : 'Show All Passwords'"
+            ></button>
+        </div>
+        <p class="text-gray-400 mb-4" x-show="deploymentStatus !== 'Completed'">
+            After deployment, these services will be available:
+        </p>
+        <p class="text-gray-400 mb-4" x-show="deploymentStatus === 'Completed' && Object.keys(credentials).length > 0">
+            Click the eye icon to reveal a password.
+        </p>
+
+        <div class="space-y-3">
+            <template x-for="svc in services" :key="svc.key">
+                <div class="p-4 bg-gray-700 rounded-lg">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <span class="text-white font-medium" x-text="svc.name"></span>
+                            <span x-show="svc.note && deploymentStatus === 'Completed'" class="text-xs text-gray-500" x-text="svc.note"></span>
+                        </div>
+                        <a :href="svc.url" target="_blank" rel="noopener noreferrer"
+                           class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer truncate"
+                           x-text="svc.url"></a>
+                    </div>
+
+                    <!-- Credentials row -->
+                    <div x-show="deploymentStatus === 'Completed' && svc.credKey && credentials[svc.credKey]"
+                         class="mt-3 pt-3 border-t border-gray-600">
+                        <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">User:</span>
+                                <code class="text-green-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono"
+                                      x-text="credentials[svc.credKey]?.username"></code>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">Pass:</span>
+                                <code class="text-amber-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono select-all"
+                                      x-text="passwordVisible[svc.credKey] ? credentials[svc.credKey]?.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'"></code>
+                                <button @click="passwordVisible[svc.credKey] = !passwordVisible[svc.credKey]"
+                                        class="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                                        :title="passwordVisible[svc.credKey] ? 'Hide password' : 'Show password'">
+                                    <svg x-show="!passwordVisible[svc.credKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                    </svg>
+                                    <svg x-show="passwordVisible[svc.credKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <button x-show="passwordVisible[svc.credKey]"
+                                    @click="navigator.clipboard.writeText(credentials[svc.credKey]?.password); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                                    class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
+                                Copy
+                            </button>
+                            <span x-show="credentials[svc.credKey]?.note"
+                                  class="text-xs text-gray-500 italic"
+                                  x-text="credentials[svc.credKey]?.note"></span>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Metasploit (CLI-only, no web URL) -->
+            <div x-show="deploymentStatus === 'Completed' && (credentials['metasploit_db'] || credentials['metasploit_rpc'])"
+                 class="p-4 bg-gray-700 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <span class="text-white font-medium">Metasploit</span>
+                    <span class="text-xs text-gray-500 bg-gray-600 px-2 py-0.5 rounded">CLI Only</span>
+                </div>
+                <p class="text-xs text-gray-400 mb-3 font-mono">
+                    kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole
+                </p>
+                <div class="border-t border-gray-600 pt-3 space-y-2">
+                    <template x-for="msfKey in ['metasploit_db', 'metasploit_rpc']" :key="msfKey">
+                        <div x-show="credentials[msfKey]" class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                            <span class="text-xs text-gray-500 w-8" x-text="msfKey === 'metasploit_db' ? 'DB' : 'RPC'"></span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">User:</span>
+                                <code class="text-green-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono"
+                                      x-text="credentials[msfKey]?.username"></code>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">Pass:</span>
+                                <code class="text-amber-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono select-all"
+                                      x-text="passwordVisible[msfKey] ? credentials[msfKey]?.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'"></code>
+                                <button @click="passwordVisible[msfKey] = !passwordVisible[msfKey]"
+                                        class="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                                        :title="passwordVisible[msfKey] ? 'Hide password' : 'Show password'">
+                                    <svg x-show="!passwordVisible[msfKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                    </svg>
+                                    <svg x-show="passwordVisible[msfKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <button x-show="passwordVisible[msfKey]"
+                                    @click="navigator.clipboard.writeText(credentials[msfKey]?.password); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                                    class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
+                                Copy
+                            </button>
+                            <span x-show="credentials[msfKey]?.note"
+                                  class="text-xs text-gray-500 italic"
+                                  x-text="credentials[msfKey]?.note"></span>
+                        </div>
+                    </template>
+                </div>
             </div>
         </div>
     </div>
@@ -146,6 +233,17 @@ function dashboard() {
         isRunning: false,
         dependencies: [],
         configValid: true,
+        credentials: {},
+        passwordVisible: {},
+        allPasswordsVisible: false,
+        services: [
+            { key: 'argocd', name: 'ArgoCD', url: 'https://argocd.knowledgeondemand.net', credKey: 'argocd' },
+            { key: 'traefik', name: 'Traefik Dashboard', url: 'https://traefik.knowledgeondemand.net', credKey: 'traefik' },
+            { key: 'longhorn', name: 'Longhorn', url: 'https://longhorn.knowledgeondemand.net', credKey: 'traefik', note: 'Uses Traefik auth' },
+            { key: 'openvas', name: 'OpenVAS', url: 'https://openvas.knowledgeondemand.net', credKey: 'openvas' },
+            { key: 'faraday', name: 'Faraday', url: 'https://faraday.knowledgeondemand.net', credKey: 'faraday' },
+            { key: 'threatdragon', name: 'Threat Dragon', url: 'https://threatdragon.knowledgeondemand.net', credKey: 'traefik', note: 'Uses Traefik auth' },
+        ],
 
         get statusColor() {
             switch(this.deploymentStatus.toLowerCase()) {
@@ -192,6 +290,9 @@ function dashboard() {
                 this.deploymentStatus = data.status.charAt(0).toUpperCase() + data.status.slice(1);
                 this.currentStep = data.current_step;
                 this.isRunning = data.is_running;
+                if (this.deploymentStatus === 'Completed') {
+                    await this.fetchCredentials();
+                }
             } catch (e) {
                 console.error('Failed to check deployment status:', e);
             }
@@ -205,6 +306,21 @@ function dashboard() {
             } catch (e) {
                 console.error('Failed to validate config:', e);
                 this.configValid = false;
+            }
+        },
+
+        async fetchCredentials() {
+            try {
+                const response = await fetch('/api/deployment/credentials');
+                if (response.ok) {
+                    const data = await response.json();
+                    this.credentials = data.credentials;
+                    for (const key of Object.keys(data.credentials)) {
+                        this.passwordVisible[key] = false;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch credentials:', e);
             }
         },
 
