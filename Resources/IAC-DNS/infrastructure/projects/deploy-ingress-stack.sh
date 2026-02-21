@@ -181,7 +181,33 @@ for i in $(seq 1 36); do
     echo "  longhorn-manager: $READY/$DESIRED ready... ($i/36)"
     sleep 10
 done
-[[ "$READY" -eq "$DESIRED" && "$DESIRED" -gt 0 ]] || { echo "Error: longhorn-manager DaemonSet never became ready"; exit 1; }
+if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
+    echo ""
+    echo "  ===== longhorn-manager DaemonSet not fully ready ($READY/$DESIRED) ====="
+    echo ""
+    echo "  --- All longhorn-manager pods (node placement + status) ---"
+    kubectl get pods -n longhorn-system -l app=longhorn-manager -o wide 2>/dev/null || true
+    echo ""
+    echo "  --- Non-running pods detail ---"
+    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
+        --field-selector=status.phase!=Running -o name 2>/dev/null); do
+        echo "  >>> $pod <<<"
+        kubectl describe "$pod" -n longhorn-system 2>/dev/null | tail -20
+        echo ""
+    done
+    echo "  --- Kubernetes node conditions ---"
+    kubectl get nodes -o wide 2>/dev/null || true
+    echo ""
+    echo "  --- Recent longhorn-system events (warnings/errors) ---"
+    kubectl get events -n longhorn-system --field-selector type!=Normal \
+        --sort-by='.lastTimestamp' 2>/dev/null | tail -10 || true
+    echo ""
+    echo "  Troubleshooting tips:"
+    echo "    - Check if the failing node's /dev/vdb disk exists: talosctl -n <node-ip> disks"
+    echo "    - Check mount status: talosctl -n <node-ip> get mounts | grep longhorn"
+    echo "    - Check kubelet logs: talosctl -n <node-ip> logs kubelet | grep -i longhorn"
+    exit 1
+fi
 
 # 2. Poll for CSI controllers (created by longhorn-driver-deployer after manager is ready)
 echo "  Waiting for Longhorn CSI controllers..."
@@ -213,7 +239,11 @@ for i in $(seq 1 36); do
     echo "  longhorn-csi-plugin: $READY/$DESIRED ready... ($i/36)"
     sleep 10
 done
-[[ "$READY" -eq "$DESIRED" && "$DESIRED" -gt 0 ]] || { echo "Error: longhorn-csi-plugin DaemonSet never became ready"; exit 1; }
+if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
+    echo "  Error: longhorn-csi-plugin not fully ready ($READY/$DESIRED)"
+    kubectl get pods -n longhorn-system -l app=longhorn-csi-plugin -o wide 2>/dev/null || true
+    exit 1
+fi
 
 # 4. Wait for Longhorn UI
 echo "  Waiting for Longhorn UI..."
