@@ -354,11 +354,11 @@ fi
 print_info "Loading VM information from $TFVARS_FILE"
 echo ""
 
-# On fresh deployments, VMs need time to boot after Terraform creates them
-# Wait for VMs to boot before attempting to query them
-print_info "Waiting 60 seconds for VMs to boot and initialize..."
-print_info "(This ensures QEMU guest agent and Talos API are ready)"
-sleep 60
+# Brief pause before querying Proxmox guest agents.
+# The deployment service's wait_for_vms step has already verified all VMs are
+# booted and Talos API is reachable, so we only need a short stabilization delay.
+print_info "Waiting for VMs to stabilize..."
+sleep 10
 echo ""
 
 CONTROL_PLANE_ENDPOINT=""
@@ -415,10 +415,22 @@ while IFS= read -r line; do
 
                 print_success "  Found on Proxmox node: $node"
 
-                # Get DHCP IP
-                dhcp_ip=$(get_vm_ip "$vmid" "$node" || true)
+                # Get DHCP IP (retry — guest agent may not be ready yet)
+                dhcp_ip=""
+                for ip_attempt in $(seq 1 30); do
+                    dhcp_ip=$(get_vm_ip "$vmid" "$node" || true)
+                    if [[ -n "$dhcp_ip" ]]; then
+                        break
+                    fi
+                    print_info "  Waiting for guest agent to report IP... ($ip_attempt/30)"
+                    sleep 10
+                done
 
                 if [[ -z "$dhcp_ip" ]]; then
+                    if [[ "$role" == "controlplane" ]]; then
+                        print_error "  Could not get DHCP IP for control plane node — aborting"
+                        exit 1
+                    fi
                     print_warning "  Could not get DHCP IP"
                     print_warning "  VM may not be running or QEMU guest agent not responding"
                     echo ""
@@ -432,6 +444,10 @@ while IFS= read -r line; do
                 # Use insecure mode since the node is still unconfigured (maintenance mode)
                 if [[ "$DRY_RUN" == false ]]; then
                     if ! wait_for_talos_api "$dhcp_ip" 45 10 true; then
+                        if [[ "$role" == "controlplane" ]]; then
+                            print_error "  Talos API not ready on control plane node — aborting"
+                            exit 1
+                        fi
                         print_error "  Talos API not ready - skipping this VM"
                         echo ""
                         current_node=""
@@ -493,6 +509,10 @@ while IFS= read -r line; do
 
                     if [[ "$apply_success" == false ]]; then
                         print_error "  Failed to apply config after $apply_attempts attempts"
+                        if [[ "$role" == "controlplane" ]]; then
+                            print_error "  Control plane config must be applied — aborting"
+                            exit 1
+                        fi
                     fi
                 fi
 
