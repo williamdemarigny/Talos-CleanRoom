@@ -285,8 +285,27 @@ spec:
           periodSeconds: 10
 
       # 2. PostgreSQL with GVM extensions
+      # Tuned for fast feed import — gvmd imports millions of CVE/NVT records on first start.
+      # Default PostgreSQL settings (shared_buffers=128MB) cause this to take 24+ hours.
       - name: pg-gvm
         image: registry.community.greenbone.net/community/pg-gvm:stable
+        args:
+          - "-c"
+          - "shared_buffers=1GB"
+          - "-c"
+          - "work_mem=256MB"
+          - "-c"
+          - "maintenance_work_mem=1GB"
+          - "-c"
+          - "effective_cache_size=3GB"
+          - "-c"
+          - "max_wal_size=2GB"
+          - "-c"
+          - "checkpoint_completion_target=0.9"
+          - "-c"
+          - "wal_buffers=64MB"
+          - "-c"
+          - "synchronous_commit=off"
         volumeMounts:
         - name: psql-data
           mountPath: /var/lib/postgresql
@@ -294,11 +313,11 @@ spec:
           mountPath: /var/run/postgresql
         resources:
           requests:
-            memory: "512Mi"
-            cpu: "100m"
-          limits:
             memory: "2Gi"
-            cpu: "1"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
         startupProbe:
           exec:
             command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "postgres"]
@@ -465,11 +484,11 @@ spec:
           mountPath: /var/run/postgresql
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "200m"
-          limits:
             memory: "2Gi"
-            cpu: "1"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
         # GVMD takes significant time to sync feeds on first start
         startupProbe:
           exec:
