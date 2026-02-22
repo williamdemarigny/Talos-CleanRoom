@@ -160,7 +160,7 @@
                                 </button>
                             </div>
                             <button x-show="passwordVisible[svc.credKey]"
-                                    @click="navigator.clipboard.writeText(credentials[svc.credKey]?.password); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                                    @click="copyPassword(svc.credKey, $el)"
                                     class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
                                 Copy
                             </button>
@@ -208,7 +208,7 @@
                                 </button>
                             </div>
                             <button x-show="passwordVisible[msfKey]"
-                                    @click="navigator.clipboard.writeText(credentials[msfKey]?.password); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 1500)"
+                                    @click="copyPassword(msfKey, $el)"
                                     class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
                                 Copy
                             </button>
@@ -307,6 +307,28 @@ function dashboard() {
                 console.error('Failed to validate config:', e);
                 this.configValid = false;
             }
+        },
+
+        copyPassword(credKey, el) {
+            const text = this.credentials[credKey]?.password;
+            if (!text) return;
+            const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(fallback);
+            } else {
+                fallback();
+            }
+            el.textContent = 'Copied!';
+            setTimeout(() => el.textContent = 'Copy', 1500);
         },
 
         async fetchCredentials() {
