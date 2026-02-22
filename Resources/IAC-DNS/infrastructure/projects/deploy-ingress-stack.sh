@@ -300,7 +300,66 @@ for i in $(seq 1 24); do
 done
 [[ "$READY_NODES" -ge "$WORKER_NODES" ]] || { echo "Warning: Not all Longhorn nodes are ready ($READY_NODES/$WORKER_NODES)"; }
 
-# 8. Verify the Longhorn StorageClass exists — confirms CSI is registered
+# 8. Wait for Longhorn nodes to have schedulable disk storage
+# Nodes can report "ready" before their disks are fully discovered and initialized.
+# With defaultReplicaCount=2, we need at least 2 nodes with schedulable storage.
+echo "  Waiting for Longhorn node disks to become schedulable..."
+MIN_SCHEDULABLE=2
+for i in $(seq 1 36); do
+    SCHEDULABLE=$(kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    count = 0
+    for node in data.get('items', []):
+        disks = node.get('status', {}).get('diskStatus', {})
+        for disk_id, disk in disks.items():
+            conditions = disk.get('conditions', {})
+            schedulable = conditions.get('Schedulable', {})
+            if schedulable.get('status') == 'True':
+                storage = disk.get('storageAvailable', 0)
+                if storage > 0:
+                    count += 1
+                    break
+    print(count)
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+    if [[ "$SCHEDULABLE" -ge "$MIN_SCHEDULABLE" ]]; then
+        echo "  ✓ $SCHEDULABLE Longhorn nodes have schedulable disk storage"
+        break
+    fi
+    echo "  Schedulable nodes: $SCHEDULABLE/$MIN_SCHEDULABLE... ($i/36)"
+    sleep 10
+done
+if [[ "$SCHEDULABLE" -lt "$MIN_SCHEDULABLE" ]]; then
+    echo "  Warning: Only $SCHEDULABLE/$MIN_SCHEDULABLE nodes have schedulable storage"
+    echo "  --- Longhorn node disk status ---"
+    kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for node in data.get('items', []):
+        name = node['metadata']['name']
+        disks = node.get('status', {}).get('diskStatus', {})
+        print(f'  Node: {name}')
+        if not disks:
+            print(f'    No disks registered')
+        for disk_id, disk in disks.items():
+            conditions = disk.get('conditions', {})
+            schedulable = conditions.get('Schedulable', {}).get('status', 'Unknown')
+            ready = conditions.get('Ready', {}).get('status', 'Unknown')
+            avail = disk.get('storageAvailable', 0)
+            total = disk.get('storageMaximum', 0)
+            print(f'    Disk {disk_id}: schedulable={schedulable} ready={ready} avail={avail/(1024**3):.1f}Gi total={total/(1024**3):.1f}Gi')
+except Exception as e:
+    print(f'  (parse error: {e})')
+" 2>/dev/null || echo "  (could not parse node status)"
+fi
+
+# 9. Verify the Longhorn StorageClass exists — confirms CSI is registered (was step 8)
 echo "  Verifying Longhorn StorageClass..."
 for i in $(seq 1 12); do
     if kubectl get storageclass longhorn &>/dev/null; then
@@ -312,7 +371,7 @@ for i in $(seq 1 12); do
 done
 kubectl get storageclass longhorn || { echo "Error: Longhorn StorageClass never appeared"; exit 1; }
 
-# 9. Create and verify a test PVC — the definitive operational test
+# 10. Create and verify a test PVC — the definitive operational test
 echo "  Testing Longhorn with a test PVC..."
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -329,18 +388,72 @@ spec:
       storage: 1Gi
 EOF
 
-# Wait for PVC to bind (up to 2 minutes)
+# Wait for PVC to bind (up to 3 minutes)
 PVC_BOUND=false
-for i in $(seq 1 24); do
+for i in $(seq 1 36); do
     PHASE=$(kubectl get pvc longhorn-test-pvc -n longhorn-system -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
     if [[ "$PHASE" == "Bound" ]]; then
         echo "  ✓ Test PVC bound successfully"
         PVC_BOUND=true
         break
     fi
-    echo "  Test PVC phase: ${PHASE:-Pending}... ($i/24)"
+    echo "  Test PVC phase: ${PHASE:-Pending}... ($i/36)"
     sleep 5
 done
+
+if [[ "$PVC_BOUND" != true ]]; then
+    echo ""
+    echo "  ===== Test PVC failed to bind — diagnostics ====="
+    echo ""
+    echo "  --- PVC details ---"
+    kubectl describe pvc longhorn-test-pvc -n longhorn-system 2>/dev/null || true
+    echo ""
+    echo "  --- Longhorn volumes ---"
+    kubectl get volumes.longhorn.io -n longhorn-system 2>/dev/null || true
+    echo ""
+    echo "  --- Longhorn node disk status ---"
+    kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for node in data.get('items', []):
+        name = node['metadata']['name']
+        allow = node.get('spec', {}).get('allowScheduling', False)
+        disks_spec = node.get('spec', {}).get('disks', {})
+        disks_status = node.get('status', {}).get('diskStatus', {})
+        print(f'  Node: {name}  allowScheduling={allow}')
+        if not disks_spec and not disks_status:
+            print(f'    No disks configured or detected')
+        for disk_id in set(list(disks_spec.keys()) + list(disks_status.keys())):
+            spec = disks_spec.get(disk_id, {})
+            status = disks_status.get(disk_id, {})
+            path = spec.get('path', 'unknown')
+            sched = spec.get('allowScheduling', False)
+            conditions = status.get('conditions', {})
+            s_sched = conditions.get('Schedulable', {}).get('status', 'Unknown')
+            s_ready = conditions.get('Ready', {}).get('status', 'Unknown')
+            s_reason = conditions.get('Schedulable', {}).get('reason', '')
+            avail = status.get('storageAvailable', 0)
+            total = status.get('storageMaximum', 0)
+            print(f'    Disk {disk_id}: path={path} allowScheduling={sched}')
+            print(f'      schedulable={s_sched} ready={s_ready} reason={s_reason}')
+            print(f'      available={avail/(1024**3):.1f}Gi total={total/(1024**3):.1f}Gi')
+except Exception as e:
+    print(f'  (parse error: {e})')
+" 2>/dev/null || echo "  (could not parse node status)"
+    echo ""
+    echo "  --- Recent longhorn-system events ---"
+    kubectl get events -n longhorn-system --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
+    echo ""
+    echo "  --- Longhorn manager logs (last 20 lines per pod) ---"
+    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        echo "  >>> $pod <<<"
+        kubectl logs "$pod" -n longhorn-system --tail=20 2>/dev/null || echo "  (no logs)"
+        echo ""
+    done
+fi
 
 # Cleanup test PVC regardless of result
 kubectl delete pvc longhorn-test-pvc -n longhorn-system --ignore-not-found=true &>/dev/null
