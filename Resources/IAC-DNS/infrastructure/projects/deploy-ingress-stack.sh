@@ -195,6 +195,15 @@ if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
         kubectl describe "$pod" -n longhorn-system 2>/dev/null | tail -20
         echo ""
     done
+    echo "  --- Container logs from crash-looping pods ---"
+    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        echo "  >>> $pod (last 30 lines) <<<"
+        kubectl logs "$pod" -n longhorn-system --tail=30 2>/dev/null || \
+            kubectl logs "$pod" -n longhorn-system --previous --tail=30 2>/dev/null || \
+            echo "  (no logs available)"
+        echo ""
+    done
     echo "  --- Kubernetes node conditions ---"
     kubectl get nodes -o wide 2>/dev/null || true
     echo ""
@@ -206,6 +215,7 @@ if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
     echo "    - Check if the failing node's /dev/vdb disk exists: talosctl -n <node-ip> disks"
     echo "    - Check mount status: talosctl -n <node-ip> get mounts | grep longhorn"
     echo "    - Check kubelet logs: talosctl -n <node-ip> logs kubelet | grep -i longhorn"
+    echo "    - Check loaded kernel modules: talosctl -n <node-ip> read /proc/modules | grep iscsi"
     exit 1
 fi
 

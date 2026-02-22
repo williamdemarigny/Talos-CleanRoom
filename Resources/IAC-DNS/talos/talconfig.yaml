@@ -84,6 +84,9 @@ patches:
         - name: nvme_tcp
         - name: vfio_pci
         - name: uio_pci_generic
+        # Required by Longhorn (iSCSI storage engine)
+        - name: iscsi_tcp
+        - name: configfs
 # Control plane specific configuration
 controlPlane:
   patches:
