@@ -489,17 +489,17 @@ spec:
           limits:
             memory: "4Gi"
             cpu: "2"
-        # GVMD takes significant time to sync feeds on first start
+        # GVMD takes significant time on first start (socket wait + user creation + feed sync)
+        # Allow up to 25 min for the socket to appear
         startupProbe:
           exec:
             command: ["test", "-S", "/run/gvmd/gvmd.sock"]
           initialDelaySeconds: 60
           periodSeconds: 10
-          failureThreshold: 60
+          failureThreshold: 120
         readinessProbe:
           exec:
             command: ["test", "-S", "/run/gvmd/gvmd.sock"]
-          initialDelaySeconds: 120
           periodSeconds: 10
 
       # 6. GSA (Greenbone Security Assistant - Web UI)
@@ -526,20 +526,26 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "1"
-        readinessProbe:
+        # startupProbe gates liveness/readiness — prevents kill during GVMD socket wait
+        # GVMD can take 15+ min on first start (feed sync), so allow up to 30 min
+        startupProbe:
           httpGet:
             path: /
             port: 80
           initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 120
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
           periodSeconds: 10
-          failureThreshold: 30
         livenessProbe:
           httpGet:
             path: /
             port: 80
-          initialDelaySeconds: 120
           periodSeconds: 30
-          failureThreshold: 10
+          failureThreshold: 5
 
       # ============================================================
       # VOLUMES
