@@ -1023,7 +1023,72 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Wait for ArgoCD to sync the OpenVAS application
+        await self.log(step_id, "info", "Waiting for ArgoCD to sync OpenVAS application...")
+        for i in range(30):
+            sync_result = await self.process_manager.run_command(
+                ["kubectl", "get", "application", "openvas", "-n", "argocd",
+                 "-o", "jsonpath={.status.sync.status}"],
+                timeout=15
+            )
+            sync_status = (sync_result.output or "").strip()
+            if sync_status == "Synced":
+                await self.log(step_id, "info", "ArgoCD synced OpenVAS application")
+                break
+            if sync_status == "Unknown" or "ComparisonError" in sync_status:
+                # Get error details
+                err_result = await self.process_manager.run_command(
+                    ["kubectl", "get", "application", "openvas", "-n", "argocd",
+                     "-o", "jsonpath={.status.conditions[*].message}"],
+                    timeout=15
+                )
+                err_msg = (err_result.output or "").strip()
+                if err_msg:
+                    await self.log(step_id, "warn", f"ArgoCD sync issue: {err_msg[:200]}")
+            await self.log(step_id, "info", f"ArgoCD sync status: {sync_status or 'pending'}... ({i+1}/30)")
+            await asyncio.sleep(10)
+
+        # Wait for OpenVAS pod to start (init containers running or main containers running)
+        await self.log(step_id, "info", "Waiting for OpenVAS pod to start...")
+        pod_started = False
+        for i in range(36):  # up to 6 minutes
+            pod_result = await self.process_manager.run_command(
+                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app.kubernetes.io/name=greenbone",
+                 "-o", "jsonpath={.items[0].status.phase}"],
+                timeout=15
+            )
+            phase = (pod_result.output or "").strip()
+            if phase in ("Running", "Succeeded"):
+                await self.log(step_id, "info", f"OpenVAS pod is {phase}")
+                pod_started = True
+                break
+            if phase == "Pending":
+                # Check for PVC binding issues
+                pvc_result = await self.process_manager.run_command(
+                    ["kubectl", "get", "pvc", "-n", "openvas",
+                     "-o", "jsonpath={.items[*].status.phase}"],
+                    timeout=15
+                )
+                pvc_phases = (pvc_result.output or "").strip()
+                if "Pending" in pvc_phases:
+                    await self.log(step_id, "info", f"OpenVAS pod pending (PVCs binding)... ({i+1}/36)")
+                else:
+                    await self.log(step_id, "info", f"OpenVAS pod pending (pulling images)... ({i+1}/36)")
+            elif phase:
+                await self.log(step_id, "info", f"OpenVAS pod phase: {phase}... ({i+1}/36)")
+            else:
+                await self.log(step_id, "info", f"Waiting for OpenVAS pod... ({i+1}/36)")
+            await asyncio.sleep(10)
+
+        if not pod_started:
+            await self.log(step_id, "warn",
+                "OpenVAS pod not yet running — init containers may still be pulling feed data. "
+                "This is normal on first deployment (15-30 min). Continuing with next steps.")
+
+        return True
 
     async def _step_deploy_faraday(self, step_id: int) -> bool:
         """Step 12: Deploy Faraday vulnerability management platform.
