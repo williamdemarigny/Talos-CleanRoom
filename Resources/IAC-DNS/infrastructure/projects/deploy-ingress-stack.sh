@@ -165,6 +165,8 @@ echo ""
 
 # Deploy Longhorn
 echo "[10/12] Deploying Longhorn..."
+# Create PriorityClass before Longhorn — the Helm chart references it but doesn't create it
+kubectl apply -f "${SCRIPT_DIR}/longhorn/priority-class.yaml"
 kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
 
 echo "Waiting for Longhorn to be ready..."
