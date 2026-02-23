@@ -236,7 +236,39 @@ for component in csi-attacher csi-provisioner csi-resizer csi-snapshotter; do
         echo "  Waiting for ${component}... ($i/36)"
         sleep 10
     done
-    [[ "$FOUND" == true ]] || { echo "Error: ${component} deployment never became available"; exit 1; }
+    if [[ "$FOUND" != true ]]; then
+        echo ""
+        echo "  ===== CSI component ${component} not available — diagnostics ====="
+        echo ""
+        echo "  --- All deployments in longhorn-system ---"
+        kubectl get deployments -n longhorn-system -o wide 2>/dev/null || true
+        echo ""
+        echo "  --- longhorn-driver-deployer pod status ---"
+        kubectl get pods -n longhorn-system -l app=longhorn-driver-deployer -o wide 2>/dev/null || true
+        echo ""
+        echo "  --- longhorn-driver-deployer logs ---"
+        for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-driver-deployer \
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            echo "  >>> $pod <<<"
+            kubectl logs "$pod" -n longhorn-system --tail=40 2>/dev/null || echo "  (no logs)"
+        done
+        echo ""
+        echo "  --- CSI-related pods ---"
+        kubectl get pods -n longhorn-system 2>/dev/null | grep -E "csi|driver" || echo "  (none found)"
+        echo ""
+        echo "  --- Recent longhorn-system events (warnings) ---"
+        kubectl get events -n longhorn-system --field-selector type!=Normal \
+            --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
+        echo ""
+        echo "  --- ArgoCD Application status for longhorn ---"
+        kubectl get application longhorn -n argocd \
+            -o jsonpath='  sync={.status.sync.status} health={.status.health.status}' 2>/dev/null || true
+        echo ""
+        kubectl get application longhorn -n argocd \
+            -o jsonpath='{.status.conditions[*].message}' 2>/dev/null || true
+        echo ""
+        exit 1
+    fi
 done
 
 # 3. Wait for longhorn-csi-plugin DaemonSet — per-node volume mount driver
