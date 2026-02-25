@@ -290,6 +290,7 @@ spec:
       - name: pg-gvm
         image: registry.community.greenbone.net/community/pg-gvm:stable
         args:
+          - "postgres"
           - "-c"
           - "shared_buffers=1GB"
           - "-c"
