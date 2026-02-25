@@ -1028,18 +1028,25 @@ class DeploymentService:
 
         # Wait for ArgoCD to sync the OpenVAS application
         await self.log(step_id, "info", "Waiting for ArgoCD to sync OpenVAS application...")
+        synced = False
         for i in range(30):
             sync_result = await self.process_manager.run_command(
                 ["kubectl", "get", "application", "openvas", "-n", "argocd",
-                 "-o", "jsonpath={.status.sync.status}"],
+                 "-o", "jsonpath={.status.sync.status} {.status.health.status}"],
                 timeout=15
             )
-            sync_status = (sync_result.output or "").strip()
+            parts = (sync_result.output or "").strip().split()
+            sync_status = parts[0] if len(parts) > 0 else ""
+            health_status = parts[1] if len(parts) > 1 else ""
+
             if sync_status == "Synced":
-                await self.log(step_id, "info", "ArgoCD synced OpenVAS application")
+                await self.log(step_id, "info",
+                    f"ArgoCD synced OpenVAS (health: {health_status or 'unknown'})")
+                synced = True
                 break
-            if sync_status == "Unknown" or "ComparisonError" in sync_status:
-                # Get error details
+
+            # Check for sync errors
+            if sync_status in ("Unknown", "OutOfSync"):
                 err_result = await self.process_manager.run_command(
                     ["kubectl", "get", "application", "openvas", "-n", "argocd",
                      "-o", "jsonpath={.status.conditions[*].message}"],
@@ -1047,46 +1054,119 @@ class DeploymentService:
                 )
                 err_msg = (err_result.output or "").strip()
                 if err_msg:
-                    await self.log(step_id, "warn", f"ArgoCD sync issue: {err_msg[:200]}")
-            await self.log(step_id, "info", f"ArgoCD sync status: {sync_status or 'pending'}... ({i+1}/30)")
+                    await self.log(step_id, "warn", f"ArgoCD sync issue: {err_msg[:300]}")
+            await self.log(step_id, "info",
+                f"ArgoCD: sync={sync_status or 'pending'} health={health_status or 'unknown'}... ({i+1}/30)")
             await asyncio.sleep(10)
 
-        # Wait for OpenVAS pod to start (init containers running or main containers running)
-        await self.log(step_id, "info", "Waiting for OpenVAS pod to start...")
-        pod_started = False
-        for i in range(36):  # up to 6 minutes
-            pod_result = await self.process_manager.run_command(
-                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app.kubernetes.io/name=greenbone",
-                 "-o", "jsonpath={.items[0].status.phase}"],
+        if not synced:
+            # Dump full ArgoCD application status for debugging
+            await self.log(step_id, "error", "ArgoCD failed to sync OpenVAS application")
+            diag = await self.process_manager.run_command(
+                ["kubectl", "get", "application", "openvas", "-n", "argocd", "-o", "yaml"],
                 timeout=15
             )
-            phase = (pod_result.output or "").strip()
-            if phase in ("Running", "Succeeded"):
-                await self.log(step_id, "info", f"OpenVAS pod is {phase}")
-                pod_started = True
+            if diag.output:
+                # Show last 30 lines of the YAML status
+                lines = diag.output.strip().split('\n')
+                for line in lines[-30:]:
+                    await self.log(step_id, "info", line)
+            return False
+
+        # Wait for PVCs to bind (OpenVAS needs 10 PVCs from Longhorn)
+        await self.log(step_id, "info", "Checking OpenVAS PVC binding (10 PVCs)...")
+        for i in range(18):  # up to 3 minutes
+            pvc_result = await self.process_manager.run_command(
+                ["kubectl", "get", "pvc", "-n", "openvas", "--no-headers"],
+                timeout=15
+            )
+            pvc_output = (pvc_result.output or "").strip()
+            if not pvc_output:
+                await self.log(step_id, "info", f"Waiting for PVCs to appear... ({i+1}/18)")
+                await asyncio.sleep(10)
+                continue
+
+            pvc_lines = pvc_output.split('\n')
+            bound = sum(1 for l in pvc_lines if 'Bound' in l)
+            total = len(pvc_lines)
+            if bound == total and total > 0:
+                await self.log(step_id, "info", f"All {bound}/{total} PVCs bound")
                 break
-            if phase == "Pending":
-                # Check for PVC binding issues
-                pvc_result = await self.process_manager.run_command(
-                    ["kubectl", "get", "pvc", "-n", "openvas",
-                     "-o", "jsonpath={.items[*].status.phase}"],
-                    timeout=15
-                )
-                pvc_phases = (pvc_result.output or "").strip()
-                if "Pending" in pvc_phases:
-                    await self.log(step_id, "info", f"OpenVAS pod pending (PVCs binding)... ({i+1}/36)")
-                else:
-                    await self.log(step_id, "info", f"OpenVAS pod pending (pulling images)... ({i+1}/36)")
-            elif phase:
-                await self.log(step_id, "info", f"OpenVAS pod phase: {phase}... ({i+1}/36)")
-            else:
-                await self.log(step_id, "info", f"Waiting for OpenVAS pod... ({i+1}/36)")
+            pending_pvcs = [l.split()[0] for l in pvc_lines if 'Pending' in l]
+            await self.log(step_id, "info",
+                f"PVCs: {bound}/{total} bound, pending: {', '.join(pending_pvcs[:3])}... ({i+1}/18)")
             await asyncio.sleep(10)
 
-        if not pod_started:
-            await self.log(step_id, "warn",
-                "OpenVAS pod not yet running — init containers may still be pulling feed data. "
-                "This is normal on first deployment (15-30 min). Continuing with next steps.")
+        # Wait for OpenVAS pod to be scheduled and init containers to start
+        await self.log(step_id, "info", "Waiting for OpenVAS pod to initialize...")
+        pod_progressing = False
+        for i in range(24):  # up to 4 minutes
+            # Get pod status in detail
+            status_result = await self.process_manager.run_command(
+                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app.kubernetes.io/name=greenbone",
+                 "-o", "jsonpath={.items[0].status.phase}|{.items[0].status.initContainerStatuses[*].name}|"
+                 "{.items[0].status.initContainerStatuses[*].ready}|"
+                 "{.items[0].status.containerStatuses[*].ready}"],
+                timeout=15
+            )
+            raw = (status_result.output or "").strip()
+            parts = raw.split('|')
+            phase = parts[0] if len(parts) > 0 else ""
+            init_names = parts[1].split() if len(parts) > 1 and parts[1] else []
+            init_ready = parts[2].split() if len(parts) > 2 and parts[2] else []
+            container_ready = parts[3].split() if len(parts) > 3 and parts[3] else []
+
+            if phase == "Running":
+                ready_count = sum(1 for r in container_ready if r == "true")
+                await self.log(step_id, "info",
+                    f"OpenVAS pod running ({ready_count}/{len(container_ready)} containers ready)")
+                pod_progressing = True
+                break
+
+            if init_names:
+                # Init containers exist — show progress
+                done = sum(1 for r in init_ready if r == "true")
+                total_init = len(init_names)
+                current = init_names[done] if done < total_init else "done"
+                await self.log(step_id, "info",
+                    f"Init containers: {done}/{total_init} complete (running: {current})... ({i+1}/24)")
+                pod_progressing = True
+            elif phase == "Pending":
+                await self.log(step_id, "info", f"Pod pending (scheduling)... ({i+1}/24)")
+            elif not phase:
+                await self.log(step_id, "info", f"Waiting for pod... ({i+1}/24)")
+            else:
+                await self.log(step_id, "info", f"Pod phase: {phase}... ({i+1}/24)")
+            await asyncio.sleep(10)
+
+        if not pod_progressing:
+            # Dump diagnostics for stuck pod
+            await self.log(step_id, "warn", "OpenVAS pod not progressing — collecting diagnostics...")
+            events = await self.process_manager.run_command(
+                ["kubectl", "get", "events", "-n", "openvas", "--sort-by=.lastTimestamp",
+                 "--field-selector", "type!=Normal"],
+                timeout=15
+            )
+            if events.output and events.output.strip():
+                for line in events.output.strip().split('\n')[-10:]:
+                    await self.log(step_id, "warn", line)
+            desc = await self.process_manager.run_command(
+                ["kubectl", "describe", "pod", "-n", "openvas",
+                 "-l", "app.kubernetes.io/name=greenbone"],
+                timeout=15
+            )
+            if desc.output:
+                # Show Events section from describe
+                in_events = False
+                for line in desc.output.split('\n'):
+                    if 'Events:' in line:
+                        in_events = True
+                    if in_events:
+                        await self.log(step_id, "info", line)
+        else:
+            await self.log(step_id, "info",
+                "OpenVAS initializing (11 init containers + 6 services). "
+                "Full startup takes 15-30 min — this is normal. Continuing deployment.")
 
         return True
 
