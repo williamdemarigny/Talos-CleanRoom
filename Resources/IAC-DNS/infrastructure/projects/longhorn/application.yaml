@@ -59,12 +59,12 @@ spec:
 
         # Longhorn Manager - runs on worker nodes only (no control-plane tolerations)
         longhornManager:
-          priorityClass: longhorn-critical
+          priorityClass: ""
           tolerations: []
 
         # Longhorn Driver - runs on worker nodes only (no control-plane tolerations)
         longhornDriver:
-          priorityClass: longhorn-critical
+          priorityClass: ""
           tolerations: []
 
         # Longhorn UI - runs on worker nodes only
