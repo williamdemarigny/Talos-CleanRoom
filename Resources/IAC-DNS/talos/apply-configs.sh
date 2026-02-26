@@ -42,10 +42,26 @@ wait_for_talos_api() {
     for ((i=1; i<=max_attempts; i++)); do
         # First, check if port 50000 is even accepting connections
         if ! timeout 5 bash -c "echo > /dev/tcp/$ip/50000" 2>/dev/null; then
-            if [[ $i -lt $max_attempts ]]; then
+            # Log every 5th attempt with extra diagnostics
+            if (( i % 5 == 0 )); then
+                # Ping check to see if the IP is reachable at all
+                if ping -c 1 -W 2 "$ip" &>/dev/null 2>&1 || timeout 2 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null; then
+                    print_warning "    Attempt $i/$max_attempts - Host $ip reachable but port 50000 not open"
+                else
+                    print_warning "    Attempt $i/$max_attempts - Host $ip NOT reachable (no ping/TCP response)"
+                fi
+            else
                 print_info "    Attempt $i/$max_attempts - Port 50000 not open, waiting ${interval}s..."
+            fi
+
+            if [[ $i -lt $max_attempts ]]; then
                 sleep "$interval"
                 continue
+            else
+                # Last attempt failed - run diagnostics before returning
+                print_error "  Port 50000 never opened on $ip after $((max_attempts * interval)) seconds"
+                _diagnose_talos_api_failure "$ip"
+                return 1
             fi
         fi
 
@@ -94,7 +110,68 @@ wait_for_talos_api() {
     done
 
     print_error "  Talos API not ready on $ip after $((max_attempts * interval)) seconds"
+    _diagnose_talos_api_failure "$ip"
     return 1
+}
+
+# Diagnostic function called when Talos API check fails
+_diagnose_talos_api_failure() {
+    local ip="$1"
+
+    print_warning "  --- Diagnostic information for $ip ---"
+
+    # Check basic network reachability
+    if ping -c 2 -W 2 "$ip" &>/dev/null 2>&1; then
+        print_info "  PING: Host is reachable"
+    else
+        print_error "  PING: Host is NOT reachable — VM may be down or IP has changed"
+    fi
+
+    # Check if common ports are open (indicates VM is running but Talos may not be)
+    for port in 22 80 443 6443 50000; do
+        if timeout 3 bash -c "echo > /dev/tcp/$ip/$port" 2>/dev/null; then
+            print_info "  PORT $port: OPEN"
+        else
+            print_info "  PORT $port: closed"
+        fi
+    done
+
+    # Try to get VM status from Proxmox if credentials are available
+    if [[ -n "${PROXMOX_ENDPOINT:-}" && -n "${PROXMOX_TOKEN:-}" ]]; then
+        print_info "  Checking VM status on Proxmox..."
+
+        # Find the VMID that matches this IP by checking all known VMs
+        local nodes_response=$(proxmox_api "/cluster/resources?type=vm" 2>/dev/null || true)
+        if [[ -n "$nodes_response" ]]; then
+            local vm_info=$(echo "$nodes_response" | jq -r '.data[]? | select(.type=="qemu") | "\(.vmid) \(.node) \(.status) \(.name // "unknown")"' 2>/dev/null || true)
+            if [[ -n "$vm_info" ]]; then
+                print_info "  Proxmox VMs:"
+                while IFS= read -r vm_line; do
+                    local vm_vmid vm_node vm_status vm_name
+                    read -r vm_vmid vm_node vm_status vm_name <<< "$vm_line"
+                    print_info "    VMID=$vm_vmid node=$vm_node status=$vm_status name=$vm_name"
+
+                    # If VM is running, try to get its current IP from guest agent
+                    if [[ "$vm_status" == "running" ]]; then
+                        local agent_resp=$(proxmox_api "/nodes/${vm_node}/qemu/${vm_vmid}/agent/network-get-interfaces" 2>/dev/null || true)
+                        local vm_ip=$(echo "$agent_resp" | jq -r '.data.result[]? | select(.name != "lo") | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4") | .["ip-address"]' 2>/dev/null | head -1 || true)
+                        if [[ -n "$vm_ip" ]]; then
+                            print_info "      Current IP: $vm_ip"
+                            if [[ "$vm_ip" != "$ip" ]]; then
+                                print_warning "      IP MISMATCH: Expected $ip but VM has $vm_ip"
+                            fi
+                        fi
+                    fi
+                done <<< "$vm_info"
+            fi
+        fi
+    fi
+
+    # Show talosctl client version for reference
+    local client_ver=$(talosctl version --client 2>&1 | head -3 || true)
+    print_info "  talosctl client: ${client_ver:0:100}"
+
+    print_warning "  --- End diagnostics ---"
 }
 
 # Function to wait for controller to EXIT maintenance mode and be ready for bootstrap
