@@ -606,7 +606,7 @@ class DeploymentService:
                     else:
                         await self.log(step_id, "info", f"  Talos API not responding at {dhcp_ip}")
 
-                await self.log(step_id, "info", f"  Attempt {attempt}/{max_attempts} - waiting {interval}s...")
+                await self.log(step_id, "info", f"  Attempt {attempt}/{VM_READY_MAX_ATTEMPTS} - waiting {VM_READY_RETRY_INTERVAL}s...")
                 await asyncio.sleep(VM_READY_RETRY_INTERVAL)
 
             if not ready:
