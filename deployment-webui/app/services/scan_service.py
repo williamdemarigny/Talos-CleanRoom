@@ -29,7 +29,7 @@ FARADAY_UPLOAD_TIMEOUT = 60    # 1 min for Faraday upload
 
 # Nmap flags per profile
 NMAP_PROFILES = {
-    ScanProfile.QUICK: ["-sn", "--top-ports", "100"],
+    ScanProfile.QUICK: ["-T4", "--top-ports", "100"],
     ScanProfile.STANDARD: ["-sV", "-sC"],
     ScanProfile.THOROUGH: ["-sV", "-sC", "-p-", "-A"],
 }
@@ -66,7 +66,10 @@ class ScanService:
         )
         self.logs.append(entry)
         if self.log_callback:
-            await self.log_callback(entry)
+            try:
+                await self.log_callback(entry)
+            except Exception:
+                pass  # Don't let broadcast failures crash the scan
 
     async def _update_tool_state(self, tool: ScanTool, **kwargs):
         """Update a tool's state and notify via callback."""
@@ -77,7 +80,10 @@ class ScanService:
                 for key, value in kwargs.items():
                     setattr(ts, key, value)
                 if self.tool_callback:
-                    await self.tool_callback(ts)
+                    try:
+                        await self.tool_callback(ts)
+                    except Exception:
+                        pass  # Don't let broadcast failures crash the scan
                 break
 
     def get_status(self) -> Optional[ScanState]:
@@ -277,32 +283,78 @@ class ScanService:
 
         await self.log("nmap", "info", f"Launching Nmap pod '{pod_name}' with flags: {' '.join(flags)}")
 
-        # Use kubectl run to create an ephemeral nmap pod
-        # --attach waits for pod completion and streams stdout (no stdin needed)
-        # --rm auto-deletes the pod after it finishes
-        result = await self.process_manager.run_command_simple(
+        # Create the nmap pod (don't use --attach/--rm since stdout capture is unreliable)
+        # Instead: create pod → wait for completion → read logs → delete pod
+        nmap_args_str = " ".join(flags + ["-oX", "-", target])
+        create_result = await self.process_manager.run_command_simple(
             ["kubectl", "run", pod_name,
              "--image=instrumentisto/nmap:latest",
-             "--rm", "--attach", "--restart=Never",
+             "--restart=Never",
              "--namespace=default",
              "--", "nmap"] + flags + ["-oX", "-", target],
-            timeout=timeout
+            timeout=30
         )
 
-        # Clean up pod if it wasn't auto-removed
+        if not create_result.success:
+            await self.log("nmap", "error", f"Failed to create Nmap pod: {create_result.output}")
+            return None
+
+        await self.log("nmap", "info", "Nmap pod created, waiting for scan to complete...")
+
+        # Wait for pod to complete
+        wait_result = await self.process_manager.run_command_simple(
+            ["kubectl", "wait", "--for=condition=Ready=false",
+             f"pod/{pod_name}", "--namespace=default",
+             f"--timeout={timeout}s"],
+            timeout=timeout + 30
+        )
+
+        # Also wait for the pod phase to be Succeeded/Failed
+        # (kubectl wait --for=condition doesn't work well for completed pods)
+        poll_attempts = timeout // 5
+        pod_done = False
+        for attempt in range(poll_attempts):
+            phase_result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "pod", pod_name, "--namespace=default",
+                 "-o", "jsonpath={.status.phase}"],
+                timeout=10
+            )
+            phase = (phase_result.output or "").strip()
+            if phase in ("Succeeded", "Failed"):
+                pod_done = True
+                await self.log("nmap", "info", f"Nmap pod finished (phase: {phase})")
+                break
+            elif phase == "":
+                # Pod may have been deleted already
+                pod_done = True
+                break
+            await asyncio.sleep(5)
+
+        if not pod_done:
+            await self.log("nmap", "error", f"Nmap scan timed out after {timeout}s")
+            await self.process_manager.run_command_simple(
+                ["kubectl", "delete", "pod", pod_name, "--namespace=default",
+                 "--ignore-not-found", "--grace-period=0", "--force"],
+                timeout=15
+            )
+            return None
+
+        # Read the pod logs (contains nmap XML output)
+        logs_result = await self.process_manager.run_command_simple(
+            ["kubectl", "logs", pod_name, "--namespace=default"],
+            timeout=30
+        )
+
+        # Clean up the pod
         await self.process_manager.run_command_simple(
             ["kubectl", "delete", "pod", pod_name, "--namespace=default",
              "--ignore-not-found", "--grace-period=0", "--force"],
             timeout=15
         )
 
-        if not result.success and "TIMEOUT" in (result.output or ""):
-            await self.log("nmap", "error", f"Nmap scan timed out after {timeout}s")
-            return None
+        output = logs_result.output or ""
 
-        output = result.output or ""
-
-        # Extract XML content from output (may contain kubectl preamble)
+        # Extract XML content from output
         xml_start = output.find("<?xml")
         xml_end = output.rfind("</nmaprun>")
 
@@ -321,11 +373,12 @@ class ScanService:
             return xml_content
         else:
             # Log raw output for debugging
-            for line in output.split("\n")[-20:]:
+            output_len = len(output)
+            await self.log("nmap", "warn", f"Could not extract XML from Nmap output ({output_len} bytes)")
+            for line in output.split("\n")[-30:]:
                 line = line.strip()
                 if line:
                     await self.log("nmap", "info", f"  {line}")
-            await self.log("nmap", "warn", "Could not extract XML from Nmap output")
             return None
 
     # =========================================================================
@@ -621,7 +674,7 @@ except Exception as e:
 
         # Build nmap flags for db_nmap based on profile
         nmap_flags = {
-            ScanProfile.QUICK: "-sn --top-ports 100",
+            ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-sV -sC",
             ScanProfile.THOROUGH: "-sV -sC -p- -A",
         }.get(profile, "-sV -sC")

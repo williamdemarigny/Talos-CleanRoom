@@ -20,6 +20,7 @@ function scanManager() {
         wsConnected: false,
         ws: null,
         pingInterval: null,
+        pollInterval: null,
         startTime: null,
         elapsedTime: '',
         timerInterval: null,
@@ -72,7 +73,67 @@ function scanManager() {
             this.connectWebSocket();
             await this.fetchStatus();
             await this.fetchHistory();
+            // Start polling if a scan is already running
+            if (this.isRunning) {
+                this.startPolling();
+            }
         },
+
+        // =================================================================
+        // REST Polling (primary log delivery — reliable)
+        // =================================================================
+
+        startPolling() {
+            this.stopPolling();
+            this.pollInterval = setInterval(() => this.pollUpdates(), 3000);
+        },
+
+        stopPolling() {
+            if (this.pollInterval) {
+                clearInterval(this.pollInterval);
+                this.pollInterval = null;
+            }
+        },
+
+        async pollUpdates() {
+            try {
+                // Fetch status + tool states
+                const statusResp = await fetch('/api/scan/status');
+                const statusData = await statusResp.json();
+
+                if (statusData.scan) {
+                    this.scanTarget = statusData.scan.target || '';
+                    this.toolStates = statusData.scan.tools || [];
+                }
+
+                // Fetch logs (only new ones beyond what we have)
+                const logResp = await fetch(`/api/scan/logs?offset=${this.logs.length}`);
+                const logData = await logResp.json();
+
+                if (logData.logs && logData.logs.length > 0) {
+                    for (const log of logData.logs) {
+                        this.logs.push(log);
+                    }
+                    this.scrollToBottom();
+                }
+
+                // Check if scan finished
+                const prevStatus = this.status;
+                this.status = statusData.status;
+
+                if (prevStatus === 'running' && !statusData.is_running) {
+                    this.stopPolling();
+                    this.stopTimer();
+                    await this.fetchHistory();
+                }
+            } catch (e) {
+                // Polling failure is non-fatal, will retry next interval
+            }
+        },
+
+        // =================================================================
+        // WebSocket (supplementary — lower latency when connected)
+        // =================================================================
 
         connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -127,8 +188,6 @@ function scanManager() {
                     break;
                 case 'pong':
                     break;
-                default:
-                    console.log('Unknown scan message type:', message.type);
             }
         },
 
@@ -136,29 +195,30 @@ function scanManager() {
             this.status = data.status || 'idle';
             this.scanTarget = data.target || '';
             this.toolStates = data.tools || [];
-            if (data.logs) {
+            if (data.logs && data.logs.length > 0) {
                 this.logs = data.logs;
+                this.scrollToBottom();
             }
             if (data.started_at && this.status === 'running') {
                 this.startTime = new Date(data.started_at);
                 this.startTimer();
+                this.startPolling();
             }
         },
 
         handleLog(data) {
+            // Deduplicate: skip if we already have a log with same timestamp+message
+            const isDupe = this.logs.some(l =>
+                l.timestamp === data.timestamp && l.message === data.message
+            );
+            if (isDupe) return;
+
             this.logs.push(data);
             // Keep log buffer manageable
             if (this.logs.length > 2000) {
                 this.logs = this.logs.slice(-1500);
             }
-            if (this.autoScroll) {
-                this.$nextTick(() => {
-                    const container = this.$refs.logContainer;
-                    if (container) {
-                        container.scrollTop = container.scrollHeight;
-                    }
-                });
-            }
+            this.scrollToBottom();
         },
 
         handleToolUpdate(data) {
@@ -172,8 +232,26 @@ function scanManager() {
             );
             if (allDone && this.status === 'running') {
                 this.fetchStatus();
+                this.fetchHistory();
+                this.stopPolling();
+                this.stopTimer();
             }
         },
+
+        scrollToBottom() {
+            if (this.autoScroll) {
+                this.$nextTick(() => {
+                    const container = this.$refs.logContainer;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                });
+            }
+        },
+
+        // =================================================================
+        // Scan Actions
+        // =================================================================
 
         async startScan() {
             if (!this.target.trim() || this.selectedTools.length === 0) return;
@@ -190,7 +268,6 @@ function scanManager() {
                 });
 
                 if (response.ok) {
-                    const data = await response.json();
                     this.status = 'running';
                     this.scanTarget = this.target;
                     this.logs = [];
@@ -203,6 +280,7 @@ function scanManager() {
                     }));
                     this.startTime = new Date();
                     this.startTimer();
+                    this.startPolling();
                 } else {
                     const error = await response.json();
                     alert('Failed to start scan: ' + error.detail);
@@ -220,6 +298,7 @@ function scanManager() {
                 if (response.ok) {
                     this.status = 'aborted';
                     this.stopTimer();
+                    this.stopPolling();
                     await this.fetchHistory();
                 }
             } catch (e) {
@@ -233,6 +312,7 @@ function scanManager() {
             this.toolStates = [];
             this.logs = [];
             this.stopTimer();
+            this.stopPolling();
             this.elapsedTime = '';
         },
 
@@ -267,12 +347,17 @@ function scanManager() {
             }
         },
 
+        // =================================================================
+        // Timers
+        // =================================================================
+
         startPing() {
+            this.stopPing();
             this.pingInterval = setInterval(() => {
                 if (this.wsConnected && this.ws) {
                     this.ws.send(JSON.stringify({ type: 'ping' }));
                 }
-            }, 30000);
+            }, 15000);
         },
 
         stopPing() {
