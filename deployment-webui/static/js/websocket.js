@@ -109,11 +109,12 @@ class DeploymentWebSocket {
     }
 
     startPing() {
+        this.stopPing();
         this.pingInterval = setInterval(() => {
             if (this.connected) {
                 this.send({ type: 'ping' });
             }
-        }, 30000);
+        }, 15000);
     }
 
     stopPing() {
