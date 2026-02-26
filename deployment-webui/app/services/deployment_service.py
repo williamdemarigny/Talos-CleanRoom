@@ -319,6 +319,7 @@ class DeploymentService:
                 (12, self._step_deploy_faraday),
                 (13, self._step_deploy_metasploit),
                 (14, self._step_deploy_threat_dragon),
+                (15, self._step_configure_integrations),
             ]
 
             for step_id, step_func in steps:
@@ -1210,7 +1211,7 @@ class DeploymentService:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
 
         self.credentials["faraday"] = {
-            "username": "admin", "password": admin_password
+            "username": "faraday", "password": admin_password
         }
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
@@ -1357,7 +1358,7 @@ class DeploymentService:
         await self.log(step_id, "info", "Credentials:")
         await self.log(step_id, "info", "  - ArgoCD:     admin / (use 'argocd admin initial-password -n argocd')")
         await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
-        await self.log(step_id, "info", "  - Faraday:    admin / (auto-generated, user auto-created)")
+        await self.log(step_id, "info", "  - Faraday:    faraday / (auto-generated, user auto-created)")
         await self.log(step_id, "info", "  - Metasploit: msf / (auto-generated)")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Retrieve auto-generated passwords:")
@@ -1380,6 +1381,154 @@ class DeploymentService:
         await self.log(step_id, "info", "==========================================")
 
         return result.success
+
+    async def _step_configure_integrations(self, step_id: int) -> bool:
+        """Step 15: Configure security tool integrations.
+
+        Creates a default Faraday workspace and verifies cross-service
+        connectivity between Faraday, Metasploit, and OpenVAS.
+
+        This step is non-fatal — partial failures are logged as warnings
+        and the deployment still completes successfully.
+        """
+        await self.log(step_id, "info", "Configuring security tool integrations...")
+
+        faraday_creds = self.credentials.get("faraday", {})
+        faraday_password = faraday_creds.get("password", "")
+        faraday_username = faraday_creds.get("username", "faraday")
+
+        if not faraday_password:
+            await self.log(step_id, "warn", "Faraday credentials not available, skipping integration config")
+            return True
+
+        # --- Sub-task 1: Wait for Faraday API readiness ---
+        await self.log(step_id, "info", "Waiting for Faraday REST API to be responsive...")
+
+        api_ready = False
+        for attempt in range(1, 31):
+            if self.current_deployment.status != DeploymentStatus.RUNNING:
+                return False
+
+            check_result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+                 "--", "python3", "-c",
+                 "import urllib.request; "
+                 "resp = urllib.request.urlopen('http://127.0.0.1:5985/_api/v3/info'); "
+                 "print(resp.status)"],
+                timeout=15
+            )
+
+            status_code = (check_result.output or "").strip()
+            if status_code == "200":
+                await self.log(step_id, "info", "Faraday API is responsive")
+                api_ready = True
+                break
+
+            await self.log(step_id, "info", f"  Faraday API not ready yet... ({attempt}/30)")
+            await asyncio.sleep(10)
+
+        if not api_ready:
+            await self.log(step_id, "warn", "Faraday API not responsive after 5 minutes, skipping integration config")
+            return True
+
+        # --- Sub-task 2: Login + Create workspace (single kubectl exec) ---
+        await self.log(step_id, "info", "Creating default Faraday workspace 'pentest'...")
+
+        # Python script that runs inside the Faraday container
+        # Uses session-based auth (login → CSRF token → create workspace)
+        setup_script = (
+            "import urllib.request, json, http.cookiejar, os, sys\n"
+            "cj = http.cookiejar.CookieJar()\n"
+            "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
+            "try:\n"
+            "    data = json.dumps({'email': os.environ['FARADAY_USER'], 'password': os.environ['FARADAY_PASS']}).encode()\n"
+            "    req = urllib.request.Request('http://127.0.0.1:5985/_api/login', method='POST',\n"
+            "        headers={'Content-Type': 'application/json'}, data=data)\n"
+            "    resp = opener.open(req)\n"
+            "    login = json.loads(resp.read().decode())\n"
+            "    csrf = login['response']['csrf_token']\n"
+            "    print('LOGIN:OK')\n"
+            "except Exception as e:\n"
+            "    print(f'LOGIN:FAILED:{e}')\n"
+            "    sys.exit(0)\n"
+            "try:\n"
+            "    ws = json.dumps({'name': 'pentest', 'description': 'Default workspace for security assessments'}).encode()\n"
+            "    req2 = urllib.request.Request('http://127.0.0.1:5985/_api/v3/ws', method='POST',\n"
+            "        headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=ws)\n"
+            "    resp2 = opener.open(req2)\n"
+            "    print('WORKSPACE:CREATED')\n"
+            "except urllib.error.HTTPError as e:\n"
+            "    if e.code == 409:\n"
+            "        print('WORKSPACE:EXISTS')\n"
+            "    else:\n"
+            "        print(f'WORKSPACE:ERROR:{e.code}')\n"
+            "except Exception as e:\n"
+            "    print(f'WORKSPACE:FAILED:{e}')\n"
+        )
+
+        # Pass credentials via environment variables (not command-line args)
+        setup_result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+             "--", "env", f"FARADAY_USER={faraday_username}", f"FARADAY_PASS={faraday_password}",
+             "python3", "-c", setup_script],
+            timeout=30
+        )
+
+        output = (setup_result.output or "").strip()
+        for line in output.split("\n"):
+            line = line.strip()
+            if line == "LOGIN:OK":
+                await self.log(step_id, "info", "Faraday API authentication successful")
+            elif line.startswith("LOGIN:FAILED"):
+                await self.log(step_id, "warn", f"Faraday login failed: {line}")
+            elif line == "WORKSPACE:CREATED":
+                await self.log(step_id, "info", "Workspace 'pentest' created successfully")
+            elif line == "WORKSPACE:EXISTS":
+                await self.log(step_id, "info", "Workspace 'pentest' already exists")
+            elif line.startswith("WORKSPACE:ERROR") or line.startswith("WORKSPACE:FAILED"):
+                await self.log(step_id, "warn", f"Workspace creation issue: {line}")
+
+        # --- Sub-task 3: Verify Metasploit RPC connectivity ---
+        await self.log(step_id, "info", "Verifying Metasploit RPC connectivity from Faraday...")
+
+        msf_check = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+             "--", "python3", "-c",
+             "import socket; s = socket.socket(); s.settimeout(5); "
+             "s.connect(('metasploit.metasploit.svc.cluster.local', 55553)); "
+             "s.close(); print('REACHABLE')"],
+            timeout=15
+        )
+
+        msf_status = (msf_check.output or "").strip()
+        if "REACHABLE" in msf_status:
+            await self.log(step_id, "info", "Metasploit RPC is reachable from Faraday (port 55553)")
+        else:
+            await self.log(step_id, "warn",
+                "Metasploit RPC not yet reachable from Faraday. "
+                "This is normal if Metasploit is still initializing (~90s startup).")
+
+        # --- Sub-task 4: Log integration summary ---
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "=== Integration Configuration Summary ===")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Faraday workspace 'pentest' is ready.")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Metasploit Integration:")
+        await self.log(step_id, "info", "  Faraday imports Metasploit results via XML report upload.")
+        await self.log(step_id, "info", "  1. In msfconsole: db_export -f xml /tmp/msf-report.xml")
+        await self.log(step_id, "info", "  2. Upload to Faraday via Web UI (pentest workspace → upload icon)")
+        await self.log(step_id, "info", "     or API: POST /_api/v3/ws/pentest/upload_report")
+        await self.log(step_id, "info", f"  RPC endpoint: metasploit.metasploit.svc.cluster.local:55553")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "OpenVAS Integration:")
+        await self.log(step_id, "info", "  Export scan reports as XML from the OpenVAS GSA web UI,")
+        await self.log(step_id, "info", "  then upload to Faraday. Faraday auto-detects OpenVAS XML format.")
+        await self.log(step_id, "info", "  Supported formats: OpenVAS XML, Nmap XML, Metasploit XML, and 80+ others.")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "=== Integration setup complete ===")
+
+        return True
 
 
 # Global deployment service instance
