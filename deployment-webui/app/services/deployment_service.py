@@ -154,7 +154,10 @@ class DeploymentService:
         )
         self.logs.append(entry)
         if self.log_callback:
-            await self.log_callback(entry)
+            try:
+                await self.log_callback(entry)
+            except Exception:
+                pass  # Don't let broadcast failures crash the deployment
 
     async def update_step(self, step_id: int, status: StepStatus, error: Optional[str] = None):
         """Update step status and notify via callback."""
@@ -168,7 +171,10 @@ class DeploymentService:
             if error:
                 step.error_message = error
             if self.step_callback:
-                await self.step_callback(step)
+                try:
+                    await self.step_callback(step)
+                except Exception:
+                    pass  # Don't let broadcast failures crash the deployment
 
     def get_status(self) -> Optional[DeploymentState]:
         """Get current deployment status."""
@@ -1395,7 +1401,7 @@ class DeploymentService:
 
         faraday_creds = self.credentials.get("faraday", {})
         faraday_password = faraday_creds.get("password", "")
-        faraday_username = faraday_creds.get("username", "faraday")
+        faraday_username = faraday_creds.get("username", "admin")
 
         if not faraday_password:
             await self.log(step_id, "warn", "Faraday credentials not available, skipping integration config")
