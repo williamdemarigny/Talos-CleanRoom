@@ -1211,7 +1211,7 @@ class DeploymentService:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
 
         self.credentials["faraday"] = {
-            "username": "faraday", "password": admin_password
+            "username": "admin", "password": admin_password
         }
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
@@ -1358,7 +1358,7 @@ class DeploymentService:
         await self.log(step_id, "info", "Credentials:")
         await self.log(step_id, "info", "  - ArgoCD:     admin / (use 'argocd admin initial-password -n argocd')")
         await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
-        await self.log(step_id, "info", "  - Faraday:    faraday / (auto-generated, user auto-created)")
+        await self.log(step_id, "info", "  - Faraday:    admin / (auto-generated, user auto-created)")
         await self.log(step_id, "info", "  - Metasploit: msf / (auto-generated)")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Retrieve auto-generated passwords:")

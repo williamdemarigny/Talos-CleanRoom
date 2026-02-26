@@ -795,66 +795,26 @@ except Exception as e:
 
         if decode_result.success and decode_result.output.strip():
             return {
-                "username": "faraday",
+                "username": "admin",
                 "password": decode_result.output.strip()
             }
 
         return None
 
     async def _upload_to_faraday(self, xml_content: str, tool_name: str, creds: dict) -> bool:
-        """Upload scan results to Faraday via its REST API."""
+        """Upload scan results to Faraday via faraday-plugins + bulk_create API."""
         await self.log(tool_name, "info", f"Uploading {tool_name} results to Faraday workspace 'pentest'...")
 
-        # Python script to upload report via Faraday API
-        # Runs inside the Faraday container using stdlib only
-        upload_script = (
-            "import urllib.request, json, http.cookiejar, os, sys, io\n"
-            "cj = http.cookiejar.CookieJar()\n"
-            "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
-            "# Login\n"
-            "try:\n"
-            "    data = json.dumps({'email': os.environ['F_USER'], 'password': os.environ['F_PASS']}).encode()\n"
-            "    req = urllib.request.Request('http://127.0.0.1:5985/_api/login', method='POST',\n"
-            "        headers={'Content-Type': 'application/json'}, data=data)\n"
-            "    resp = opener.open(req)\n"
-            "    login = json.loads(resp.read().decode())\n"
-            "    csrf = login['response']['csrf_token']\n"
-            "except Exception as e:\n"
-            "    print(f'UPLOAD:LOGIN_FAILED:{e}')\n"
-            "    sys.exit(0)\n"
-            "# Upload report\n"
-            "try:\n"
-            "    xml_data = sys.stdin.buffer.read()\n"
-            "    boundary = '----FormBoundary7MA4YWxkTrZu0gW'\n"
-            "    body = (\n"
-            "        f'--{boundary}\\r\\n'\n"
-            "        f'Content-Disposition: form-data; name=\"file\"; filename=\"report.xml\"\\r\\n'\n"
-            "        f'Content-Type: application/xml\\r\\n'\n"
-            "        f'\\r\\n'\n"
-            "    ).encode() + xml_data + f'\\r\\n--{boundary}--\\r\\n'.encode()\n"
-            "    req2 = urllib.request.Request(\n"
-            "        'http://127.0.0.1:5985/_api/v3/ws/pentest/upload_report',\n"
-            "        method='POST',\n"
-            "        headers={\n"
-            "            'Content-Type': f'multipart/form-data; boundary={boundary}',\n"
-            "            'X-CSRFToken': csrf\n"
-            "        },\n"
-            "        data=body\n"
-            "    )\n"
-            "    resp2 = opener.open(req2)\n"
-            "    result = resp2.read().decode()\n"
-            "    print(f'UPLOAD:OK:{result}')\n"
-            "except urllib.error.HTTPError as e:\n"
-            "    body = e.read().decode()\n"
-            "    print(f'UPLOAD:HTTP_ERROR:{e.code}:{body}')\n"
-            "except Exception as e:\n"
-            "    print(f'UPLOAD:FAILED:{e}')\n"
-        )
-
-        # Pipe the XML content via stdin to the upload script running in the Faraday container
-        # We write the XML to a temp file first, then use kubectl exec with stdin redirect
         import tempfile
         import os
+
+        # Map tool names to faraday-plugins plugin names
+        plugin_map = {
+            "nmap": "nmap",
+            "openvas": "openvas",
+            "metasploit": "metasploit",
+        }
+        plugin_name = plugin_map.get(tool_name, tool_name)
 
         tmp_file = None
         try:
@@ -890,14 +850,20 @@ except Exception as e:
                 await self.log(tool_name, "warn", f"Failed to copy XML to Faraday container: {cp_result.output}")
                 return False
 
-            # Now run the upload script, reading the XML from the container filesystem
-            upload_with_file_script = (
+            # Python script that:
+            # 1. Logs in to Faraday API
+            # 2. Ensures 'pentest' workspace exists
+            # 3. Parses XML with faraday-plugins to get bulk_create JSON
+            # 4. POSTs to bulk_create API
+            upload_script = (
                 "import urllib.request, json, http.cookiejar, os, sys\n"
+                "BASE = 'http://127.0.0.1:5985'\n"
                 "cj = http.cookiejar.CookieJar()\n"
                 "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
+                "# Login\n"
                 "try:\n"
                 "    data = json.dumps({'email': os.environ['F_USER'], 'password': os.environ['F_PASS']}).encode()\n"
-                "    req = urllib.request.Request('http://127.0.0.1:5985/_api/login', method='POST',\n"
+                "    req = urllib.request.Request(BASE + '/_api/login', method='POST',\n"
                 "        headers={'Content-Type': 'application/json'}, data=data)\n"
                 "    resp = opener.open(req)\n"
                 "    login = json.loads(resp.read().decode())\n"
@@ -905,25 +871,59 @@ except Exception as e:
                 "except Exception as e:\n"
                 "    print(f'UPLOAD:LOGIN_FAILED:{e}')\n"
                 "    sys.exit(0)\n"
+                "# Ensure 'pentest' workspace exists\n"
                 "try:\n"
+                "    ws_req = urllib.request.Request(BASE + '/_api/v3/ws/pentest',\n"
+                "        headers={'X-CSRFToken': csrf})\n"
+                "    opener.open(ws_req)\n"
+                "except urllib.error.HTTPError as e:\n"
+                "    if e.code == 404:\n"
+                "        ws_data = json.dumps({'name': 'pentest', 'description': 'Automated security scans'}).encode()\n"
+                "        ws_create = urllib.request.Request(BASE + '/_api/v3/ws', method='POST',\n"
+                "            headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=ws_data)\n"
+                "        try:\n"
+                "            opener.open(ws_create)\n"
+                "            print('UPLOAD:WS_CREATED:pentest')\n"
+                "        except Exception as we:\n"
+                "            print(f'UPLOAD:WS_CREATE_FAILED:{we}')\n"
+                "            sys.exit(0)\n"
+                "# Parse XML with faraday-plugins\n"
+                "try:\n"
+                f"    from faraday_plugins.plugins.repo.{plugin_name}.plugin import *\n"
                 f"    xml_path = '{container_xml}'\n"
                 "    with open(xml_path, 'rb') as f:\n"
                 "        xml_data = f.read()\n"
-                "    boundary = '----FormBoundary7MA4YWxkTrZu0gW'\n"
-                "    body = (\n"
-                "        f'--{boundary}\\r\\n'\n"
-                "        f'Content-Disposition: form-data; name=\"file\"; filename=\"report.xml\"\\r\\n'\n"
-                "        f'Content-Type: application/xml\\r\\n'\n"
-                "        f'\\r\\n'\n"
-                "    ).encode() + xml_data + f'\\r\\n--{boundary}--\\r\\n'.encode()\n"
+                "    import importlib\n"
+                f"    mod = importlib.import_module('faraday_plugins.plugins.repo.{plugin_name}.plugin')\n"
+                "    # Find the plugin class (ends with 'Plugin')\n"
+                "    plugin_cls = None\n"
+                "    for name in dir(mod):\n"
+                "        obj = getattr(mod, name)\n"
+                "        if isinstance(obj, type) and name.endswith('Plugin') and name != 'PluginBase':\n"
+                "            plugin_cls = obj\n"
+                "            break\n"
+                "    if not plugin_cls:\n"
+                "        print('UPLOAD:FAILED:Could not find plugin class')\n"
+                "        sys.exit(0)\n"
+                "    plugin = plugin_cls()\n"
+                "    plugin.parseOutputString(xml_data)\n"
+                "    bulk_json = json.loads(plugin.get_json())\n"
+                "    host_count = len(bulk_json.get('hosts', []))\n"
+                "    print(f'UPLOAD:PARSED:{host_count} hosts')\n"
+                "except Exception as e:\n"
+                "    print(f'UPLOAD:PARSE_FAILED:{e}')\n"
+                "    sys.exit(0)\n"
+                "# Send to bulk_create API\n"
+                "try:\n"
+                "    bulk_data = json.dumps(bulk_json).encode()\n"
                 "    req2 = urllib.request.Request(\n"
-                "        'http://127.0.0.1:5985/_api/v3/ws/pentest/upload_report',\n"
+                "        BASE + '/_api/v3/ws/pentest/bulk_create',\n"
                 "        method='POST',\n"
                 "        headers={\n"
-                "            'Content-Type': f'multipart/form-data; boundary={boundary}',\n"
+                "            'Content-Type': 'application/json',\n"
                 "            'X-CSRFToken': csrf\n"
                 "        },\n"
-                "        data=body\n"
+                "        data=bulk_data\n"
                 "    )\n"
                 "    resp2 = opener.open(req2)\n"
                 "    result = resp2.read().decode()\n"
@@ -940,7 +940,7 @@ except Exception as e:
             result = await self.process_manager.run_command_simple(
                 ["kubectl", "exec", "-n", "faraday", f"pod/{pod_name}", "-c", "faraday",
                  "--", "env", f"F_USER={creds['username']}", f"F_PASS={creds['password']}",
-                 "python3", "-c", upload_with_file_script],
+                 "python3", "-c", upload_script],
                 timeout=FARADAY_UPLOAD_TIMEOUT
             )
 
@@ -950,12 +950,20 @@ except Exception as e:
                 if line.startswith("UPLOAD:OK"):
                     await self.log(tool_name, "info", f"Successfully uploaded {tool_name} results to Faraday")
                     return True
+                elif line.startswith("UPLOAD:WS_CREATED"):
+                    await self.log(tool_name, "info", "Created Faraday workspace 'pentest'")
+                elif line.startswith("UPLOAD:PARSED"):
+                    await self.log(tool_name, "info", f"Parsed scan results: {line.split(':', 2)[-1]}")
                 elif line.startswith("UPLOAD:LOGIN_FAILED"):
-                    await self.log(tool_name, "warn", f"Faraday login failed during upload: {line}")
+                    await self.log(tool_name, "warn", f"Faraday login failed: {line}")
+                elif line.startswith("UPLOAD:WS_CREATE_FAILED"):
+                    await self.log(tool_name, "warn", f"Failed to create workspace: {line}")
+                elif line.startswith("UPLOAD:PARSE_FAILED"):
+                    await self.log(tool_name, "warn", f"Failed to parse scan results: {line}")
                 elif line.startswith("UPLOAD:HTTP_ERROR"):
-                    await self.log(tool_name, "warn", f"Faraday upload HTTP error: {line}")
+                    await self.log(tool_name, "warn", f"Faraday API error: {line}")
                 elif line.startswith("UPLOAD:FAILED"):
-                    await self.log(tool_name, "warn", f"Faraday upload failed: {line}")
+                    await self.log(tool_name, "warn", f"Upload failed: {line}")
 
             return False
 
