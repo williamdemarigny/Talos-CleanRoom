@@ -514,7 +514,7 @@ spec:
             while [ ! -S /run/gvmd/gvmd.sock ]; do sleep 2; done
             echo "GVMD ready. Starting GSA..."
             # Run gsad in HTTP-only mode (Traefik handles TLS termination)
-            exec gsad --foreground --http-only --drop-privileges=gsad
+            exec gsad --foreground --http-only --port=80 --drop-privileges=gsad
         ports:
         - containerPort: 80
           name: http
