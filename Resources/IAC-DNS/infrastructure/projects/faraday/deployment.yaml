@@ -187,7 +187,7 @@ spec:
 
             # Create admin user if not exists (password from environment variable)
             echo "Creating admin user..."
-            faraday-manage create-superuser --username faraday --password "${ADMIN_PASSWORD}" --email admin@localhost 2>/dev/null || echo "User may already exist"
+            faraday-manage create-superuser --username faraday --password "${ADMIN_PASSWORD}" --email "admin@knowledgeondemand.net" 2>/dev/null || echo "User may already exist"
 
             # Run migrations
             echo "Running migrations..."
