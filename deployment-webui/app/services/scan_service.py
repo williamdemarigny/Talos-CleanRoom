@@ -25,7 +25,7 @@ NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
 NMAP_TIMEOUT_THOROUGH = 3600   # 60 min for full port scan
 OPENVAS_TIMEOUT = 7200         # 2 hours for OpenVAS
 METASPLOIT_TIMEOUT = 1800      # 30 min for Metasploit
-FARADAY_UPLOAD_TIMEOUT = 60    # 1 min for Faraday upload
+FARADAY_UPLOAD_TIMEOUT = 120   # 2 min for Faraday upload (individual REST calls)
 
 # Nmap flags per profile
 NMAP_PROFILES = {
@@ -802,7 +802,12 @@ except Exception as e:
         return None
 
     async def _upload_to_faraday(self, xml_content: str, tool_name: str, creds: dict) -> bool:
-        """Upload scan results to Faraday via faraday-plugins + bulk_create API."""
+        """Upload scan results to Faraday via individual REST API calls.
+
+        Uses faraday-plugins to parse XML, then creates hosts/services/vulns
+        one by one via the synchronous REST API (avoids bulk_create which
+        requires a Celery worker that isn't running in our deployment).
+        """
         await self.log(tool_name, "info", f"Uploading {tool_name} results to Faraday workspace 'pentest'...")
 
         import tempfile
@@ -853,13 +858,29 @@ except Exception as e:
             # Python script that:
             # 1. Logs in to Faraday API
             # 2. Ensures 'pentest' workspace exists
-            # 3. Parses XML with faraday-plugins to get bulk_create JSON
-            # 4. POSTs to bulk_create API
+            # 3. Parses XML with faraday-plugins
+            # 4. Creates hosts/services/vulns individually via REST API
+            #    (bulk_create delegates to Celery which has no worker running)
             upload_script = (
                 "import urllib.request, json, http.cookiejar, os, sys\n"
                 "BASE = 'http://127.0.0.1:5985'\n"
+                "WS = 'pentest'\n"
                 "cj = http.cookiejar.CookieJar()\n"
                 "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
+                "csrf = ''\n"
+                "\n"
+                "def api_post(path, body):\n"
+                "    data = json.dumps(body).encode()\n"
+                "    req = urllib.request.Request(BASE + path, method='POST',\n"
+                "        headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=data)\n"
+                "    resp = opener.open(req)\n"
+                "    return json.loads(resp.read().decode())\n"
+                "\n"
+                "def api_get(path):\n"
+                "    req = urllib.request.Request(BASE + path, headers={'X-CSRFToken': csrf})\n"
+                "    resp = opener.open(req)\n"
+                "    return json.loads(resp.read().decode())\n"
+                "\n"
                 "# Login\n"
                 "try:\n"
                 "    data = json.dumps({'email': os.environ['F_USER'], 'password': os.environ['F_PASS']}).encode()\n"
@@ -871,31 +892,23 @@ except Exception as e:
                 "except Exception as e:\n"
                 "    print(f'UPLOAD:LOGIN_FAILED:{e}')\n"
                 "    sys.exit(0)\n"
+                "\n"
                 "# Ensure 'pentest' workspace exists\n"
                 "try:\n"
-                "    ws_req = urllib.request.Request(BASE + '/_api/v3/ws/pentest',\n"
-                "        headers={'X-CSRFToken': csrf})\n"
-                "    opener.open(ws_req)\n"
+                "    api_get(f'/_api/v3/ws/{WS}')\n"
                 "except urllib.error.HTTPError as e:\n"
                 "    if e.code == 404:\n"
-                "        ws_data = json.dumps({'name': 'pentest', 'description': 'Automated security scans'}).encode()\n"
-                "        ws_create = urllib.request.Request(BASE + '/_api/v3/ws', method='POST',\n"
-                "            headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=ws_data)\n"
                 "        try:\n"
-                "            opener.open(ws_create)\n"
+                "            api_post('/_api/v3/ws', {'name': WS, 'description': 'Automated security scans'})\n"
                 "            print('UPLOAD:WS_CREATED:pentest')\n"
                 "        except Exception as we:\n"
                 "            print(f'UPLOAD:WS_CREATE_FAILED:{we}')\n"
                 "            sys.exit(0)\n"
+                "\n"
                 "# Parse XML with faraday-plugins\n"
                 "try:\n"
-                f"    from faraday_plugins.plugins.repo.{plugin_name}.plugin import *\n"
-                f"    xml_path = '{container_xml}'\n"
-                "    with open(xml_path, 'rb') as f:\n"
-                "        xml_data = f.read()\n"
                 "    import importlib\n"
                 f"    mod = importlib.import_module('faraday_plugins.plugins.repo.{plugin_name}.plugin')\n"
-                "    # Find the plugin class (ends with 'Plugin')\n"
                 "    plugin_cls = None\n"
                 "    for name in dir(mod):\n"
                 "        obj = getattr(mod, name)\n"
@@ -906,35 +919,116 @@ except Exception as e:
                 "        print('UPLOAD:FAILED:Could not find plugin class')\n"
                 "        sys.exit(0)\n"
                 "    plugin = plugin_cls()\n"
+                f"    with open('{container_xml}', 'rb') as f:\n"
+                "        xml_data = f.read()\n"
                 "    plugin.parseOutputString(xml_data)\n"
                 "    bulk_json = json.loads(plugin.get_json())\n"
-                "    host_count = len(bulk_json.get('hosts', []))\n"
-                "    print(f'UPLOAD:PARSED:{host_count} hosts')\n"
+                "    hosts = bulk_json.get('hosts', [])\n"
+                "    print(f'UPLOAD:PARSED:{len(hosts)} hosts')\n"
                 "except Exception as e:\n"
                 "    print(f'UPLOAD:PARSE_FAILED:{e}')\n"
                 "    sys.exit(0)\n"
-                "# Send to bulk_create API\n"
+                "\n"
+                "# Create hosts, services, and vulns individually via REST API\n"
+                "created_hosts = 0\n"
+                "created_services = 0\n"
+                "created_vulns = 0\n"
+                "errors = 0\n"
+                "\n"
+                "for h in hosts:\n"
+                "    # Create host\n"
+                "    host_body = {\n"
+                "        'ip': h.get('ip', ''),\n"
+                "        'os': h.get('os', ''),\n"
+                "        'hostnames': h.get('hostnames', []),\n"
+                "        'description': h.get('description', ''),\n"
+                "        'mac': h.get('mac', ''),\n"
+                "    }\n"
+                "    try:\n"
+                "        host_resp = api_post(f'/_api/v3/ws/{WS}/hosts', host_body)\n"
+                "        host_id = host_resp.get('id')\n"
+                "        created_hosts += 1\n"
+                "    except urllib.error.HTTPError as e:\n"
+                "        body = e.read().decode()\n"
+                "        # 409 = host already exists — try to look it up\n"
+                "        if e.code == 409:\n"
+                "            try:\n"
+                "                search = api_get(f'/_api/v3/ws/{WS}/hosts?search=ip%3D{h[\"ip\"]}')\n"
+                "                rows = search.get('rows', [])\n"
+                "                host_id = rows[0]['id'] if rows else None\n"
+                "                if host_id:\n"
+                "                    created_hosts += 1\n"
+                "                else:\n"
+                "                    errors += 1\n"
+                "                    continue\n"
+                "            except:\n"
+                "                errors += 1\n"
+                "                continue\n"
+                "        else:\n"
+                "            print(f'UPLOAD:HOST_ERROR:{e.code}:{body}')\n"
+                "            errors += 1\n"
+                "            continue\n"
+                "    except Exception as e:\n"
+                "        print(f'UPLOAD:HOST_ERROR:{e}')\n"
+                "        errors += 1\n"
+                "        continue\n"
+                "\n"
+                "    if not host_id:\n"
+                "        continue\n"
+                "\n"
+                "    # Create services for this host\n"
+                "    svc_id_map = {}  # port -> service_id\n"
+                "    for svc in h.get('services', []):\n"
+                "        svc_body = {\n"
+                "            'name': svc.get('name', ''),\n"
+                "            'port': svc.get('port', 0),\n"
+                "            'protocol': svc.get('protocol', 'tcp'),\n"
+                "            'status': svc.get('status', 'open'),\n"
+                "            'version': svc.get('version', ''),\n"
+                "            'description': svc.get('description', ''),\n"
+                "            'parent': host_id,\n"
+                "            'type': 'Service',\n"
+                "        }\n"
+                "        try:\n"
+                "            svc_resp = api_post(f'/_api/v3/ws/{WS}/services', svc_body)\n"
+                "            svc_id_map[svc.get('port', 0)] = svc_resp.get('id')\n"
+                "            created_services += 1\n"
+                "        except urllib.error.HTTPError:\n"
+                "            errors += 1\n"
+                "        except Exception:\n"
+                "            errors += 1\n"
+                "\n"
+                "    # Create vulnerabilities for this host\n"
+                "    for vuln in h.get('vulnerabilities', []):\n"
+                "        vuln_body = {\n"
+                "            'name': vuln.get('name', 'Unknown'),\n"
+                "            'desc': vuln.get('desc', ''),\n"
+                "            'severity': vuln.get('severity', 'info'),\n"
+                "            'refs': vuln.get('refs', []),\n"
+                "            'resolution': vuln.get('resolution', ''),\n"
+                "            'type': 'Vulnerability',\n"
+                "            'parent': host_id,\n"
+                "            'parent_type': 'Host',\n"
+                "        }\n"
+                "        try:\n"
+                "            api_post(f'/_api/v3/ws/{WS}/vulns', vuln_body)\n"
+                "            created_vulns += 1\n"
+                "        except urllib.error.HTTPError:\n"
+                "            errors += 1\n"
+                "        except Exception:\n"
+                "            errors += 1\n"
+                "\n"
+                "# Cleanup temp file\n"
                 "try:\n"
-                "    bulk_data = json.dumps(bulk_json).encode()\n"
-                "    req2 = urllib.request.Request(\n"
-                "        BASE + '/_api/v3/ws/pentest/bulk_create',\n"
-                "        method='POST',\n"
-                "        headers={\n"
-                "            'Content-Type': 'application/json',\n"
-                "            'X-CSRFToken': csrf\n"
-                "        },\n"
-                "        data=bulk_data\n"
-                "    )\n"
-                "    resp2 = opener.open(req2)\n"
-                "    result = resp2.read().decode()\n"
-                "    print(f'UPLOAD:OK:{result}')\n"
-                "except urllib.error.HTTPError as e:\n"
-                "    body = e.read().decode()\n"
-                "    print(f'UPLOAD:HTTP_ERROR:{e.code}:{body}')\n"
-                "except Exception as e:\n"
-                "    print(f'UPLOAD:FAILED:{e}')\n"
-                "finally:\n"
-                f"    import os; os.unlink('{container_xml}') if os.path.exists('{container_xml}') else None\n"
+                f"    os.unlink('{container_xml}')\n"
+                "except:\n"
+                "    pass\n"
+                "\n"
+                "total = created_hosts + created_services + created_vulns\n"
+                "if total > 0:\n"
+                "    print(f'UPLOAD:OK:{created_hosts} hosts, {created_services} services, {created_vulns} vulns ({errors} errors)')\n"
+                "else:\n"
+                "    print(f'UPLOAD:FAILED:No objects created ({errors} errors)')\n"
             )
 
             result = await self.process_manager.run_command_simple(
@@ -948,20 +1042,21 @@ except Exception as e:
             for line in output.split("\n"):
                 line = line.strip()
                 if line.startswith("UPLOAD:OK"):
-                    await self.log(tool_name, "info", f"Successfully uploaded {tool_name} results to Faraday")
+                    detail = line.split(":", 2)[-1]
+                    await self.log(tool_name, "info", f"Uploaded to Faraday: {detail}")
                     return True
                 elif line.startswith("UPLOAD:WS_CREATED"):
                     await self.log(tool_name, "info", "Created Faraday workspace 'pentest'")
                 elif line.startswith("UPLOAD:PARSED"):
                     await self.log(tool_name, "info", f"Parsed scan results: {line.split(':', 2)[-1]}")
                 elif line.startswith("UPLOAD:LOGIN_FAILED"):
-                    await self.log(tool_name, "warn", f"Faraday login failed: {line}")
+                    await self.log(tool_name, "warn", f"Faraday login failed during upload: {line}")
                 elif line.startswith("UPLOAD:WS_CREATE_FAILED"):
                     await self.log(tool_name, "warn", f"Failed to create workspace: {line}")
                 elif line.startswith("UPLOAD:PARSE_FAILED"):
                     await self.log(tool_name, "warn", f"Failed to parse scan results: {line}")
-                elif line.startswith("UPLOAD:HTTP_ERROR"):
-                    await self.log(tool_name, "warn", f"Faraday API error: {line}")
+                elif line.startswith("UPLOAD:HOST_ERROR"):
+                    await self.log(tool_name, "warn", f"Error creating host: {line}")
                 elif line.startswith("UPLOAD:FAILED"):
                     await self.log(tool_name, "warn", f"Upload failed: {line}")
 
