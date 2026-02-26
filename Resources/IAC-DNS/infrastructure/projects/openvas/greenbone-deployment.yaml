@@ -287,26 +287,27 @@ spec:
       # 2. PostgreSQL with GVM extensions
       # Tuned for fast feed import — gvmd imports millions of CVE/NVT records on first start.
       # Default PostgreSQL settings (shared_buffers=128MB) cause this to take 24+ hours.
+      # The pg-gvm image uses a custom start-postgresql script as CMD.
+      # We inject tuning via conf.d/ before calling it (Debian pg_createcluster includes conf.d).
       - name: pg-gvm
         image: registry.community.greenbone.net/community/pg-gvm:stable
+        command: ["/usr/local/bin/entrypoint"]
         args:
-          - "postgres"
+          - "sh"
           - "-c"
-          - "shared_buffers=1GB"
-          - "-c"
-          - "work_mem=256MB"
-          - "-c"
-          - "maintenance_work_mem=1GB"
-          - "-c"
-          - "effective_cache_size=3GB"
-          - "-c"
-          - "max_wal_size=2GB"
-          - "-c"
-          - "checkpoint_completion_target=0.9"
-          - "-c"
-          - "wal_buffers=64MB"
-          - "-c"
-          - "synchronous_commit=off"
+          - |
+            mkdir -p /etc/postgresql/17/main/conf.d
+            cat > /etc/postgresql/17/main/conf.d/tuning.conf << 'PGEOF'
+            shared_buffers = 1GB
+            work_mem = 256MB
+            maintenance_work_mem = 1GB
+            effective_cache_size = 3GB
+            max_wal_size = 2GB
+            checkpoint_completion_target = 0.9
+            wal_buffers = 64MB
+            synchronous_commit = off
+            PGEOF
+            exec start-postgresql
         volumeMounts:
         - name: psql-data
           mountPath: /var/lib/postgresql
