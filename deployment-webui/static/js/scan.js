@@ -1,0 +1,325 @@
+// Alpine.js component for the Security Scanner tab
+
+function scanManager() {
+    return {
+        // Form state
+        target: '',
+        selectedTools: ['nmap'],
+        profile: 'standard',
+
+        // Scan state
+        status: 'idle',
+        scanTarget: '',
+        toolStates: [],
+        logs: [],
+        history: [],
+        logFilter: null,
+
+        // UI state
+        autoScroll: true,
+        wsConnected: false,
+        ws: null,
+        pingInterval: null,
+        startTime: null,
+        elapsedTime: '',
+        timerInterval: null,
+
+        profileDescriptions: {
+            'quick': 'Ping sweep + top 100 ports. Fastest option for initial discovery.',
+            'standard': 'Service version detection + default scripts. Good balance of speed and depth.',
+            'thorough': 'All 65535 ports + aggressive detection. Most comprehensive but slowest.'
+        },
+
+        get isRunning() {
+            return this.status === 'running';
+        },
+
+        get completedTools() {
+            return this.toolStates.filter(t => t.status === 'completed').length;
+        },
+
+        get uploadedTools() {
+            return this.toolStates.filter(t => t.uploaded_to_faraday).length;
+        },
+
+        get filteredLogs() {
+            if (!this.logFilter) return this.logs;
+            return this.logs.filter(l => l.tool === this.logFilter || !l.tool);
+        },
+
+        get statusBannerClass() {
+            switch (this.status) {
+                case 'running': return 'bg-yellow-900/50 text-yellow-200';
+                case 'completed': return 'bg-green-900/50 text-green-200';
+                case 'failed': return 'bg-red-900/50 text-red-200';
+                case 'aborted': return 'bg-orange-900/50 text-orange-200';
+                default: return 'bg-gray-700 text-gray-300';
+            }
+        },
+
+        get statusText() {
+            switch (this.status) {
+                case 'idle': return 'Ready to scan';
+                case 'running': return 'Scan in progress...';
+                case 'completed': return 'Scan completed';
+                case 'failed': return 'Scan failed';
+                case 'aborted': return 'Scan aborted';
+                default: return this.status;
+            }
+        },
+
+        async init() {
+            this.connectWebSocket();
+            await this.fetchStatus();
+            await this.fetchHistory();
+        },
+
+        connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const token = localStorage.getItem('access_token') || '';
+            const url = `${protocol}//${window.location.host}/api/scan/ws?token=${token}`;
+
+            try {
+                this.ws = new WebSocket(url);
+
+                this.ws.onopen = () => {
+                    this.wsConnected = true;
+                    this.startPing();
+                };
+
+                this.ws.onclose = (event) => {
+                    this.wsConnected = false;
+                    this.stopPing();
+                    // Reconnect unless normal closure or auth failure
+                    if (event.code !== 1000 && event.code !== 4001) {
+                        setTimeout(() => this.connectWebSocket(), 3000);
+                    }
+                };
+
+                this.ws.onerror = () => {
+                    this.wsConnected = false;
+                };
+
+                this.ws.onmessage = (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        this.handleMessage(message);
+                    } catch (e) {
+                        console.error('Failed to parse scan WebSocket message:', e);
+                    }
+                };
+            } catch (e) {
+                console.error('Failed to create scan WebSocket:', e);
+                setTimeout(() => this.connectWebSocket(), 3000);
+            }
+        },
+
+        handleMessage(message) {
+            switch (message.type) {
+                case 'scan_initial_state':
+                    this.handleInitialState(message.data);
+                    break;
+                case 'scan_log':
+                    this.handleLog(message.data);
+                    break;
+                case 'scan_tool_update':
+                    this.handleToolUpdate(message.data);
+                    break;
+                case 'pong':
+                    break;
+                default:
+                    console.log('Unknown scan message type:', message.type);
+            }
+        },
+
+        handleInitialState(data) {
+            this.status = data.status || 'idle';
+            this.scanTarget = data.target || '';
+            this.toolStates = data.tools || [];
+            if (data.logs) {
+                this.logs = data.logs;
+            }
+            if (data.started_at && this.status === 'running') {
+                this.startTime = new Date(data.started_at);
+                this.startTimer();
+            }
+        },
+
+        handleLog(data) {
+            this.logs.push(data);
+            // Keep log buffer manageable
+            if (this.logs.length > 2000) {
+                this.logs = this.logs.slice(-1500);
+            }
+            if (this.autoScroll) {
+                this.$nextTick(() => {
+                    const container = this.$refs.logContainer;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                });
+            }
+        },
+
+        handleToolUpdate(data) {
+            const idx = this.toolStates.findIndex(t => t.tool === data.tool);
+            if (idx >= 0) {
+                this.toolStates[idx] = { ...this.toolStates[idx], ...data };
+            }
+            // Check if scan completed (all tools done)
+            const allDone = this.toolStates.every(t =>
+                ['completed', 'failed', 'aborted'].includes(t.status)
+            );
+            if (allDone && this.status === 'running') {
+                this.fetchStatus();
+            }
+        },
+
+        async startScan() {
+            if (!this.target.trim() || this.selectedTools.length === 0) return;
+
+            try {
+                const response = await fetch('/api/scan/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: this.target,
+                        tools: this.selectedTools,
+                        profile: this.profile
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    this.status = 'running';
+                    this.scanTarget = this.target;
+                    this.logs = [];
+                    this.toolStates = this.selectedTools.map(t => ({
+                        tool: t,
+                        status: 'idle',
+                        findings_count: 0,
+                        uploaded_to_faraday: false,
+                        error_message: null
+                    }));
+                    this.startTime = new Date();
+                    this.startTimer();
+                } else {
+                    const error = await response.json();
+                    alert('Failed to start scan: ' + error.detail);
+                }
+            } catch (e) {
+                alert('Failed to start scan: ' + e.message);
+            }
+        },
+
+        async abortScan() {
+            if (!confirm('Are you sure you want to abort the scan?')) return;
+
+            try {
+                const response = await fetch('/api/scan/abort', { method: 'POST' });
+                if (response.ok) {
+                    this.status = 'aborted';
+                    this.stopTimer();
+                    await this.fetchHistory();
+                }
+            } catch (e) {
+                console.error('Failed to abort scan:', e);
+            }
+        },
+
+        resetScan() {
+            this.status = 'idle';
+            this.scanTarget = '';
+            this.toolStates = [];
+            this.logs = [];
+            this.stopTimer();
+            this.elapsedTime = '';
+        },
+
+        async fetchStatus() {
+            try {
+                const response = await fetch('/api/scan/status');
+                const data = await response.json();
+                this.status = data.status;
+                if (data.scan) {
+                    this.scanTarget = data.scan.target || '';
+                    this.toolStates = data.scan.tools || [];
+                    if (data.scan.started_at && data.is_running) {
+                        this.startTime = new Date(data.scan.started_at);
+                        this.startTimer();
+                    }
+                    if (!data.is_running) {
+                        this.stopTimer();
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch scan status:', e);
+            }
+        },
+
+        async fetchHistory() {
+            try {
+                const response = await fetch('/api/scan/history');
+                const data = await response.json();
+                this.history = data.history || [];
+            } catch (e) {
+                console.error('Failed to fetch scan history:', e);
+            }
+        },
+
+        startPing() {
+            this.pingInterval = setInterval(() => {
+                if (this.wsConnected && this.ws) {
+                    this.ws.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, 30000);
+        },
+
+        stopPing() {
+            if (this.pingInterval) {
+                clearInterval(this.pingInterval);
+                this.pingInterval = null;
+            }
+        },
+
+        startTimer() {
+            this.stopTimer();
+            this.timerInterval = setInterval(() => {
+                if (this.startTime) {
+                    const elapsed = Math.floor((new Date() - this.startTime) / 1000);
+                    const hours = Math.floor(elapsed / 3600);
+                    const minutes = Math.floor((elapsed % 3600) / 60);
+                    const seconds = elapsed % 60;
+                    if (hours > 0) {
+                        this.elapsedTime = `${hours}h ${minutes}m ${seconds}s`;
+                    } else if (minutes > 0) {
+                        this.elapsedTime = `${minutes}m ${seconds}s`;
+                    } else {
+                        this.elapsedTime = `${seconds}s`;
+                    }
+                }
+            }, 1000);
+        },
+
+        stopTimer() {
+            if (this.timerInterval) {
+                clearInterval(this.timerInterval);
+                this.timerInterval = null;
+            }
+        },
+
+        logClass(log) {
+            switch (log.level) {
+                case 'error': return 'text-red-400';
+                case 'warn': return 'text-yellow-400';
+                default: return 'text-gray-300';
+            }
+        },
+
+        formatTime(timestamp) {
+            if (!timestamp) return '';
+            const d = new Date(timestamp);
+            return d.toLocaleTimeString('en-US', { hour12: false });
+        }
+    }
+}

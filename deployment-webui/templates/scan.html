@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+
+{% block title %}Security Scanner - Talos CleanRoom{% endblock %}
+
+{% block content %}
+<div x-data="scanManager()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Security Scanner</h1>
+            <p class="text-gray-400">Scan targets and import results to Faraday</p>
+        </div>
+        <div class="flex gap-4">
+            <button
+                @click="abortScan"
+                x-show="isRunning"
+                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+            >
+                Abort Scan
+            </button>
+        </div>
+    </div>
+
+    <!-- Scan Configuration -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6" x-show="!isRunning && status !== 'running'">
+        <h2 class="text-lg font-medium text-white mb-4">Scan Configuration</h2>
+
+        <!-- Target Input -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Target</label>
+            <input
+                type="text"
+                x-model="target"
+                placeholder="e.g. 192.168.1.0/24 or 10.0.0.1"
+                class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500"
+                @keydown.enter="startScan"
+            >
+            <p class="text-xs text-gray-500 mt-1">IP address, CIDR range, or hostname. Separate multiple targets with commas.</p>
+        </div>
+
+        <!-- Tool Selection -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-3">Scan Tools</label>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Nmap -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('nmap') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="nmap" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">Nmap</span>
+                        <p class="text-xs text-gray-400 mt-1">Port scanning & service detection. Fast network reconnaissance.</p>
+                    </div>
+                </label>
+
+                <!-- OpenVAS -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('openvas') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="openvas" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">OpenVAS</span>
+                        <p class="text-xs text-gray-400 mt-1">Vulnerability assessment with 100k+ NVT checks. Thorough but slower.</p>
+                    </div>
+                </label>
+
+                <!-- Metasploit -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('metasploit') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="metasploit" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">Metasploit</span>
+                        <p class="text-xs text-gray-400 mt-1">Penetration testing framework with db_nmap integration.</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- Scan Profile -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Scan Profile</label>
+            <div class="flex gap-3">
+                <button @click="profile = 'quick'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'quick' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Quick
+                </button>
+                <button @click="profile = 'standard'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'standard' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Standard
+                </button>
+                <button @click="profile = 'thorough'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'thorough' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Thorough
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2" x-text="profileDescriptions[profile]"></p>
+        </div>
+
+        <!-- Start Button -->
+        <button
+            @click="startScan"
+            :disabled="!target.trim() || selectedTools.length === 0"
+            class="px-6 py-3 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+            Start Scan
+        </button>
+    </div>
+
+    <!-- Scan Progress (visible during/after scan) -->
+    <div x-show="status !== 'idle'" class="mb-6">
+        <!-- Status Banner -->
+        <div class="mb-6 p-4 rounded-lg" :class="statusBannerClass">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <span class="text-lg font-medium" x-text="statusText"></span>
+                    <span x-show="isRunning" class="ml-3">
+                        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                </div>
+                <div class="text-sm">
+                    <span x-show="scanTarget" class="text-gray-300">Target: <span x-text="scanTarget"></span></span>
+                    <span x-show="elapsedTime" class="ml-4">Elapsed: <span x-text="elapsedTime"></span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tool Progress Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <template x-for="tool in toolStates" :key="tool.tool">
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-white font-medium capitalize" x-text="tool.tool"></span>
+                        <!-- Status icon -->
+                        <span>
+                            <!-- Idle -->
+                            <span x-show="tool.status === 'idle'" class="text-gray-500">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="10" stroke-width="2"/>
+                                </svg>
+                            </span>
+                            <!-- Running -->
+                            <span x-show="tool.status === 'running'" class="text-yellow-400">
+                                <svg class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                            </span>
+                            <!-- Completed -->
+                            <span x-show="tool.status === 'completed'" class="text-green-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                            <!-- Failed -->
+                            <span x-show="tool.status === 'failed'" class="text-red-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                            <!-- Aborted -->
+                            <span x-show="tool.status === 'aborted'" class="text-orange-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                        </span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        <span x-show="tool.findings_count > 0" class="text-green-300" x-text="tool.findings_count + ' finding(s)'"></span>
+                        <span x-show="tool.uploaded_to_faraday" class="ml-2 text-cyan-400 text-xs">Uploaded to Faraday</span>
+                        <span x-show="tool.error_message" class="text-red-400 text-xs" x-text="tool.error_message"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Results Summary (after completion) -->
+        <div x-show="status === 'completed'" class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-lg font-medium text-white mb-3">Results Summary</h2>
+            <div class="flex flex-wrap gap-4 items-center">
+                <span class="text-gray-300">
+                    <span class="text-green-400 font-bold" x-text="completedTools"></span> / <span x-text="toolStates.length"></span> tools completed
+                </span>
+                <span class="text-gray-300">
+                    <span class="text-cyan-400 font-bold" x-text="uploadedTools"></span> uploaded to Faraday
+                </span>
+                <a href="https://faraday.knowledgeondemand.net"
+                   target="_blank" rel="noopener noreferrer"
+                   class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 text-sm"
+                   x-show="uploadedTools > 0">
+                    Open Faraday
+                </a>
+                <button @click="resetScan"
+                        class="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 text-sm">
+                    New Scan
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Log Stream -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-white">Scan Log</h2>
+            <div class="flex gap-2">
+                <!-- Tool filter buttons -->
+                <button @click="logFilter = null"
+                        class="px-3 py-1 text-sm rounded"
+                        :class="logFilter === null ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'">
+                    All
+                </button>
+                <template x-for="tool in toolStates" :key="'filter-' + tool.tool">
+                    <button @click="logFilter = tool.tool"
+                            class="px-3 py-1 text-sm rounded capitalize"
+                            :class="logFilter === tool.tool ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'"
+                            x-text="tool.tool">
+                    </button>
+                </template>
+                <button
+                    @click="autoScroll = !autoScroll"
+                    class="px-3 py-1 text-sm rounded"
+                    :class="autoScroll ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'"
+                >
+                    Auto-scroll
+                </button>
+                <button
+                    @click="logs = []"
+                    class="px-3 py-1 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
+                >
+                    Clear
+                </button>
+            </div>
+        </div>
+        <div
+            x-ref="logContainer"
+            class="bg-gray-900 rounded p-4 font-mono text-sm h-80 overflow-y-auto"
+        >
+            <template x-for="log in filteredLogs" :key="log.timestamp + log.message">
+                <div :class="logClass(log)">
+                    <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
+                    <span x-show="log.tool" class="text-cyan-400" x-text="'[' + log.tool + ']'"></span>
+                    <span x-text="log.message"></span>
+                </div>
+            </template>
+            <div x-show="filteredLogs.length === 0" class="text-gray-500">
+                No logs yet. Configure and start a scan to see output.
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan History -->
+    <div class="bg-gray-800 rounded-lg p-6 mt-6" x-show="history.length > 0">
+        <h2 class="text-lg font-medium text-white mb-4">Scan History</h2>
+        <div class="space-y-2">
+            <template x-for="scan in history.slice().reverse()" :key="scan.id">
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg text-sm">
+                    <div class="flex items-center gap-4">
+                        <span class="font-mono text-gray-400" x-text="scan.id"></span>
+                        <span class="text-white" x-text="scan.target"></span>
+                        <span class="text-gray-400 capitalize" x-text="scan.profile"></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <template x-for="t in scan.tools" :key="scan.id + t.tool">
+                            <span class="capitalize" :class="t.status === 'completed' ? 'text-green-400' : t.status === 'failed' ? 'text-red-400' : 'text-gray-400'"
+                                  x-text="t.tool + (t.findings_count > 0 ? ' (' + t.findings_count + ')' : '')"></span>
+                        </template>
+                        <span :class="scan.status === 'completed' ? 'text-green-400' : scan.status === 'failed' ? 'text-red-400' : 'text-orange-400'"
+                              x-text="scan.status" class="capitalize font-medium"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="fixed bottom-4 right-4">
+        <div class="px-3 py-1 rounded-full text-sm" :class="wsConnected ? 'bg-green-600' : 'bg-red-600'">
+            <span x-text="wsConnected ? 'Connected' : 'Disconnected'"></span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/scan.js"></script>
+{% endblock %}
