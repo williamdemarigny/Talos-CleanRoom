@@ -187,18 +187,21 @@ echo "  Applying Ceph CSI ArgoCD application..."
 kubectl apply -f "${CEPH_STORAGE_DIR}/application.yaml"
 
 # 3. Wait for csi-rbdplugin-provisioner Deployment (controller)
-echo "  Waiting for csi-rbdplugin-provisioner..."
-for i in $(seq 1 36); do
+# On freshly bootstrapped clusters, kubelet configmap cache sync can take 8-12 minutes
+echo "  Waiting for csi-rbdplugin-provisioner (up to 15 minutes on fresh clusters)..."
+PROVISIONER_READY=false
+for i in $(seq 1 90); do
     REPLICAS=$(kubectl get deployment ceph-csi-rbd-provisioner -n ceph-csi \
         -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
     if [[ "$REPLICAS" =~ ^[1-9] ]]; then
         echo "  ✓ csi-rbdplugin-provisioner ready ($REPLICAS replicas)"
+        PROVISIONER_READY=true
         break
     fi
-    echo "  Waiting for provisioner... ($i/36)"
+    echo "  Waiting for provisioner... ($i/90)"
     sleep 10
 done
-if [[ ! "$REPLICAS" =~ ^[1-9] ]]; then
+if [[ "$PROVISIONER_READY" != "true" ]]; then
     echo ""
     echo "  ===== Ceph CSI provisioner not available — diagnostics ====="
     echo ""
