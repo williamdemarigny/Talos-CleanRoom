@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ceph-csi-rbd
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+spec:
+  project: default
+  source:
+    repoURL: https://ceph.github.io/csi-charts
+    targetRevision: 3.13.0
+    chart: ceph-csi-rbd
+    helm:
+      skipCrds: false
+      skipTests: true
+      valuesObject:
+        # Ceph cluster configuration — monitors and cluster ID
+        csiConfig:
+          - clusterID: "1db975af-133e-43b1-9c6f-8e26269115f1"
+            monitors:
+              - "10.83.2.20:6789"
+              - "10.83.2.21:6789"
+              - "10.83.2.22:6789"
+              - "10.83.2.23:6789"
+
+        # Provisioner (controller) — creates/deletes RBD images
+        provisioner:
+          replicaCount: 2
+
+        # Node plugin (DaemonSet) — mounts RBD images on nodes
+        nodeplugin:
+          httpMetrics:
+            enabled: true
+
+        # Talos Linux compatibility — no SELinux support
+        selinuxMount: false
+
+        # Do NOT create StorageClass via Helm — we manage it separately
+        # for better GitOps control and SOPS secret references
+        storageClass:
+          create: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ceph-csi
+  syncPolicy:
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: privileged
+        pod-security.kubernetes.io/audit: privileged
+        pod-security.kubernetes.io/warn: privileged
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

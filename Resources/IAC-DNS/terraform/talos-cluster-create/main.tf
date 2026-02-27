@@ -148,16 +148,8 @@ resource "proxmox_virtual_environment_vm" "vm" {
     discard      = "ignore"
   }
 
-  # Additional disk for Longhorn storage (VirtIO Block device)
-  # Size: 125GB provides headroom for OpenVAS (31GB), replicas (x2), and future workloads
-  # Uses shared Ceph storage (same as primary disk) so disks migrate with the VM during HA failover
-  disk {
-    interface    = "virtio1"
-    datastore_id = each.value.disk_storage
-    size         = 125
-    cache        = "writeback"
-    discard      = "on"
-  }
+  # Storage: Ceph CSI mounts RBD images directly from the Proxmox Ceph cluster
+  # No secondary disk needed — eliminates double-replication (Longhorn + Ceph)
 
   # Assign to resource pool for cluster-level organization
   pool_id = var.proxmox_pool != "" ? var.proxmox_pool : null
