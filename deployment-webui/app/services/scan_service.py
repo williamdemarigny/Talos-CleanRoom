@@ -24,7 +24,9 @@ NMAP_TIMEOUT_QUICK = 300       # 5 min for ping sweep
 NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
 NMAP_TIMEOUT_THOROUGH = 3600   # 60 min for full port scan
 OPENVAS_TIMEOUT = 7200         # 2 hours for OpenVAS
-METASPLOIT_TIMEOUT = 1800      # 30 min for Metasploit
+METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
+METASPLOIT_TIMEOUT_STANDARD = 2700   # 45 min for standard scan
+METASPLOIT_TIMEOUT_THOROUGH = 5400   # 90 min for thorough scan
 FARADAY_UPLOAD_TIMEOUT = 120   # 2 min for Faraday upload (individual REST calls)
 
 # Nmap flags per profile
@@ -670,33 +672,147 @@ except Exception as e:
     # METASPLOIT
     # =========================================================================
 
-    async def _run_metasploit_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
-        """Run a Metasploit scan via resource script."""
-        scan_id = self.current_scan.id
+    def _build_msf_resource_script(self, target: str, profile: ScanProfile,
+                                     scan_id: str, xml_path: str) -> str:
+        """Build a Metasploit resource script based on scan profile.
 
-        # Build nmap flags for db_nmap based on profile
+        Quick:    db_nmap discovery only (fast port scan, no vuln modules)
+        Standard: db_nmap service detection + common vulnerability scanners
+        Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
+        """
+        lines = []
+
+        # Phase 1: Network discovery via db_nmap
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-sV -sC",
             ScanProfile.THOROUGH: "-sV -sC -p- -A",
         }.get(profile, "-sV -sC")
 
+        lines.append(f"db_nmap {nmap_flags} {target}")
+
+        # Helper to add a module block
+        def add_module(mod, extra_opts=None):
+            lines.append(f"use {mod}")
+            lines.append(f"set RHOSTS {target}")
+            lines.append(f"set THREADS 5")
+            if extra_opts:
+                for k, v in extra_opts.items():
+                    lines.append(f"set {k} {v}")
+            lines.append(f"run")
+            lines.append(f"back")
+
+        # =============================================================
+        # STANDARD profile: Critical CVEs + core service scanners
+        # =============================================================
+        if profile in (ScanProfile.STANDARD, ScanProfile.THOROUGH):
+
+            # --- Critical CVE Checks ---
+            add_module("auxiliary/scanner/smb/smb_ms17_010")       # EternalBlue (MS17-010) — critical RCE
+            add_module("auxiliary/scanner/smb/smb_ms08_067")       # Conficker (MS08-067) — critical RCE
+            add_module("auxiliary/scanner/rdp/cve_2019_0708_bluekeep")  # BlueKeep (CVE-2019-0708)
+            add_module("auxiliary/scanner/ssl/openssl_heartbleed") # Heartbleed (CVE-2014-0160)
+            add_module("auxiliary/scanner/http/log4shell_scanner") # Log4Shell (CVE-2021-44228)
+            add_module("auxiliary/scanner/http/apache_mod_cgi_bash_env")  # Shellshock (CVE-2014-6271)
+            add_module("auxiliary/scanner/http/ms15_034_http_sys_memory_dump")  # HTTP.sys (MS15-034)
+
+            # --- Core Service Detection ---
+            add_module("auxiliary/scanner/smb/smb_version")        # SMB version fingerprint
+            add_module("auxiliary/scanner/ssh/ssh_version")        # SSH version fingerprint
+            add_module("auxiliary/scanner/http/http_version")      # HTTP server fingerprint
+            add_module("auxiliary/scanner/ftp/anonymous")          # FTP anonymous access
+
+        # =============================================================
+        # THOROUGH profile: All Standard + extended scanners
+        # =============================================================
+        if profile == ScanProfile.THOROUGH:
+
+            # --- Extended SMB ---
+            add_module("auxiliary/scanner/smb/smb_enumshares")     # SMB share enumeration
+            add_module("auxiliary/scanner/smb/smb_enumusers")      # SMB user enumeration
+            add_module("auxiliary/scanner/smb/pipe_auditor")       # SMB named pipe auditing
+
+            # --- Extended RDP ---
+            add_module("auxiliary/scanner/rdp/rdp_scanner")        # RDP service detection
+
+            # --- Extended SSH ---
+            add_module("auxiliary/scanner/ssh/ssh_enumusers",      # SSH user enumeration
+                       {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"})
+
+            # --- Extended HTTP/Web ---
+            add_module("auxiliary/scanner/http/title")             # HTTP page title
+            add_module("auxiliary/scanner/http/dir_scanner")       # HTTP directory brute-force
+            add_module("auxiliary/scanner/http/robots_txt")        # robots.txt discovery
+            add_module("auxiliary/scanner/http/http_put")          # HTTP PUT method test
+            add_module("auxiliary/scanner/http/tomcat_mgr_login")  # Tomcat default creds
+            add_module("auxiliary/scanner/http/wordpress_scanner") # WordPress detection
+            add_module("auxiliary/scanner/http/jenkins_enum")      # Jenkins open dashboard
+            add_module("auxiliary/scanner/http/webdav_scanner")    # WebDAV detection
+
+            # --- SSL/TLS Extended ---
+            add_module("auxiliary/scanner/ssl/ssl_version")        # SSL/TLS version analysis
+
+            # --- FTP Extended ---
+            add_module("auxiliary/scanner/ftp/ftp_version")        # FTP version fingerprint
+
+            # --- Email ---
+            add_module("auxiliary/scanner/smtp/smtp_version")      # SMTP version
+            add_module("auxiliary/scanner/smtp/smtp_relay")        # Open SMTP relay check
+            add_module("auxiliary/scanner/pop3/pop3_version")      # POP3 version
+
+            # --- Database Scanners ---
+            add_module("auxiliary/scanner/mysql/mysql_version")    # MySQL version
+            add_module("auxiliary/scanner/postgres/postgres_version")  # PostgreSQL version
+            add_module("auxiliary/scanner/mssql/mssql_ping")       # MSSQL discovery
+            add_module("auxiliary/scanner/mongodb/mongodb_login")  # MongoDB unauth access
+            add_module("auxiliary/scanner/redis/redis_server")     # Redis open access
+
+            # --- Network Infrastructure ---
+            add_module("auxiliary/scanner/telnet/telnet_version")  # Telnet version
+            add_module("auxiliary/scanner/snmp/snmp_enum")         # SNMP enumeration
+            add_module("auxiliary/scanner/netbios/nbname")         # NetBIOS name resolution
+            add_module("auxiliary/scanner/discovery/udp_sweep")    # UDP service discovery
+
+            # --- Remote Access ---
+            add_module("auxiliary/scanner/vnc/vnc_none_auth")      # VNC no-auth check
+
+        # Print discovered vulns summary
+        lines.append("vulns")
+
+        # Export results
+        lines.append(f"db_export -f xml {xml_path}")
+        lines.append("exit")
+
+        return "\n".join(lines) + "\n"
+
+    async def _run_metasploit_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run a Metasploit scan via resource script with vulnerability modules."""
+        scan_id = self.current_scan.id
         xml_path = f"/tmp/msf-scan-{scan_id}.xml"
         rc_path = f"/tmp/scan-{scan_id}.rc"
 
-        await self.log("metasploit", "info", f"Preparing Metasploit resource script...")
+        # Select timeout based on profile
+        msf_timeout = {
+            ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
+            ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
+            ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
+        }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
 
-        # Write resource script into the container
-        rc_content = (
-            f"db_nmap {nmap_flags} {target}\\n"
-            f"db_export -f xml {xml_path}\\n"
-            f"exit\\n"
-        )
+        # Build the resource script
+        rc_content = self._build_msf_resource_script(target, profile, scan_id, xml_path)
 
+        module_count = rc_content.count("use auxiliary/")
+        if module_count > 0:
+            await self.log("metasploit", "info",
+                f"Preparing resource script: db_nmap + {module_count} vulnerability scanner module(s)")
+        else:
+            await self.log("metasploit", "info", "Preparing resource script: db_nmap discovery only")
+
+        # Write resource script into the container via heredoc (handles newlines properly)
         write_rc = await self.process_manager.run_command_simple(
             ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
              "-c", "metasploit", "--",
-             "bash", "-c", f"printf '{rc_content}' > {rc_path}"],
+             "bash", "-c", f"cat > {rc_path} << 'RCEOF'\n{rc_content}RCEOF"],
             timeout=15
         )
 
@@ -704,7 +820,14 @@ except Exception as e:
             await self.log("metasploit", "error", f"Failed to write resource script: {write_rc.output}")
             return None
 
-        await self.log("metasploit", "info", f"Running msfconsole with db_nmap {nmap_flags} {target}...")
+        nmap_flags = {
+            ScanProfile.QUICK: "-T4 --top-ports 100",
+            ScanProfile.STANDARD: "-sV -sC",
+            ScanProfile.THOROUGH: "-sV -sC -p- -A",
+        }.get(profile, "-sV -sC")
+        await self.log("metasploit", "info", f"Phase 1: db_nmap {nmap_flags} {target}")
+        if module_count > 0:
+            await self.log("metasploit", "info", f"Phase 2: Running {module_count} auxiliary scanner(s)...")
 
         # Run msfconsole with the resource script
         result = await self.process_manager.run_command(
@@ -712,7 +835,7 @@ except Exception as e:
              "-c", "metasploit", "--",
              "./msfconsole", "-q", "-r", rc_path],
             on_output=lambda line: self._log_msf_line(line),
-            timeout=METASPLOIT_TIMEOUT
+            timeout=msf_timeout
         )
 
         if not result.success and "TIMEOUT" in (result.output or ""):
@@ -746,7 +869,7 @@ except Exception as e:
 
             for ts in self.current_scan.tools:
                 if ts.tool == ScanTool.METASPLOIT:
-                    ts.findings_count = host_count
+                    ts.findings_count = vuln_count if vuln_count > 0 else host_count
                     break
 
             return xml_content
@@ -764,12 +887,23 @@ except Exception as e:
         if not line:
             return
         # Filter out noisy MSF banner/prompt lines
-        if line.startswith("=") or line.startswith("[*] ===") or "metasploit" in line.lower() and "http" not in line:
+        if line.startswith("=") or line.startswith("[*] ==="):
             return
-        # Log meaningful output
-        if line.startswith("[*]") or line.startswith("[+]") or line.startswith("[-]") or line.startswith("[!]"):
+        if "metasploit" in line.lower() and "http" not in line and "ms17" not in line.lower():
+            return
+        # Vulnerability findings (green [+] = positive hit)
+        if line.startswith("[+]"):
+            await self.log("metasploit", "warn", line)  # yellow for vuln findings
+        elif line.startswith("[-]"):
+            await self.log("metasploit", "info", line)
+        elif line.startswith("[!]"):
+            await self.log("metasploit", "warn", line)
+        elif line.startswith("[*]"):
             await self.log("metasploit", "info", line)
         elif "Nmap scan report" in line or "open" in line.lower():
+            await self.log("metasploit", "info", line)
+        # Vuln table output
+        elif line.startswith("Vuln") or "host" in line.lower() and "refs" in line.lower():
             await self.log("metasploit", "info", line)
 
     # =========================================================================
