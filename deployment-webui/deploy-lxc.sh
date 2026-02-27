@@ -40,7 +40,7 @@ SSH_USER_GROUPS="sudo"           # Groups for the SSH user
 # GitHub SSH Settings (for private repository access)
 GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
 GITHUB_REPO_URL="git@github.com:williamdemarigny/Talos-CleanRoom.git"
-GIT_BRANCH="Clickable-URLs"      # Branch to clone (use "main" for default)
+GIT_BRANCH="main"                 # Branch to clone
 
 # Colors for output
 RED='\033[0;31m'
