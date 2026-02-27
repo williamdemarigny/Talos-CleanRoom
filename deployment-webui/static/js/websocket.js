@@ -95,25 +95,22 @@ class DeploymentWebSocket {
     }
 
     attemptReconnect() {
-        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.log('Max reconnection attempts reached');
-            return;
-        }
-
         this.reconnectAttempts++;
-        console.log(`Attempting reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+        // Cap delay at 10 seconds
+        const delay = Math.min(this.reconnectDelay * this.reconnectAttempts, 10000);
 
         setTimeout(() => {
             this.connect();
-        }, this.reconnectDelay * this.reconnectAttempts);
+        }, delay);
     }
 
     startPing() {
+        this.stopPing();
         this.pingInterval = setInterval(() => {
             if (this.connected) {
                 this.send({ type: 'ping' });
             }
-        }, 30000);
+        }, 15000);
     }
 
     stopPing() {

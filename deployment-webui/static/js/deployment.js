@@ -14,23 +14,26 @@ function deploymentMonitor() {
         elapsedTime: '',
         ws: null,
         elapsedTimer: null,
+        pollInterval: null,
 
-        // Step definitions
+        // Step definitions — must match DEPLOYMENT_STEPS in app/models/deployment.py
         stepDefinitions: [
             { id: 0, name: 'validate_git', description: 'Validate Git Repository' },
             { id: 1, name: 'check_dependencies', description: 'Check Dependencies' },
             { id: 2, name: 'terraform_deploy', description: 'Terraform Deploy' },
-            { id: 3, name: 'generate_talos_config', description: 'Generate Talos Config' },
-            { id: 4, name: 'apply_talos_configs', description: 'Apply Talos Configurations' },
-            { id: 5, name: 'verify_cluster_health', description: 'Verify Cluster Health' },
-            { id: 6, name: 'get_kubeconfig', description: 'Get Kubeconfig' },
-            { id: 7, name: 'install_argocd', description: 'Install ArgoCD' },
-            { id: 8, name: 'deploy_infrastructure', description: 'Deploy Infrastructure Stack' },
-            { id: 9, name: 'argocd_self_management', description: 'Enable ArgoCD Self-Management' },
-            { id: 10, name: 'deploy_openvas', description: 'Deploy OpenVAS' },
-            { id: 11, name: 'deploy_faraday', description: 'Deploy Faraday' },
-            { id: 12, name: 'deploy_metasploit', description: 'Deploy Metasploit' },
-            { id: 13, name: 'deploy_threat_dragon', description: 'Deploy Threat Dragon' },
+            { id: 3, name: 'wait_for_vms', description: 'Wait for VMs to Boot' },
+            { id: 4, name: 'generate_talos_config', description: 'Generate Talos Config' },
+            { id: 5, name: 'apply_talos_configs', description: 'Apply Talos Configurations' },
+            { id: 6, name: 'verify_cluster_health', description: 'Verify Cluster Health' },
+            { id: 7, name: 'get_kubeconfig', description: 'Get Kubeconfig' },
+            { id: 8, name: 'install_argocd', description: 'Install ArgoCD' },
+            { id: 9, name: 'deploy_infrastructure', description: 'Deploy Infrastructure Stack' },
+            { id: 10, name: 'argocd_self_management', description: 'Enable ArgoCD Self-Management' },
+            { id: 11, name: 'deploy_openvas', description: 'Deploy OpenVAS' },
+            { id: 12, name: 'deploy_faraday', description: 'Deploy Faraday' },
+            { id: 13, name: 'deploy_metasploit', description: 'Deploy Metasploit' },
+            { id: 14, name: 'deploy_threat_dragon', description: 'Deploy Threat Dragon' },
+            { id: 15, name: 'configure_integrations', description: 'Configure Integrations' },
         ],
 
         get statusText() {
@@ -63,12 +66,76 @@ function deploymentMonitor() {
                 error_message: null
             }));
 
-            // Connect to WebSocket
+            // Connect to WebSocket (supplementary real-time updates)
             this.connectWebSocket();
 
             // Load initial status
             this.loadStatus();
         },
+
+        // =================================================================
+        // REST Polling (primary log delivery — reliable)
+        // =================================================================
+
+        startPolling() {
+            this.stopPolling();
+            this.pollInterval = setInterval(() => this.pollUpdates(), 3000);
+        },
+
+        stopPolling() {
+            if (this.pollInterval) {
+                clearInterval(this.pollInterval);
+                this.pollInterval = null;
+            }
+        },
+
+        async pollUpdates() {
+            try {
+                // Fetch status + step states
+                const statusResp = await fetch('/api/deployment/status');
+                const statusData = await statusResp.json();
+
+                if (statusData.deployment && statusData.deployment.steps) {
+                    statusData.deployment.steps.forEach(s => {
+                        const step = this.steps.find(st => st.id === s.id);
+                        if (step) {
+                            step.status = s.status;
+                            step.started_at = s.started_at;
+                            step.completed_at = s.completed_at;
+                            step.error_message = s.error_message;
+                        }
+                    });
+                    this.currentStep = statusData.current_step;
+                }
+
+                // Fetch logs (only new ones beyond what we have)
+                const logResp = await fetch(`/api/deployment/logs?offset=${this.logs.length}&limit=500`);
+                const logData = await logResp.json();
+
+                if (logData.logs && logData.logs.length > 0) {
+                    for (const log of logData.logs) {
+                        this.logs.push(log);
+                    }
+                    this.scrollToBottom();
+                }
+
+                // Check if deployment finished
+                const prevStatus = this.status;
+                this.status = statusData.status;
+                this.isRunning = statusData.is_running;
+
+                if (prevStatus === 'running' && !statusData.is_running) {
+                    this.stopPolling();
+                    this.stopElapsedTimer();
+                }
+            } catch (e) {
+                // Polling failure is non-fatal, will retry next interval
+            }
+        },
+
+        // =================================================================
+        // WebSocket (supplementary — lower latency when connected)
+        // =================================================================
 
         connectWebSocket() {
             this.ws = new DeploymentWebSocket({
@@ -95,32 +162,27 @@ function deploymentMonitor() {
                     // Load existing logs when reconnecting
                     if (data.logs && data.logs.length > 0) {
                         this.logs = data.logs;
-                        // Auto-scroll to bottom after loading logs
-                        if (this.autoScroll) {
-                            this.$nextTick(() => {
-                                const container = this.$refs.logContainer;
-                                if (container) {
-                                    container.scrollTop = container.scrollHeight;
-                                }
-                            });
-                        }
+                        this.scrollToBottom();
                     }
 
                     if (this.isRunning) {
                         this.startElapsedTimer();
+                        this.startPolling();
                     }
                 },
                 onLog: (data) => {
-                    // Use spread to create new array for Alpine.js reactivity
-                    this.logs = [...this.logs, data];
-                    if (this.autoScroll) {
-                        this.$nextTick(() => {
-                            const container = this.$refs.logContainer;
-                            if (container) {
-                                container.scrollTop = container.scrollHeight;
-                            }
-                        });
+                    // Deduplicate: skip if we already have a log with same timestamp+message
+                    const isDupe = this.logs.some(l =>
+                        l.timestamp === data.timestamp && l.message === data.message
+                    );
+                    if (isDupe) return;
+
+                    this.logs.push(data);
+                    // Keep log buffer manageable
+                    if (this.logs.length > 5000) {
+                        this.logs = this.logs.slice(-4000);
                     }
+                    this.scrollToBottom();
                 },
                 onStepUpdate: (data) => {
                     const step = this.steps.find(s => s.id === data.step_id);
@@ -141,17 +203,34 @@ function deploymentMonitor() {
                         this.status = 'failed';
                         this.isRunning = false;
                         this.stopElapsedTimer();
-                    } else if (data.status === 'success' && data.step_id === 13) {
+                        this.stopPolling();
+                    } else if (data.status === 'success' && data.step_id === this.stepDefinitions.length - 1) {
                         // Last step completed
                         this.status = 'completed';
                         this.isRunning = false;
                         this.stopElapsedTimer();
+                        this.stopPolling();
                     }
                 }
             });
 
             this.ws.connect();
         },
+
+        scrollToBottom() {
+            if (this.autoScroll) {
+                this.$nextTick(() => {
+                    const container = this.$refs.logContainer;
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
+                });
+            }
+        },
+
+        // =================================================================
+        // Status + Actions
+        // =================================================================
 
         async loadStatus() {
             try {
@@ -172,6 +251,7 @@ function deploymentMonitor() {
 
                 if (this.isRunning) {
                     this.startElapsedTimer();
+                    this.startPolling();
                 }
             } catch (e) {
                 console.error('Failed to load status:', e);
@@ -191,6 +271,7 @@ function deploymentMonitor() {
                     this.logs = [];
                     this.startTime = new Date();
                     this.startElapsedTimer();
+                    this.startPolling();
 
                     // Reset steps
                     this.steps.forEach(s => {
@@ -219,6 +300,7 @@ function deploymentMonitor() {
                     this.status = 'aborted';
                     this.isRunning = false;
                     this.stopElapsedTimer();
+                    this.stopPolling();
                 }
             } catch (e) {
                 alert('Failed to abort deployment: ' + e.message);
@@ -250,6 +332,10 @@ function deploymentMonitor() {
                 alert('Failed to run cleanup: ' + e.message);
             }
         },
+
+        // =================================================================
+        // Timers
+        // =================================================================
 
         startElapsedTimer() {
             if (!this.startTime) {
