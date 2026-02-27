@@ -108,10 +108,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
   tags        = each.value.tags
   vm_id       = each.value.vmid
 
-  started = each.value.onboot
-  bios    = local.node_configs[each.value.role].bios
+  started         = each.value.onboot
+  stop_on_destroy = true  # Talos has no guest agent — force stop instead of ACPI shutdown
+  bios            = local.node_configs[each.value.role].bios
 
-  # Enable QEMU Guest Agent for better VM management
+  # Enable QEMU Guest Agent communication channel (Talos does not run the agent,
+  # but the device must be present for Proxmox VM info queries)
   agent {
     enabled = true
   }

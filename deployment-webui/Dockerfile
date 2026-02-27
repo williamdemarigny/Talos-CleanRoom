@@ -71,6 +71,9 @@ COPY templates/ ./templates/
 # Create mount point for repository
 VOLUME ["/repo"]
 
+# Create persistent data directory for credential state
+RUN mkdir -p /app/data
+
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV REPO_ROOT=/repo
