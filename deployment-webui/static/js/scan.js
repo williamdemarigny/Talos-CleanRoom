@@ -47,7 +47,7 @@ function scanManager() {
                 tools: {
                     'Nmap': 'Service version detection + default NSE scripts (-sV -sC)',
                     'OpenVAS': 'Full and Fast scan config (most common NVT checks)',
-                    'Metasploit': 'db_nmap + 11 vulnerability modules: EternalBlue (MS17-010), Conficker (MS08-067), BlueKeep (CVE-2019-0708), Heartbleed (CVE-2014-0160), Log4Shell (CVE-2021-44228), Shellshock (CVE-2014-6271), HTTP.sys (MS15-034), SMB/SSH/HTTP version detection, FTP anonymous access',
+                    'Metasploit': 'db_nmap top 1000 ports + 11 vulnerability modules: EternalBlue (MS17-010), Conficker (MS08-067), BlueKeep (CVE-2019-0708), Heartbleed (CVE-2014-0160), Log4Shell (CVE-2021-44228), Shellshock (CVE-2014-6271), HTTP.sys (MS15-034), SMB/SSH/HTTP version detection, FTP anonymous access',
                 }
             },
             'thorough': {
@@ -55,7 +55,7 @@ function scanManager() {
                 tools: {
                     'Nmap': 'All 65535 ports + aggressive OS/service detection (-sV -sC -p- -A)',
                     'OpenVAS': 'Full and Deep scan config (exhaustive NVT checks)',
-                    'Metasploit': 'db_nmap full scan + 39 vulnerability modules: all Standard modules plus SMB share/user/pipe enumeration, RDP scanning, SSH user enumeration, HTTP directory brute-force/robots.txt/PUT/Tomcat/WordPress/Jenkins/WebDAV, SSL/TLS analysis, SMTP/POP3, MySQL/PostgreSQL/MSSQL/MongoDB/Redis, Telnet, SNMP, NetBIOS, UDP sweep, VNC no-auth',
+                    'Metasploit': 'db_nmap top 1000 ports + 39 vulnerability modules: all Standard modules plus SMB share/user/pipe enumeration, RDP scanning, SSH user enumeration, HTTP directory brute-force/robots.txt/PUT/Tomcat/WordPress/Jenkins/WebDAV, SSL/TLS analysis, SMTP/POP3, MySQL/PostgreSQL/MSSQL/MongoDB/Redis, Telnet, SNMP, NetBIOS, UDP sweep, VNC no-auth',
                 }
             }
         },
