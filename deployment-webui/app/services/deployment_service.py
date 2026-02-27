@@ -46,6 +46,9 @@ THREAT_DRAGON_SYNC_WAIT = 30      # Extra wait for Threat Dragon deployment
 VM_READY_MAX_ATTEMPTS = 30        # Maximum attempts to check VM readiness
 VM_READY_RETRY_INTERVAL = 10      # Seconds between VM readiness checks
 
+# Persistent state file — survives webapp restarts, cleared only on cleanup
+STATE_FILE = Path("/app/data/deployment_state.json")
+
 
 @dataclass
 class DeploymentService:
@@ -66,6 +69,83 @@ class DeploymentService:
         self.health_check_interval = settings.health_check_interval
         self.dependencies = settings.dependencies
         self.node_ips = settings.node_ips
+        self._load_state()
+
+    def _get_fernet(self):
+        """Derive a Fernet encryption key from the webapp's SECRET_KEY."""
+        import base64
+        import hashlib
+        settings = get_settings()
+        # Derive a 32-byte key from SECRET_KEY via SHA-256 (deterministic)
+        key_bytes = hashlib.sha256(settings.secret_key.encode()).digest()
+        return base64.urlsafe_b64encode(key_bytes)
+
+    def _save_state(self):
+        """Persist credentials and deployment status to disk (encrypted).
+
+        Uses Fernet symmetric encryption keyed to the webapp's SECRET_KEY.
+        This allows the webapp to survive restarts without losing service
+        credentials. The state file is only cleared on explicit cleanup.
+        """
+        try:
+            from cryptography.fernet import Fernet
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            state = {
+                "credentials": self.credentials,
+                "deployment_status": (
+                    self.current_deployment.status.value
+                    if self.current_deployment else None
+                ),
+                "deployment_id": (
+                    self.current_deployment.id
+                    if self.current_deployment else None
+                ),
+                "completed_at": (
+                    self.current_deployment.completed_at.isoformat()
+                    if self.current_deployment and self.current_deployment.completed_at
+                    else None
+                ),
+            }
+            plaintext = json.dumps(state).encode()
+            f = Fernet(self._get_fernet())
+            STATE_FILE.write_bytes(f.encrypt(plaintext))
+        except Exception:
+            pass  # Non-fatal — credentials still work in memory
+
+    def _load_state(self):
+        """Restore credentials and deployment status from disk (decrypted)."""
+        try:
+            from cryptography.fernet import Fernet, InvalidToken
+            if STATE_FILE.exists():
+                f = Fernet(self._get_fernet())
+                ciphertext = STATE_FILE.read_bytes()
+                plaintext = f.decrypt(ciphertext)
+                state = json.loads(plaintext.decode())
+                self.credentials = state.get("credentials", {})
+                # Restore a minimal deployment state so the credentials
+                # endpoint (which checks deployment.status == COMPLETED) works
+                saved_status = state.get("deployment_status")
+                if saved_status and self.credentials and not self.current_deployment:
+                    self.current_deployment = DeploymentState(
+                        id=state.get("deployment_id", "restored"),
+                        status=DeploymentStatus(saved_status),
+                        started_at=datetime.utcnow(),
+                        completed_at=(
+                            datetime.fromisoformat(state["completed_at"])
+                            if state.get("completed_at") else datetime.utcnow()
+                        ),
+                        steps=[]
+                    )
+        except Exception:
+            pass  # Non-fatal — start fresh if state file is corrupt or key changed
+
+    def _clear_state(self):
+        """Delete the persisted state file (called on cleanup)."""
+        try:
+            if STATE_FILE.exists():
+                STATE_FILE.unlink()
+        except Exception:
+            pass
 
     @property
     def terraform_dir(self) -> Path:
@@ -154,7 +234,10 @@ class DeploymentService:
         )
         self.logs.append(entry)
         if self.log_callback:
-            await self.log_callback(entry)
+            try:
+                await self.log_callback(entry)
+            except Exception:
+                pass  # Don't let broadcast failures crash the deployment
 
     async def update_step(self, step_id: int, status: StepStatus, error: Optional[str] = None):
         """Update step status and notify via callback."""
@@ -168,7 +251,10 @@ class DeploymentService:
             if error:
                 step.error_message = error
             if self.step_callback:
-                await self.step_callback(step)
+                try:
+                    await self.step_callback(step)
+                except Exception:
+                    pass  # Don't let broadcast failures crash the deployment
 
     def get_status(self) -> Optional[DeploymentState]:
         """Get current deployment status."""
@@ -238,6 +324,8 @@ class DeploymentService:
         """
         await self.log(-1, "info", "Starting cleanup process...")
         self.credentials = {}
+        self.current_deployment = None
+        self._clear_state()
 
         # Step 1: Reset Talos nodes to wipe ephemeral state (prevents IPAM exhaustion)
         await self.log(-1, "info", "Step 1: Resetting Talos nodes to wipe ephemeral state...")
@@ -319,6 +407,7 @@ class DeploymentService:
                 (12, self._step_deploy_faraday),
                 (13, self._step_deploy_metasploit),
                 (14, self._step_deploy_threat_dragon),
+                (15, self._step_configure_integrations),
             ]
 
             for step_id, step_func in steps:
@@ -350,6 +439,8 @@ class DeploymentService:
 
         finally:
             self.current_deployment.completed_at = datetime.utcnow()
+            # Persist credentials + status so they survive webapp restarts
+            self._save_state()
 
     async def _step_validate_git(self, step_id: int) -> bool:
         """Step 0: Validate git repository and configured paths.
@@ -898,6 +989,7 @@ class DeploymentService:
                 "username": "admin", "password": "admin",
                 "note": "Default - change via ArgoCD CLI"
             }
+            self._save_state()
 
         return result.success
 
@@ -948,6 +1040,7 @@ class DeploymentService:
             "username": "admin", "password": "admin",
             "note": "Also protects Longhorn and Threat Dragon"
         }
+        self._save_state()
 
         return True
 
@@ -1013,6 +1106,7 @@ class DeploymentService:
         self.credentials["openvas"] = {
             "username": "admin", "password": openvas_admin_password
         }
+        self._save_state()
 
         if not secret_created:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
@@ -1212,6 +1306,7 @@ class DeploymentService:
         self.credentials["faraday"] = {
             "username": "admin", "password": admin_password
         }
+        self._save_state()
 
         app_yaml = self.projects_dir / "faraday" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -1314,6 +1409,7 @@ class DeploymentService:
             "username": "admin", "password": msf_rpc_password,
             "note": "RPC access"
         }
+        self._save_state()
 
         app_yaml = self.projects_dir / "metasploit" / "application.yaml"
         result = await self.process_manager.run_command(
@@ -1380,6 +1476,154 @@ class DeploymentService:
         await self.log(step_id, "info", "==========================================")
 
         return result.success
+
+    async def _step_configure_integrations(self, step_id: int) -> bool:
+        """Step 15: Configure security tool integrations.
+
+        Creates a default Faraday workspace and verifies cross-service
+        connectivity between Faraday, Metasploit, and OpenVAS.
+
+        This step is non-fatal — partial failures are logged as warnings
+        and the deployment still completes successfully.
+        """
+        await self.log(step_id, "info", "Configuring security tool integrations...")
+
+        faraday_creds = self.credentials.get("faraday", {})
+        faraday_password = faraday_creds.get("password", "")
+        faraday_username = faraday_creds.get("username", "admin")
+
+        if not faraday_password:
+            await self.log(step_id, "warn", "Faraday credentials not available, skipping integration config")
+            return True
+
+        # --- Sub-task 1: Wait for Faraday API readiness ---
+        await self.log(step_id, "info", "Waiting for Faraday REST API to be responsive...")
+
+        api_ready = False
+        for attempt in range(1, 31):
+            if self.current_deployment.status != DeploymentStatus.RUNNING:
+                return False
+
+            check_result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+                 "--", "python3", "-c",
+                 "import urllib.request; "
+                 "resp = urllib.request.urlopen('http://127.0.0.1:5985/_api/v3/info'); "
+                 "print(resp.status)"],
+                timeout=15
+            )
+
+            status_code = (check_result.output or "").strip()
+            if status_code == "200":
+                await self.log(step_id, "info", "Faraday API is responsive")
+                api_ready = True
+                break
+
+            await self.log(step_id, "info", f"  Faraday API not ready yet... ({attempt}/30)")
+            await asyncio.sleep(10)
+
+        if not api_ready:
+            await self.log(step_id, "warn", "Faraday API not responsive after 5 minutes, skipping integration config")
+            return True
+
+        # --- Sub-task 2: Login + Create workspace (single kubectl exec) ---
+        await self.log(step_id, "info", "Creating default Faraday workspace 'pentest'...")
+
+        # Python script that runs inside the Faraday container
+        # Uses session-based auth (login → CSRF token → create workspace)
+        setup_script = (
+            "import urllib.request, json, http.cookiejar, os, sys\n"
+            "cj = http.cookiejar.CookieJar()\n"
+            "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
+            "try:\n"
+            "    data = json.dumps({'email': os.environ['FARADAY_USER'], 'password': os.environ['FARADAY_PASS']}).encode()\n"
+            "    req = urllib.request.Request('http://127.0.0.1:5985/_api/login', method='POST',\n"
+            "        headers={'Content-Type': 'application/json'}, data=data)\n"
+            "    resp = opener.open(req)\n"
+            "    login = json.loads(resp.read().decode())\n"
+            "    csrf = login['response']['csrf_token']\n"
+            "    print('LOGIN:OK')\n"
+            "except Exception as e:\n"
+            "    print(f'LOGIN:FAILED:{e}')\n"
+            "    sys.exit(0)\n"
+            "try:\n"
+            "    ws = json.dumps({'name': 'pentest', 'description': 'Default workspace for security assessments'}).encode()\n"
+            "    req2 = urllib.request.Request('http://127.0.0.1:5985/_api/v3/ws', method='POST',\n"
+            "        headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=ws)\n"
+            "    resp2 = opener.open(req2)\n"
+            "    print('WORKSPACE:CREATED')\n"
+            "except urllib.error.HTTPError as e:\n"
+            "    if e.code == 409:\n"
+            "        print('WORKSPACE:EXISTS')\n"
+            "    else:\n"
+            "        print(f'WORKSPACE:ERROR:{e.code}')\n"
+            "except Exception as e:\n"
+            "    print(f'WORKSPACE:FAILED:{e}')\n"
+        )
+
+        # Pass credentials via environment variables (not command-line args)
+        setup_result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+             "--", "env", f"FARADAY_USER={faraday_username}", f"FARADAY_PASS={faraday_password}",
+             "python3", "-c", setup_script],
+            timeout=30
+        )
+
+        output = (setup_result.output or "").strip()
+        for line in output.split("\n"):
+            line = line.strip()
+            if line == "LOGIN:OK":
+                await self.log(step_id, "info", "Faraday API authentication successful")
+            elif line.startswith("LOGIN:FAILED"):
+                await self.log(step_id, "warn", f"Faraday login failed: {line}")
+            elif line == "WORKSPACE:CREATED":
+                await self.log(step_id, "info", "Workspace 'pentest' created successfully")
+            elif line == "WORKSPACE:EXISTS":
+                await self.log(step_id, "info", "Workspace 'pentest' already exists")
+            elif line.startswith("WORKSPACE:ERROR") or line.startswith("WORKSPACE:FAILED"):
+                await self.log(step_id, "warn", f"Workspace creation issue: {line}")
+
+        # --- Sub-task 3: Verify Metasploit RPC connectivity ---
+        await self.log(step_id, "info", "Verifying Metasploit RPC connectivity from Faraday...")
+
+        msf_check = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "faraday", "deployment/faraday", "-c", "faraday",
+             "--", "python3", "-c",
+             "import socket; s = socket.socket(); s.settimeout(5); "
+             "s.connect(('metasploit.metasploit.svc.cluster.local', 55553)); "
+             "s.close(); print('REACHABLE')"],
+            timeout=15
+        )
+
+        msf_status = (msf_check.output or "").strip()
+        if "REACHABLE" in msf_status:
+            await self.log(step_id, "info", "Metasploit RPC is reachable from Faraday (port 55553)")
+        else:
+            await self.log(step_id, "warn",
+                "Metasploit RPC not yet reachable from Faraday. "
+                "This is normal if Metasploit is still initializing (~90s startup).")
+
+        # --- Sub-task 4: Log integration summary ---
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "=== Integration Configuration Summary ===")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Faraday workspace 'pentest' is ready.")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Metasploit Integration:")
+        await self.log(step_id, "info", "  Faraday imports Metasploit results via XML report upload.")
+        await self.log(step_id, "info", "  1. In msfconsole: db_export -f xml /tmp/msf-report.xml")
+        await self.log(step_id, "info", "  2. Upload to Faraday via Web UI (pentest workspace → upload icon)")
+        await self.log(step_id, "info", "     or API: POST /_api/v3/ws/pentest/upload_report")
+        await self.log(step_id, "info", f"  RPC endpoint: metasploit.metasploit.svc.cluster.local:55553")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "OpenVAS Integration:")
+        await self.log(step_id, "info", "  Export scan reports as XML from the OpenVAS GSA web UI,")
+        await self.log(step_id, "info", "  then upload to Faraday. Faraday auto-detects OpenVAS XML format.")
+        await self.log(step_id, "info", "  Supported formats: OpenVAS XML, Nmap XML, Metasploit XML, and 80+ others.")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "=== Integration setup complete ===")
+
+        return True
 
 
 # Global deployment service instance

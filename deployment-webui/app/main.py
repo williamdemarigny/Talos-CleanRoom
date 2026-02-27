@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from pathlib import Path
 
 from app.config import get_settings, Settings
-from app.routers import auth, deployment, config, websocket
+from app.routers import auth, deployment, config, websocket, scan
 from app.auth import get_current_user_optional
 
 # Application root directory
@@ -31,6 +31,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(deployment.router, prefix="/api/deployment", tags=["Deployment"])
 app.include_router(config.router, prefix="/api/config", tags=["Configuration"])
+app.include_router(scan.router, prefix="/api/scan", tags=["Scan"])
 app.include_router(websocket.router, tags=["WebSocket"])
 
 
@@ -73,6 +74,18 @@ async def deployment_page(request: Request, user: dict = Depends(get_current_use
         "request": request,
         "user": user,
         "page": "deployment"
+    })
+
+
+@app.get("/scan")
+async def scan_page(request: Request, user: dict = Depends(get_current_user_optional)):
+    """Render the security scanner page."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("scan.html", {
+        "request": request,
+        "user": user,
+        "page": "scan"
     })
 
 

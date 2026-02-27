@@ -520,7 +520,12 @@ while IFS= read -r line; do
                 # Wait for Talos API to be ready before applying config
                 # Use insecure mode since the node is still unconfigured (maintenance mode)
                 if [[ "$DRY_RUN" == false ]]; then
-                    if ! wait_for_talos_api "$dhcp_ip" 45 10 true; then
+                    # Control plane gets more time — it must succeed for bootstrap
+                    local api_attempts=45
+                    if [[ "$role" == "controlplane" ]]; then
+                        api_attempts=90
+                    fi
+                    if ! wait_for_talos_api "$dhcp_ip" "$api_attempts" 10 true; then
                         if [[ "$role" == "controlplane" ]]; then
                             print_error "  Talos API not ready on control plane node — aborting"
                             exit 1
