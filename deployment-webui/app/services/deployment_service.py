@@ -994,13 +994,13 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_infrastructure(self, step_id: int) -> bool:
-        """Step 9: Deploy infrastructure stack (MetalLB, cert-manager, Traefik, Longhorn).
+        """Step 9: Deploy infrastructure stack (MetalLB, cert-manager, Traefik, Ceph CSI).
 
         Runs deploy-ingress-stack.sh which deploys and configures:
         - MetalLB for load balancer IPs
         - cert-manager for TLS certificates
         - Traefik as ingress controller
-        - Longhorn for distributed storage
+        - Ceph CSI RBD for persistent storage (direct Ceph RBD from Proxmox cluster)
 
         Also creates the basic-auth-secret for Traefik middleware.
 
@@ -1022,7 +1022,7 @@ class DeploymentService:
             return False
 
         # Create basic-auth-secret for Traefik middleware
-        # This secret is used for protecting dashboards (Traefik, Longhorn)
+        # This secret is used for protecting dashboards (Traefik)
         # Default credentials: admin / admin (change in production)
         await self.log(step_id, "info", "Creating Traefik basic-auth-secret...")
         auth_result = await self._create_secret(
@@ -1038,7 +1038,7 @@ class DeploymentService:
 
         self.credentials["traefik"] = {
             "username": "admin", "password": "admin",
-            "note": "Also protects Longhorn and Threat Dragon"
+            "note": "Also protects Threat Dragon"
         }
         self._save_state()
 
@@ -1167,7 +1167,7 @@ class DeploymentService:
                     await self.log(step_id, "info", line)
             return False
 
-        # Wait for PVCs to bind (OpenVAS needs 10 PVCs from Longhorn)
+        # Wait for PVCs to bind (OpenVAS needs 10 PVCs from Ceph CSI)
         await self.log(step_id, "info", "Checking OpenVAS PVC binding (10 PVCs)...")
         for i in range(18):  # up to 3 minutes
             pvc_result = await self.process_manager.run_command(
@@ -1464,7 +1464,6 @@ class DeploymentService:
         await self.log(step_id, "info", "Access services at:")
         await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Traefik:       https://traefik.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Longhorn:      https://longhorn.knowledgeondemand.net")
         await self.log(step_id, "info", "  - OpenVAS:       https://openvas.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Faraday:       https://faraday.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Threat Dragon: https://threatdragon.knowledgeondemand.net")

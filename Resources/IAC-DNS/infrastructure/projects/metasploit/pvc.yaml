@@ -15,7 +15,7 @@ spec:
     requests:
       # Storage for loot, reports, captured data
       storage: 10Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -32,4 +32,4 @@ spec:
     requests:
       # PostgreSQL database for workspace data
       storage: 20Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
