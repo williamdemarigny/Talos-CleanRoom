@@ -306,7 +306,7 @@ stringData:
 
     print_info "  Username: admin"
     print_info "  Password: ${admin_password:0:4}****"
-    print_warning "  Save this password - it provides access to Traefik, Longhorn, and ArgoCD dashboards"
+    print_warning "  Save this password - it provides access to Traefik and ArgoCD dashboards"
 }
 
 #######################################
