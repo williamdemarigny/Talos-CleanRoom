@@ -26,9 +26,38 @@ function scanManager() {
         timerInterval: null,
 
         profileDescriptions: {
-            'quick': 'Ping sweep + top 100 ports. Fastest option for initial discovery.',
-            'standard': 'Service version detection + default scripts. Good balance of speed and depth.',
-            'thorough': 'All 65535 ports + aggressive detection. Most comprehensive but slowest.'
+            'quick': 'Fast discovery scan. Best for initial reconnaissance.',
+            'standard': 'Service detection + vulnerability scanning. Recommended for most assessments.',
+            'thorough': 'Full port scan + comprehensive vulnerability checks. Slowest but most complete.'
+        },
+
+        showProfileInfo: false,
+
+        profileDetails: {
+            'quick': {
+                time: '5-15 minutes',
+                tools: {
+                    'Nmap': 'Top 100 ports, fast timing (-T4 --top-ports 100)',
+                    'OpenVAS': 'Host discovery scan only',
+                    'Metasploit': 'db_nmap discovery — no vulnerability modules',
+                }
+            },
+            'standard': {
+                time: '15-45 minutes',
+                tools: {
+                    'Nmap': 'Service version detection + default NSE scripts (-sV -sC)',
+                    'OpenVAS': 'Full and Fast scan config (most common NVT checks)',
+                    'Metasploit': 'db_nmap + 11 vulnerability modules: EternalBlue (MS17-010), Conficker (MS08-067), BlueKeep (CVE-2019-0708), Heartbleed (CVE-2014-0160), Log4Shell (CVE-2021-44228), Shellshock (CVE-2014-6271), HTTP.sys (MS15-034), SMB/SSH/HTTP version detection, FTP anonymous access',
+                }
+            },
+            'thorough': {
+                time: '1-3 hours',
+                tools: {
+                    'Nmap': 'All 65535 ports + aggressive OS/service detection (-sV -sC -p- -A)',
+                    'OpenVAS': 'Full and Deep scan config (exhaustive NVT checks)',
+                    'Metasploit': 'db_nmap full scan + 39 vulnerability modules: all Standard modules plus SMB share/user/pipe enumeration, RDP scanning, SSH user enumeration, HTTP directory brute-force/robots.txt/PUT/Tomcat/WordPress/Jenkins/WebDAV, SSL/TLS analysis, SMTP/POP3, MySQL/PostgreSQL/MSSQL/MongoDB/Redis, Telnet, SNMP, NetBIOS, UDP sweep, VNC no-auth',
+                }
+            }
         },
 
         get isRunning() {
