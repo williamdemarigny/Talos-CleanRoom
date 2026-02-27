@@ -72,31 +72,31 @@ fi
 echo -e "${YELLOW}Please provide the following credentials:${NC}"
 echo ""
 
-if [ -z "$PROXMOX_API_TOKEN" ]; then
+if [ -z "${PROXMOX_API_TOKEN:-}" ]; then
     echo -e "${YELLOW}Proxmox API Token (format: user@pam!tokenid=secret):${NC}"
     read -r PROXMOX_API_TOKEN
 fi
 
-if [ -z "$PROXMOX_SSH_PASSWORD" ]; then
+if [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
     echo -e "${YELLOW}Proxmox SSH password for root:${NC}"
     read -rs PROXMOX_SSH_PASSWORD
     echo ""
 fi
 
-if [ -z "$LXC_ROOT_PASSWORD" ]; then
+if [ -z "${LXC_ROOT_PASSWORD:-}" ]; then
     echo -e "${YELLOW}Password for LXC container root user:${NC}"
     read -rs LXC_ROOT_PASSWORD
     echo ""
 fi
 
-if [ -z "$SSH_USER_PASSWORD" ]; then
+if [ -z "${SSH_USER_PASSWORD:-}" ]; then
     echo -e "${YELLOW}Password for deploy user '${SSH_USER}' (used for SSH to container):${NC}"
     read -rs SSH_USER_PASSWORD
     echo ""
 fi
 
 # Prompt for GitHub SSH key
-if [ -z "$GITHUB_SSH_KEY" ]; then
+if [ -z "${GITHUB_SSH_KEY:-}" ]; then
     # Check common SSH key locations
     DEFAULT_KEY=""
     for key_path in ~/.ssh/id_ed25519 ~/.ssh/id_rsa ~/.ssh/github ~/.ssh/id_ecdsa; do

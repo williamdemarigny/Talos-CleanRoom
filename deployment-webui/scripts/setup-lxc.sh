@@ -150,7 +150,8 @@ else
         jinja2==3.1.3 \
         aiofiles==23.2.1 \
         websockets==12.0 \
-        python-hcl2==4.3.2
+        python-hcl2==4.3.2 \
+        "cryptography>=41.0.0"
 fi
 
 # Generate password hash (venv is active, so python3 has passlib)
