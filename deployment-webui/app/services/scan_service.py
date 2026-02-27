@@ -192,8 +192,10 @@ class ScanService:
                 self._save_to_history()
                 return
 
-            # Get Faraday credentials for later upload
+            # Get Faraday credentials and ensure admin user exists
             faraday_creds = await self._get_faraday_credentials()
+            if faraday_creds:
+                await self._ensure_faraday_admin(faraday_creds)
 
             # Run each tool sequentially (to avoid resource contention)
             for tool_state in scan.tools:
@@ -394,7 +396,7 @@ class ScanService:
 
         # Get OpenVAS admin password from k8s secret
         cred_result = await self.process_manager.run_command_simple(
-            ["kubectl", "get", "secret", "greenbone-credentials", "-n", "openvas",
+            ["kubectl", "get", "secret", "openvas-credentials", "-n", "openvas",
              "-o", "jsonpath={.data.admin-password}"],
             timeout=10
         )
@@ -801,6 +803,29 @@ except Exception as e:
 
         return None
 
+    async def _ensure_faraday_admin(self, creds: dict) -> bool:
+        """Ensure the Faraday admin user exists (create if missing)."""
+        pod_result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "pods", "-n", "faraday", "-l", "app.kubernetes.io/name=faraday",
+             "-o", "jsonpath={.items[0].metadata.name}"],
+            timeout=10
+        )
+        if not pod_result.success or not pod_result.output.strip():
+            return False
+
+        pod_name = pod_result.output.strip()
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "faraday", f"pod/{pod_name}", "-c", "faraday",
+             "--", "faraday-manage", "create-superuser",
+             "--username", creds["username"],
+             "--email", "admin@knowledgeondemand.net",
+             "--password", creds["password"]],
+            timeout=30
+        )
+        # Success if user created or already exists
+        output = (result.output or "").lower()
+        return result.success or "already" in output or "created" in output
+
     async def _upload_to_faraday(self, xml_content: str, tool_name: str, creds: dict) -> bool:
         """Upload scan results to Faraday via individual REST API calls.
 
@@ -950,12 +975,11 @@ except Exception as e:
                 "        created_hosts += 1\n"
                 "    except urllib.error.HTTPError as e:\n"
                 "        body = e.read().decode()\n"
-                "        # 409 = host already exists — try to look it up\n"
+                "        # 409 = host already exists — extract ID from response body\n"
                 "        if e.code == 409:\n"
                 "            try:\n"
-                "                search = api_get(f'/_api/v3/ws/{WS}/hosts?search=ip%3D{h[\"ip\"]}')\n"
-                "                rows = search.get('rows', [])\n"
-                "                host_id = rows[0]['id'] if rows else None\n"
+                "                existing = json.loads(body)\n"
+                "                host_id = existing.get('object', {}).get('id')\n"
                 "                if host_id:\n"
                 "                    created_hosts += 1\n"
                 "                else:\n"
@@ -979,9 +1003,10 @@ except Exception as e:
                 "    # Create services for this host\n"
                 "    svc_id_map = {}  # port -> service_id\n"
                 "    for svc in h.get('services', []):\n"
+                "        port_val = svc.get('port', 0) or 0\n"
                 "        svc_body = {\n"
                 "            'name': svc.get('name', ''),\n"
-                "            'port': svc.get('port', 0),\n"
+                "            'ports': [int(port_val)],\n"
                 "            'protocol': svc.get('protocol', 'tcp'),\n"
                 "            'status': svc.get('status', 'open'),\n"
                 "            'version': svc.get('version', ''),\n"
@@ -991,14 +1016,22 @@ except Exception as e:
                 "        }\n"
                 "        try:\n"
                 "            svc_resp = api_post(f'/_api/v3/ws/{WS}/services', svc_body)\n"
-                "            svc_id_map[svc.get('port', 0)] = svc_resp.get('id')\n"
+                "            svc_id_map[int(port_val)] = svc_resp.get('id')\n"
                 "            created_services += 1\n"
-                "        except urllib.error.HTTPError:\n"
-                "            errors += 1\n"
+                "        except urllib.error.HTTPError as se:\n"
+                "            if se.code == 409:\n"
+                "                try:\n"
+                "                    existing_svc = json.loads(se.read().decode())\n"
+                "                    svc_id_map[int(port_val)] = existing_svc.get('object', {}).get('id')\n"
+                "                    created_services += 1\n"
+                "                except:\n"
+                "                    errors += 1\n"
+                "            else:\n"
+                "                errors += 1\n"
                 "        except Exception:\n"
                 "            errors += 1\n"
                 "\n"
-                "    # Create vulnerabilities for this host\n"
+                "    # Create host-level vulnerabilities\n"
                 "    for vuln in h.get('vulnerabilities', []):\n"
                 "        vuln_body = {\n"
                 "            'name': vuln.get('name', 'Unknown'),\n"
@@ -1017,6 +1050,31 @@ except Exception as e:
                 "            errors += 1\n"
                 "        except Exception:\n"
                 "            errors += 1\n"
+                "\n"
+                "    # Create service-level vulnerabilities\n"
+                "    for svc in h.get('services', []):\n"
+                "        svc_port = int(svc.get('port', 0) or 0)\n"
+                "        svc_id = svc_id_map.get(svc_port)\n"
+                "        if not svc_id:\n"
+                "            continue\n"
+                "        for vuln in svc.get('vulnerabilities', []):\n"
+                "            vuln_body = {\n"
+                "                'name': vuln.get('name', 'Unknown'),\n"
+                "                'desc': vuln.get('desc', ''),\n"
+                "                'severity': vuln.get('severity', 'info'),\n"
+                "                'refs': vuln.get('refs', []),\n"
+                "                'resolution': vuln.get('resolution', ''),\n"
+                "                'type': 'Vulnerability',\n"
+                "                'parent': svc_id,\n"
+                "                'parent_type': 'Service',\n"
+                "            }\n"
+                "            try:\n"
+                "                api_post(f'/_api/v3/ws/{WS}/vulns', vuln_body)\n"
+                "                created_vulns += 1\n"
+                "            except urllib.error.HTTPError:\n"
+                "                errors += 1\n"
+                "            except Exception:\n"
+                "                errors += 1\n"
                 "\n"
                 "# Cleanup temp file\n"
                 "try:\n"
