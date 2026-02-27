@@ -17,7 +17,7 @@ set -euo pipefail
 #
 # Prerequisites:
 # - Kubernetes cluster is running and stable
-# - Longhorn storage class is available
+# - Ceph RBD storage class is available
 # - kubectl is configured to access the cluster
 #
 # Note: Initial setup takes 15-30 minutes due to feed synchronization
@@ -42,10 +42,10 @@ if ! kubectl cluster-info &> /dev/null; then
     exit 1
 fi
 
-# Check if Longhorn is available
-if ! kubectl get storageclass longhorn &> /dev/null; then
-    echo "Error: Longhorn storage class not found."
-    echo "Please run deploy-ingress-stack.sh first and wait for Longhorn to be ready."
+# Check if Ceph RBD storage class is available
+if ! kubectl get storageclass ceph-rbd &> /dev/null; then
+    echo "Error: ceph-rbd storage class not found."
+    echo "Please run deploy-ingress-stack.sh first and wait for Ceph CSI to be ready."
     exit 1
 fi
 

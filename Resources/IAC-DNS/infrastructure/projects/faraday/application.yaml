@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-    targetRevision: HEAD
+    targetRevision: longhorn-to-ceph-csi
     path: Resources/IAC-DNS/infrastructure/projects/faraday
     directory:
       recurse: false
