@@ -521,7 +521,7 @@ while IFS= read -r line; do
                 # Use insecure mode since the node is still unconfigured (maintenance mode)
                 if [[ "$DRY_RUN" == false ]]; then
                     # Control plane gets more time — it must succeed for bootstrap
-                    local api_attempts=45
+                    api_attempts=45
                     if [[ "$role" == "controlplane" ]]; then
                         api_attempts=90
                     fi
