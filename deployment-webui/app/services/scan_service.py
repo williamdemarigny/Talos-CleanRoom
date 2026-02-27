@@ -25,8 +25,8 @@ NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
 NMAP_TIMEOUT_THOROUGH = 3600   # 60 min for full port scan
 OPENVAS_TIMEOUT = 7200         # 2 hours for OpenVAS
 METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
-METASPLOIT_TIMEOUT_STANDARD = 2700   # 45 min for standard scan
-METASPLOIT_TIMEOUT_THOROUGH = 5400   # 90 min for thorough scan
+METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (11 vuln modules)
+METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln modules)
 FARADAY_UPLOAD_TIMEOUT = 120   # 2 min for Faraday upload (individual REST calls)
 
 # Nmap flags per profile
@@ -683,11 +683,14 @@ except Exception as e:
         lines = []
 
         # Phase 1: Network discovery via db_nmap
+        # Use lighter nmap flags here — the standalone Nmap tool already does the
+        # comprehensive port scan. Metasploit's db_nmap just populates the MSF
+        # database so vulnerability modules know which hosts/ports to target.
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
-            ScanProfile.STANDARD: "-sV -sC",
-            ScanProfile.THOROUGH: "-sV -sC -p- -A",
-        }.get(profile, "-sV -sC")
+            ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
+            ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+        }.get(profile, "-T4 -sV --top-ports 1000")
 
         lines.append(f"db_nmap {nmap_flags} {target}")
 
@@ -822,9 +825,9 @@ except Exception as e:
 
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
-            ScanProfile.STANDARD: "-sV -sC",
-            ScanProfile.THOROUGH: "-sV -sC -p- -A",
-        }.get(profile, "-sV -sC")
+            ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
+            ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+        }.get(profile, "-T4 -sV --top-ports 1000")
         await self.log("metasploit", "info", f"Phase 1: db_nmap {nmap_flags} {target}")
         if module_count > 0:
             await self.log("metasploit", "info", f"Phase 2: Running {module_count} auxiliary scanner(s)...")
