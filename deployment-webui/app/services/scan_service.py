@@ -46,6 +46,298 @@ OPENVAS_SCAN_CONFIGS = {
 # Greenbone XML report format UUID
 OPENVAS_XML_FORMAT = "a994b278-1f62-11e1-96ac-406186ea4fc5"
 
+# =============================================================================
+# Metasploit Module Catalog — single source of truth for all profiles
+# =============================================================================
+MSF_MODULE_CATALOG = [
+    # --- Critical CVEs (included in standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_ms17_010",
+        "name": "EternalBlue (MS17-010)",
+        "category": "Critical CVEs",
+        "description": "SMB Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb_ms08_067",
+        "name": "Conficker (MS08-067)",
+        "category": "Critical CVEs",
+        "description": "SMB Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
+        "name": "BlueKeep (CVE-2019-0708)",
+        "category": "Critical CVEs",
+        "description": "RDP Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ssl/openssl_heartbleed",
+        "name": "Heartbleed (CVE-2014-0160)",
+        "category": "Critical CVEs",
+        "description": "OpenSSL memory disclosure",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/log4shell_scanner",
+        "name": "Log4Shell (CVE-2021-44228)",
+        "category": "Critical CVEs",
+        "description": "Apache Log4j Remote Code Execution",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_mod_cgi_bash_env",
+        "name": "Shellshock (CVE-2014-6271)",
+        "category": "Critical CVEs",
+        "description": "Bash environment variable injection via CGI",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/ms15_034_http_sys_memory_dump",
+        "name": "HTTP.sys (MS15-034)",
+        "category": "Critical CVEs",
+        "description": "IIS HTTP.sys memory disclosure",
+        "profiles": ["standard", "thorough"],
+    },
+    # --- Service Detection (included in standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_version",
+        "name": "SMB Version",
+        "category": "Service Detection",
+        "description": "SMB protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ssh/ssh_version",
+        "name": "SSH Version",
+        "category": "Service Detection",
+        "description": "SSH protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/http_version",
+        "name": "HTTP Version",
+        "category": "Service Detection",
+        "description": "HTTP server fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ftp/anonymous",
+        "name": "FTP Anonymous",
+        "category": "Service Detection",
+        "description": "FTP anonymous access check",
+        "profiles": ["standard", "thorough"],
+    },
+    # --- Extended SMB (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_enumshares",
+        "name": "SMB Share Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB shares",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb_enumusers",
+        "name": "SMB User Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB users",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/pipe_auditor",
+        "name": "SMB Pipe Auditor",
+        "category": "Extended SMB",
+        "description": "SMB named pipe auditing",
+        "profiles": ["thorough"],
+    },
+    # --- Extended RDP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/rdp/rdp_scanner",
+        "name": "RDP Scanner",
+        "category": "Extended RDP",
+        "description": "RDP service detection",
+        "profiles": ["thorough"],
+    },
+    # --- Extended SSH (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ssh/ssh_enumusers",
+        "name": "SSH User Enumeration",
+        "category": "Extended SSH",
+        "description": "Enumerate SSH users via wordlist",
+        "profiles": ["thorough"],
+        "extra_opts": {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"},
+    },
+    # --- HTTP/Web (thorough only) ---
+    {
+        "id": "auxiliary/scanner/http/title",
+        "name": "HTTP Title",
+        "category": "HTTP/Web",
+        "description": "HTTP page title extraction",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/dir_scanner",
+        "name": "Directory Scanner",
+        "category": "HTTP/Web",
+        "description": "HTTP directory brute-force",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/robots_txt",
+        "name": "Robots.txt",
+        "category": "HTTP/Web",
+        "description": "robots.txt discovery",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/http_put",
+        "name": "HTTP PUT",
+        "category": "HTTP/Web",
+        "description": "HTTP PUT method test",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/tomcat_mgr_login",
+        "name": "Tomcat Manager Login",
+        "category": "HTTP/Web",
+        "description": "Tomcat default credentials check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/wordpress_scanner",
+        "name": "WordPress Scanner",
+        "category": "HTTP/Web",
+        "description": "WordPress detection and enumeration",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/jenkins_enum",
+        "name": "Jenkins Enum",
+        "category": "HTTP/Web",
+        "description": "Jenkins open dashboard detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/webdav_scanner",
+        "name": "WebDAV Scanner",
+        "category": "HTTP/Web",
+        "description": "WebDAV detection",
+        "profiles": ["thorough"],
+    },
+    # --- SSL/TLS (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ssl/ssl_version",
+        "name": "SSL/TLS Version",
+        "category": "SSL/TLS",
+        "description": "SSL/TLS version and cipher analysis",
+        "profiles": ["thorough"],
+    },
+    # --- FTP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ftp/ftp_version",
+        "name": "FTP Version",
+        "category": "FTP",
+        "description": "FTP version fingerprint",
+        "profiles": ["thorough"],
+    },
+    # --- Email (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smtp/smtp_version",
+        "name": "SMTP Version",
+        "category": "Email",
+        "description": "SMTP server version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smtp/smtp_relay",
+        "name": "SMTP Open Relay",
+        "category": "Email",
+        "description": "Open SMTP relay check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/pop3/pop3_version",
+        "name": "POP3 Version",
+        "category": "Email",
+        "description": "POP3 server version detection",
+        "profiles": ["thorough"],
+    },
+    # --- Database (thorough only) ---
+    {
+        "id": "auxiliary/scanner/mysql/mysql_version",
+        "name": "MySQL Version",
+        "category": "Database",
+        "description": "MySQL version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/postgres/postgres_version",
+        "name": "PostgreSQL Version",
+        "category": "Database",
+        "description": "PostgreSQL version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/mssql/mssql_ping",
+        "name": "MSSQL Discovery",
+        "category": "Database",
+        "description": "MSSQL instance discovery",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/mongodb/mongodb_login",
+        "name": "MongoDB Login",
+        "category": "Database",
+        "description": "MongoDB unauthenticated access check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/redis/redis_server",
+        "name": "Redis Server",
+        "category": "Database",
+        "description": "Redis open access check",
+        "profiles": ["thorough"],
+    },
+    # --- Network Infrastructure (thorough only) ---
+    {
+        "id": "auxiliary/scanner/telnet/telnet_version",
+        "name": "Telnet Version",
+        "category": "Network Infrastructure",
+        "description": "Telnet service detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/snmp/snmp_enum",
+        "name": "SNMP Enumeration",
+        "category": "Network Infrastructure",
+        "description": "SNMP community string enumeration",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/netbios/nbname",
+        "name": "NetBIOS Name",
+        "category": "Network Infrastructure",
+        "description": "NetBIOS name resolution",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/discovery/udp_sweep",
+        "name": "UDP Sweep",
+        "category": "Network Infrastructure",
+        "description": "UDP service discovery",
+        "profiles": ["thorough"],
+    },
+    # --- Remote Access (thorough only) ---
+    {
+        "id": "auxiliary/scanner/vnc/vnc_none_auth",
+        "name": "VNC No-Auth",
+        "category": "Remote Access",
+        "description": "VNC no-authentication check",
+        "profiles": ["thorough"],
+    },
+]
+
 
 @dataclass
 class ScanService:
@@ -88,6 +380,10 @@ class ScanService:
                         pass  # Don't let broadcast failures crash the scan
                 break
 
+    def get_module_catalog(self) -> list:
+        """Return the Metasploit module catalog for custom profile selection."""
+        return MSF_MODULE_CATALOG
+
     def get_status(self) -> Optional[ScanState]:
         """Get current scan status."""
         return self.current_scan
@@ -123,6 +419,7 @@ class ScanService:
             id=str(uuid.uuid4())[:8],
             target=target,
             profile=request.profile,
+            custom_modules=request.custom_modules,
             status=ScanStatus.RUNNING,
             started_at=datetime.utcnow(),
             tools=[
@@ -676,23 +973,23 @@ except Exception as e:
     # =========================================================================
 
     def _build_msf_resource_script(self, target: str, profile: ScanProfile,
-                                     scan_id: str, xml_path: str) -> str:
+                                     scan_id: str, xml_path: str,
+                                     custom_modules: list = None) -> str:
         """Build a Metasploit resource script based on scan profile.
 
         Quick:    db_nmap discovery only (fast port scan, no vuln modules)
         Standard: db_nmap service detection + common vulnerability scanners
         Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
+        Custom:   db_nmap + user-selected modules from catalog
         """
         lines = []
 
         # Phase 1: Network discovery via db_nmap
-        # Use lighter nmap flags here — the standalone Nmap tool already does the
-        # comprehensive port scan. Metasploit's db_nmap just populates the MSF
-        # database so vulnerability modules know which hosts/ports to target.
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
             ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
         }.get(profile, "-T4 -sV --top-ports 1000")
 
         lines.append(f"db_nmap {nmap_flags} {target}")
@@ -708,79 +1005,18 @@ except Exception as e:
             lines.append(f"run")
             lines.append(f"back")
 
-        # =============================================================
-        # STANDARD profile: Critical CVEs + core service scanners
-        # =============================================================
-        if profile in (ScanProfile.STANDARD, ScanProfile.THOROUGH):
+        # Select modules from catalog based on profile
+        if profile == ScanProfile.CUSTOM:
+            selected_ids = set(custom_modules or [])
+            modules = [m for m in MSF_MODULE_CATALOG if m["id"] in selected_ids]
+        elif profile == ScanProfile.QUICK:
+            modules = []
+        else:
+            # standard or thorough — filter by profile name
+            modules = [m for m in MSF_MODULE_CATALOG if profile.value in m["profiles"]]
 
-            # --- Critical CVE Checks ---
-            add_module("auxiliary/scanner/smb/smb_ms17_010")       # EternalBlue (MS17-010) — critical RCE
-            add_module("auxiliary/scanner/smb/smb_ms08_067")       # Conficker (MS08-067) — critical RCE
-            add_module("auxiliary/scanner/rdp/cve_2019_0708_bluekeep")  # BlueKeep (CVE-2019-0708)
-            add_module("auxiliary/scanner/ssl/openssl_heartbleed") # Heartbleed (CVE-2014-0160)
-            add_module("auxiliary/scanner/http/log4shell_scanner") # Log4Shell (CVE-2021-44228)
-            add_module("auxiliary/scanner/http/apache_mod_cgi_bash_env")  # Shellshock (CVE-2014-6271)
-            add_module("auxiliary/scanner/http/ms15_034_http_sys_memory_dump")  # HTTP.sys (MS15-034)
-
-            # --- Core Service Detection ---
-            add_module("auxiliary/scanner/smb/smb_version")        # SMB version fingerprint
-            add_module("auxiliary/scanner/ssh/ssh_version")        # SSH version fingerprint
-            add_module("auxiliary/scanner/http/http_version")      # HTTP server fingerprint
-            add_module("auxiliary/scanner/ftp/anonymous")          # FTP anonymous access
-
-        # =============================================================
-        # THOROUGH profile: All Standard + extended scanners
-        # =============================================================
-        if profile == ScanProfile.THOROUGH:
-
-            # --- Extended SMB ---
-            add_module("auxiliary/scanner/smb/smb_enumshares")     # SMB share enumeration
-            add_module("auxiliary/scanner/smb/smb_enumusers")      # SMB user enumeration
-            add_module("auxiliary/scanner/smb/pipe_auditor")       # SMB named pipe auditing
-
-            # --- Extended RDP ---
-            add_module("auxiliary/scanner/rdp/rdp_scanner")        # RDP service detection
-
-            # --- Extended SSH ---
-            add_module("auxiliary/scanner/ssh/ssh_enumusers",      # SSH user enumeration
-                       {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"})
-
-            # --- Extended HTTP/Web ---
-            add_module("auxiliary/scanner/http/title")             # HTTP page title
-            add_module("auxiliary/scanner/http/dir_scanner")       # HTTP directory brute-force
-            add_module("auxiliary/scanner/http/robots_txt")        # robots.txt discovery
-            add_module("auxiliary/scanner/http/http_put")          # HTTP PUT method test
-            add_module("auxiliary/scanner/http/tomcat_mgr_login")  # Tomcat default creds
-            add_module("auxiliary/scanner/http/wordpress_scanner") # WordPress detection
-            add_module("auxiliary/scanner/http/jenkins_enum")      # Jenkins open dashboard
-            add_module("auxiliary/scanner/http/webdav_scanner")    # WebDAV detection
-
-            # --- SSL/TLS Extended ---
-            add_module("auxiliary/scanner/ssl/ssl_version")        # SSL/TLS version analysis
-
-            # --- FTP Extended ---
-            add_module("auxiliary/scanner/ftp/ftp_version")        # FTP version fingerprint
-
-            # --- Email ---
-            add_module("auxiliary/scanner/smtp/smtp_version")      # SMTP version
-            add_module("auxiliary/scanner/smtp/smtp_relay")        # Open SMTP relay check
-            add_module("auxiliary/scanner/pop3/pop3_version")      # POP3 version
-
-            # --- Database Scanners ---
-            add_module("auxiliary/scanner/mysql/mysql_version")    # MySQL version
-            add_module("auxiliary/scanner/postgres/postgres_version")  # PostgreSQL version
-            add_module("auxiliary/scanner/mssql/mssql_ping")       # MSSQL discovery
-            add_module("auxiliary/scanner/mongodb/mongodb_login")  # MongoDB unauth access
-            add_module("auxiliary/scanner/redis/redis_server")     # Redis open access
-
-            # --- Network Infrastructure ---
-            add_module("auxiliary/scanner/telnet/telnet_version")  # Telnet version
-            add_module("auxiliary/scanner/snmp/snmp_enum")         # SNMP enumeration
-            add_module("auxiliary/scanner/netbios/nbname")         # NetBIOS name resolution
-            add_module("auxiliary/scanner/discovery/udp_sweep")    # UDP service discovery
-
-            # --- Remote Access ---
-            add_module("auxiliary/scanner/vnc/vnc_none_auth")      # VNC no-auth check
+        for mod in modules:
+            add_module(mod["id"], mod.get("extra_opts"))
 
         # Print discovered vulns summary
         lines.append("vulns")
@@ -796,16 +1032,24 @@ except Exception as e:
         scan_id = self.current_scan.id
         xml_path = f"/tmp/msf-scan-{scan_id}.xml"
         rc_path = f"/tmp/scan-{scan_id}.rc"
+        custom_modules = self.current_scan.custom_modules
 
         # Select timeout based on profile
-        msf_timeout = {
-            ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
-            ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
-            ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
-        }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
+        if profile == ScanProfile.CUSTOM:
+            module_count_est = len(custom_modules) if custom_modules else 0
+            # Base 15 min for db_nmap + ~3 min per module
+            msf_timeout = 900 + (module_count_est * 180)
+        else:
+            msf_timeout = {
+                ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
+                ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
+                ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
+            }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
 
         # Build the resource script
-        rc_content = self._build_msf_resource_script(target, profile, scan_id, xml_path)
+        rc_content = self._build_msf_resource_script(
+            target, profile, scan_id, xml_path, custom_modules=custom_modules
+        )
 
         module_count = rc_content.count("use auxiliary/")
         if module_count > 0:
@@ -830,6 +1074,7 @@ except Exception as e:
             ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
             ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
         }.get(profile, "-T4 -sV --top-ports 1000")
         await self.log("metasploit", "info", f"Phase 1: db_nmap {nmap_flags} {target}")
         if module_count > 0:
