@@ -217,6 +217,15 @@ async def get_scan_history(
     return {"history": service.scan_history}
 
 
+@router.get("/modules")
+async def get_msf_modules(
+    user: dict = Depends(get_current_user)
+):
+    """Return available Metasploit modules for custom profile selection."""
+    service = get_scan_service()
+    return {"modules": service.get_module_catalog()}
+
+
 @router.get("/logs")
 async def get_scan_logs(
     tool: Optional[str] = None,
