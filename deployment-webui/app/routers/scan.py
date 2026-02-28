@@ -226,6 +226,24 @@ async def get_msf_modules(
     return {"modules": service.get_module_catalog()}
 
 
+@router.get("/openvas-configs")
+async def get_openvas_configs(
+    user: dict = Depends(get_current_user)
+):
+    """Return available OpenVAS scan configs from GVM."""
+    service = get_scan_service()
+    return {"configs": await service.get_openvas_configs()}
+
+
+@router.get("/openvas-families")
+async def get_openvas_families(
+    user: dict = Depends(get_current_user)
+):
+    """Return available OpenVAS NVT families from GVM."""
+    service = get_scan_service()
+    return {"families": await service.get_openvas_families()}
+
+
 @router.get("/logs")
 async def get_scan_logs(
     tool: Optional[str] = None,

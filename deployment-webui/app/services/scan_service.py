@@ -746,6 +746,181 @@ class ScanService:
         """Return the Metasploit module catalog for custom profile selection."""
         return MSF_MODULE_CATALOG
 
+    # ----- OpenVAS runtime discovery (configs & NVT families) ----------------
+
+    _openvas_configs_cache: Optional[list] = None
+    _openvas_families_cache: Optional[list] = None
+
+    async def _get_openvas_password(self) -> Optional[str]:
+        """Retrieve and decode the OpenVAS admin password from k8s secret."""
+        cred_result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "secret", "openvas-credentials", "-n", "openvas",
+             "-o", "jsonpath={.data.admin-password}"],
+            timeout=10
+        )
+        if not cred_result.success or not cred_result.output.strip():
+            return None
+        password_b64 = cred_result.output.strip()
+        decode_result = await self.process_manager.run_command_simple(
+            ["bash", "-c", f"echo '{password_b64}' | base64 -d"],
+            timeout=5
+        )
+        return decode_result.output.strip() if decode_result.success else None
+
+    async def get_openvas_configs(self) -> list:
+        """Query available OpenVAS scan configs from GVM via GMP."""
+        if self._openvas_configs_cache is not None:
+            return self._openvas_configs_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_configs_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(15)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_configs/>\')
+    root = ET.fromstring(resp)
+    for cfg in root.findall("config"):
+        cfg_id = cfg.attrib.get("id", "")
+        name = cfg.findtext("name", "")
+        # Skip the "empty" base configs used internally
+        if name and cfg_id:
+            print(f"CONFIG:{cfg_id}:{name}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=30
+        )
+
+        configs = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("CONFIG:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        configs.append({"id": parts[1], "name": parts[2]})
+
+        # Sort by name for consistent UI display
+        configs.sort(key=lambda c: c["name"])
+        self._openvas_configs_cache = configs
+        return configs
+
+    async def get_openvas_families(self) -> list:
+        """Query available OpenVAS NVT families from GVM via GMP."""
+        if self._openvas_families_cache is not None:
+            return self._openvas_families_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_nvt_families_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_nvt_families/>\')
+    root = ET.fromstring(resp)
+    for fam in root.findall(".//family"):
+        name = fam.findtext("name", "")
+        max_nvt = fam.findtext("max_nvt_count", "0")
+        if name:
+            print(f"FAMILY:{name}:{max_nvt}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=60
+        )
+
+        families = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("FAMILY:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        families.append({
+                            "name": parts[1],
+                            "nvt_count": int(parts[2]) if parts[2].isdigit() else 0
+                        })
+
+        # Sort by name for consistent UI display
+        families.sort(key=lambda f: f["name"])
+        self._openvas_families_cache = families
+        return families
+
     def get_status(self) -> Optional[ScanState]:
         """Get current scan status."""
         return self.current_scan
@@ -782,6 +957,8 @@ class ScanService:
             target=target,
             profile=request.profile,
             custom_modules=request.custom_modules,
+            openvas_config=request.openvas_config,
+            openvas_families=request.openvas_families,
             status=ScanStatus.RUNNING,
             started_at=datetime.utcnow(),
             tools=[
@@ -1054,38 +1231,44 @@ class ScanService:
     async def _run_openvas_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run an OpenVAS scan via GMP protocol inside the gvmd container."""
         scan_id = self.current_scan.id
-        config_id = OPENVAS_SCAN_CONFIGS.get(profile, OPENVAS_SCAN_CONFIGS[ScanProfile.STANDARD])
+        openvas_config = self.current_scan.openvas_config
+        openvas_families = self.current_scan.openvas_families
+
+        # Determine config_id based on custom settings or profile
+        if profile == ScanProfile.CUSTOM and openvas_config:
+            # User selected a specific preset config
+            config_id = openvas_config
+            use_custom_families = False
+        elif profile == ScanProfile.CUSTOM and openvas_families:
+            # User selected specific NVT families — will create a custom config
+            config_id = None
+            use_custom_families = True
+        else:
+            # Standard profile-based config
+            config_id = OPENVAS_SCAN_CONFIGS.get(profile, OPENVAS_SCAN_CONFIGS[ScanProfile.STANDARD])
+            use_custom_families = False
 
         await self.log("openvas", "info", "Connecting to OpenVAS GVM daemon...")
 
         # Get OpenVAS admin password from k8s secret
-        cred_result = await self.process_manager.run_command_simple(
-            ["kubectl", "get", "secret", "openvas-credentials", "-n", "openvas",
-             "-o", "jsonpath={.data.admin-password}"],
-            timeout=10
-        )
-
-        if not cred_result.success or not cred_result.output.strip():
-            await self.log("openvas", "error", "Could not retrieve OpenVAS credentials from cluster")
-            return None
-
-        # Decode base64 password
-        password_b64 = cred_result.output.strip()
-        decode_result = await self.process_manager.run_command_simple(
-            ["bash", "-c", f"echo '{password_b64}' | base64 -d"],
-            timeout=5
-        )
-        openvas_password = decode_result.output.strip() if decode_result.success else ""
-
+        openvas_password = await self._get_openvas_password()
         if not openvas_password:
-            await self.log("openvas", "error", "Failed to decode OpenVAS password")
+            await self.log("openvas", "error", "Could not retrieve OpenVAS credentials from cluster")
             return None
 
         # Python GMP script that runs inside the gvmd container
         # Uses stdlib only: socket + xml.etree.ElementTree
-        gmp_script = self._build_gmp_script(scan_id, target, config_id)
+        if use_custom_families:
+            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families)
+        else:
+            gmp_script = self._build_gmp_script(scan_id, target, config_id)
 
-        await self.log("openvas", "info", f"Creating scan target and task for {target}...")
+        if use_custom_families:
+            await self.log("openvas", "info", f"Creating custom config with {len(openvas_families)} NVT families for {target}...")
+        elif profile == ScanProfile.CUSTOM and openvas_config:
+            await self.log("openvas", "info", f"Using selected config for {target}...")
+        else:
+            await self.log("openvas", "info", f"Creating scan target and task for {target}...")
 
         # Execute the GMP script inside the gvmd container
         result = await self.process_manager.run_command(
@@ -1327,6 +1510,219 @@ try:
 
 except Exception as e:
     print(f"SCAN:FAILED:{{e}}")
+    sys.exit(1)
+'''
+
+    def _build_gmp_custom_families_script(self, scan_id: str, target: str,
+                                            families: List[str]) -> str:
+        """Build a GMP script that creates a custom config with selected NVT families."""
+        # Build the family XML for modify_config
+        family_xml_parts = []
+        for fam in families:
+            family_xml_parts.append(
+                f'<family><name>{fam}</name><all>1</all><growing>1</growing></family>'
+            )
+        families_xml = "".join(family_xml_parts)
+
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+TARGET = "{target}"
+SCAN_ID = "{scan_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Base config: Full and Fast (we clone it, then replace families)
+BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
+
+def send_gmp(sock, xml_str):
+    """Send a GMP command and receive the response."""
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "create_target_response",
+                        "create_config_response", "modify_config_response",
+                        "create_task_response", "start_task_response",
+                        "get_tasks_response", "get_reports_response",
+                        "delete_target_response", "delete_task_response",
+                        "delete_config_response"]:
+                if f"</{{tag}}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+def get_status(xml_text):
+    try:
+        root = ET.fromstring(xml_text)
+        return root.attrib.get("status", "")
+    except ET.ParseError:
+        return ""
+
+custom_config_id = None
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Connected to GVM daemon")
+
+    # Authenticate
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+    if get_status(resp) != "200":
+        print("SCAN:FAILED:Authentication failed")
+        sys.exit(1)
+    print("STATUS: Authenticated with GVM")
+
+    # Create custom config by cloning base
+    config_name = f"scan-{{SCAN_ID}}-custom-config"
+    create_cfg = f\'<create_config><copy>{{BASE_CONFIG_ID}}</copy><name>{{config_name}}</name></create_config>\'
+    resp = send_gmp(sock, create_cfg)
+    status = get_status(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create config failed (status {{status}})")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        custom_config_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse config ID")
+        sys.exit(1)
+    print(f"STATUS: Created custom config {{custom_config_id}}")
+
+    # Modify config to set selected NVT families
+    modify_xml = f\'<modify_config config_id="{{custom_config_id}}"><nvt_family_selection>{families_xml}</nvt_family_selection></modify_config>\'
+    resp = send_gmp(sock, modify_xml)
+    status = get_status(resp)
+    if status not in ("200", "201"):
+        print(f"STATUS: Warning - modify config returned status {{status}}, proceeding anyway")
+    else:
+        print("STATUS: Configured NVT families on custom config")
+
+    # Create target
+    target_name = f"scan-{{SCAN_ID}}-target"
+    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts></create_target>\'
+    resp = send_gmp(sock, create_target)
+    status = get_status(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create target failed (status {{status}})")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        target_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse target ID")
+        sys.exit(1)
+    print(f"STATUS: Created target {{target_id}}")
+
+    # Create task with custom config
+    task_name = f"scan-{{SCAN_ID}}-task"
+    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
+    resp = send_gmp(sock, create_task)
+    status = get_status(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create task failed (status {{status}})")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        task_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse task ID")
+        sys.exit(1)
+    print(f"STATUS: Created task {{task_id}}")
+
+    # Start task
+    start = f\'<start_task task_id="{{task_id}}"/>\'
+    resp = send_gmp(sock, start)
+    status = get_status(resp)
+    if status not in ("200", "202"):
+        print(f"SCAN:FAILED:Start task failed (status {{status}})")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report_id")
+        report_id = report_elem.text if report_elem is not None else ""
+    except:
+        report_id = ""
+    print(f"STATUS: Scan started (report {{report_id}})")
+
+    # Poll for completion
+    max_polls = 720  # 2 hours at 10s intervals
+    for i in range(max_polls):
+        time.sleep(10)
+        get_task = f\'<get_tasks task_id="{{task_id}}"/>\'
+        resp = send_gmp(sock, get_task)
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                task_status = task_elem.findtext("status", "")
+                progress_elem = task_elem.find("progress")
+                progress = progress_elem.text if progress_elem is not None else "0"
+                print(f"PROGRESS: {{task_status}} ({{progress}}%)")
+                if task_status == "Done":
+                    if not report_id:
+                        report_elem = task_elem.find(".//report")
+                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    break
+                elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    print(f"SCAN:FAILED:Task ended with status {{task_status}}")
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+    else:
+        print("SCAN:FAILED:Scan timed out after 2 hours")
+        sys.exit(1)
+
+    # Get report in XML format
+    if report_id:
+        print("STATUS: Retrieving scan report...")
+        get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
+        sock.settimeout(120)
+        resp = send_gmp(sock, get_report)
+        print("REPORT_XML_START")
+        try:
+            root = ET.fromstring(resp)
+            report_elem = root.find(".//report")
+            if report_elem is not None:
+                print(ET.tostring(report_elem, encoding="unicode"))
+            else:
+                print(resp)
+        except:
+            print(resp)
+        print("REPORT_XML_END")
+    else:
+        print("SCAN:FAILED:No report ID available")
+
+    # Cleanup: delete task, target, and custom config
+    try:
+        send_gmp(sock, f\'<delete_task task_id="{{task_id}}" ultimate="1"/>\')
+        send_gmp(sock, f\'<delete_target target_id="{{target_id}}" ultimate="1"/>\')
+        if custom_config_id:
+            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
+            print("STATUS: Cleaned up custom config")
+    except:
+        pass
+
+    sock.close()
+    print("STATUS: OpenVAS scan complete")
+
+except Exception as e:
+    print(f"SCAN:FAILED:{{e}}")
+    # Try to clean up custom config on failure
+    try:
+        if custom_config_id:
+            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
+    except:
+        pass
     sys.exit(1)
 '''
 
