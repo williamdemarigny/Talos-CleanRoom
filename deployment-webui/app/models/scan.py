@@ -27,6 +27,7 @@ class ScanProfile(str, Enum):
     QUICK = "quick"
     STANDARD = "standard"
     THOROUGH = "thorough"
+    CUSTOM = "custom"
 
 
 class ScanToolState(BaseModel):
@@ -45,6 +46,7 @@ class ScanState(BaseModel):
     id: str
     target: str
     profile: ScanProfile = ScanProfile.STANDARD
+    custom_modules: Optional[List[str]] = None  # Module IDs for custom profile
     tools: List[ScanToolState] = []
     status: ScanStatus = ScanStatus.IDLE
     started_at: Optional[datetime] = None
@@ -65,3 +67,4 @@ class ScanRequest(BaseModel):
     target: str
     tools: List[ScanTool]
     profile: ScanProfile = ScanProfile.STANDARD
+    custom_modules: Optional[List[str]] = None  # Module IDs for custom profile

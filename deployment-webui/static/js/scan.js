@@ -7,6 +7,11 @@ function scanManager() {
         selectedTools: ['nmap'],
         profile: 'standard',
 
+        // Custom module state
+        customModules: [],
+        moduleCatalog: [],
+        modulesLoaded: false,
+
         // Scan state
         status: 'idle',
         scanTarget: '',
@@ -28,7 +33,8 @@ function scanManager() {
         profileDescriptions: {
             'quick': 'Fast discovery scan. Best for initial reconnaissance.',
             'standard': 'Service detection + vulnerability scanning. Recommended for most assessments.',
-            'thorough': 'Full port scan + comprehensive vulnerability checks. Slowest but most complete.'
+            'thorough': 'Full port scan + comprehensive vulnerability checks. Slowest but most complete.',
+            'custom': 'Choose individual Metasploit modules. Select modules below when Metasploit is enabled.'
         },
 
         showProfileInfo: false,
@@ -285,15 +291,20 @@ function scanManager() {
         async startScan() {
             if (!this.target.trim() || this.selectedTools.length === 0) return;
 
+            const payload = {
+                target: this.target,
+                tools: this.selectedTools,
+                profile: this.profile
+            };
+            if (this.profile === 'custom' && this.customModules.length > 0) {
+                payload.custom_modules = this.customModules;
+            }
+
             try {
                 const response = await fetch('/api/scan/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        target: this.target,
-                        tools: this.selectedTools,
-                        profile: this.profile
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 if (response.ok) {
@@ -374,6 +385,65 @@ function scanManager() {
             } catch (e) {
                 console.error('Failed to fetch scan history:', e);
             }
+        },
+
+        // =================================================================
+        // Custom Module Selection
+        // =================================================================
+
+        async fetchModules() {
+            if (this.modulesLoaded) return;
+            try {
+                const response = await fetch('/api/scan/modules');
+                const data = await response.json();
+                this.moduleCatalog = data.modules || [];
+                this.modulesLoaded = true;
+            } catch (e) {
+                console.error('Failed to fetch module catalog:', e);
+            }
+        },
+
+        get moduleCategories() {
+            const cats = [];
+            for (const mod of this.moduleCatalog) {
+                if (!cats.includes(mod.category)) {
+                    cats.push(mod.category);
+                }
+            }
+            return cats;
+        },
+
+        categoryModules(category) {
+            return this.moduleCatalog.filter(m => m.category === category);
+        },
+
+        toggleModule(moduleId) {
+            const idx = this.customModules.indexOf(moduleId);
+            if (idx >= 0) {
+                this.customModules.splice(idx, 1);
+            } else {
+                this.customModules.push(moduleId);
+            }
+        },
+
+        selectCategory(category) {
+            const mods = this.categoryModules(category);
+            for (const mod of mods) {
+                if (!this.customModules.includes(mod.id)) {
+                    this.customModules.push(mod.id);
+                }
+            }
+        },
+
+        deselectCategory(category) {
+            const ids = this.categoryModules(category).map(m => m.id);
+            this.customModules = this.customModules.filter(id => !ids.includes(id));
+        },
+
+        loadPreset(preset) {
+            this.customModules = this.moduleCatalog
+                .filter(m => m.profiles.includes(preset))
+                .map(m => m.id);
         },
 
         // =================================================================
