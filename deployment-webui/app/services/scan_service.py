@@ -1349,6 +1349,12 @@ TARGET = "{target}"
 CONFIG_ID = "{config_id}"
 SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Well-known port list UUIDs
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+    "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
+}}
 
 def send_gmp(sock, xml_str):
     """Send a GMP command and receive the response."""
@@ -1365,25 +1371,21 @@ def send_gmp(sock, xml_str):
             for tag in ["authenticate_response", "create_target_response",
                         "create_task_response", "start_task_response",
                         "get_tasks_response", "get_reports_response",
-                        "delete_target_response", "delete_task_response"]:
+                        "delete_target_response", "delete_task_response",
+                        "get_port_lists_response"]:
                 if f"</{{tag}}>" in text:
                     return text
         except socket.timeout:
             break
     return response.decode("utf-8", errors="replace")
 
-def get_attr(xml_text, tag, attr):
-    """Extract an attribute from the first occurrence of a tag."""
+def get_status_info(xml_text):
+    """Get the status code and status_text from a GMP response."""
     try:
         root = ET.fromstring(xml_text)
-        elem = root if root.tag.endswith("_response") else root
-        return elem.attrib.get(attr, "")
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
     except ET.ParseError:
-        return ""
-
-def get_status(xml_text):
-    """Get the status code from a GMP response."""
-    return get_attr(xml_text, "", "status")
+        return "", ""
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1394,18 +1396,43 @@ try:
     # Authenticate
     auth_xml = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
     resp = send_gmp(sock, auth_xml)
-    if get_status(resp) != "200":
-        print(f"SCAN:FAILED:Authentication failed")
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}")
         sys.exit(1)
     print("STATUS: Authenticated with GVM")
 
-    # Create target
+    # Find a valid port list — try well-known UUIDs first, then query GVM
+    port_list_id = ""
+    for pl_name, pl_id in PORT_LISTS.items():
+        port_list_id = pl_id
+        break
+    # Verify port list exists by querying GVM
+    resp = send_gmp(sock, '<get_port_lists/>')
+    try:
+        root = ET.fromstring(resp)
+        available_pls = {{}}
+        for pl in root.findall("port_list"):
+            available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
+        # Prefer All IANA TCP and UDP, then All IANA TCP, then first available
+        for preferred in PORT_LISTS.values():
+            if preferred in available_pls:
+                port_list_id = preferred
+                break
+        else:
+            if available_pls:
+                port_list_id = next(iter(available_pls))
+        print(f"STATUS: Using port list {{port_list_id}} ({{available_pls.get(port_list_id, 'unknown')}})")
+    except ET.ParseError:
+        print(f"STATUS: Using default port list {{port_list_id}}")
+
+    # Create target (with port_list_id — required by GVM 22+)
     target_name = f"scan-{{SCAN_ID}}-target"
-    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts></create_target>'
+    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>'
     resp = send_gmp(sock, create_target)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create target failed (status {{status}})")
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -1419,9 +1446,9 @@ try:
     task_name = f"scan-{{SCAN_ID}}-task"
     create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/></create_task>'
     resp = send_gmp(sock, create_task)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create task failed (status {{status}})")
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -1434,9 +1461,9 @@ try:
     # Start task
     start = f'<start_task task_id="{{task_id}}"/>'
     resp = send_gmp(sock, start)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "202"):
-        print(f"SCAN:FAILED:Start task failed (status {{status}})")
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     # Extract report ID from start response
     try:
@@ -1535,6 +1562,10 @@ SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
 # Base config: Full and Fast (we clone it, then replace families)
 BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+}}
 
 def send_gmp(sock, xml_str):
     """Send a GMP command and receive the response."""
@@ -1552,19 +1583,19 @@ def send_gmp(sock, xml_str):
                         "create_task_response", "start_task_response",
                         "get_tasks_response", "get_reports_response",
                         "delete_target_response", "delete_task_response",
-                        "delete_config_response"]:
+                        "delete_config_response", "get_port_lists_response"]:
                 if f"</{{tag}}>" in text:
                     return text
         except socket.timeout:
             break
     return response.decode("utf-8", errors="replace")
 
-def get_status(xml_text):
+def get_status_info(xml_text):
     try:
         root = ET.fromstring(xml_text)
-        return root.attrib.get("status", "")
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
     except ET.ParseError:
-        return ""
+        return "", ""
 
 custom_config_id = None
 
@@ -1577,18 +1608,36 @@ try:
     # Authenticate
     auth_xml = f\'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>\'
     resp = send_gmp(sock, auth_xml)
-    if get_status(resp) != "200":
-        print("SCAN:FAILED:Authentication failed")
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}")
         sys.exit(1)
     print("STATUS: Authenticated with GVM")
+
+    # Find a valid port list
+    port_list_id = PORT_LISTS["all_tcp_udp"]
+    resp = send_gmp(sock, '<get_port_lists/>')
+    try:
+        root = ET.fromstring(resp)
+        available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
+        for preferred in PORT_LISTS.values():
+            if preferred in available_pls:
+                port_list_id = preferred
+                break
+        else:
+            if available_pls:
+                port_list_id = next(iter(available_pls))
+        print(f"STATUS: Using port list {{available_pls.get(port_list_id, port_list_id)}}")
+    except ET.ParseError:
+        pass
 
     # Create custom config by cloning base
     config_name = f"scan-{{SCAN_ID}}-custom-config"
     create_cfg = f\'<create_config><copy>{{BASE_CONFIG_ID}}</copy><name>{{config_name}}</name></create_config>\'
     resp = send_gmp(sock, create_cfg)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create config failed (status {{status}})")
+        print(f"SCAN:FAILED:Create config failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -1601,19 +1650,19 @@ try:
     # Modify config to set selected NVT families
     modify_xml = f\'<modify_config config_id="{{custom_config_id}}"><nvt_family_selection>{families_xml}</nvt_family_selection></modify_config>\'
     resp = send_gmp(sock, modify_xml)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"STATUS: Warning - modify config returned status {{status}}, proceeding anyway")
+        print(f"STATUS: Warning - modify config returned status {{status}}: {{status_text}}")
     else:
         print("STATUS: Configured NVT families on custom config")
 
-    # Create target
+    # Create target (with port_list_id — required by GVM 22+)
     target_name = f"scan-{{SCAN_ID}}-target"
-    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts></create_target>\'
+    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>\'
     resp = send_gmp(sock, create_target)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create target failed (status {{status}})")
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -1627,9 +1676,9 @@ try:
     task_name = f"scan-{{SCAN_ID}}-task"
     create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
     resp = send_gmp(sock, create_task)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create task failed (status {{status}})")
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -1642,9 +1691,9 @@ try:
     # Start task
     start = f\'<start_task task_id="{{task_id}}"/>\'
     resp = send_gmp(sock, start)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "202"):
-        print(f"SCAN:FAILED:Start task failed (status {{status}})")
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
