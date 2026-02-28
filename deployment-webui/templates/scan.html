@@ -92,7 +92,7 @@
                         :class="profile === 'thorough' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
                     Thorough
                 </button>
-                <button @click="profile = 'custom'; fetchModules()"
+                <button @click="profile = 'custom'; fetchModules(); fetchOpenvasData()"
                         class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
                         :class="profile === 'custom' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
                     Custom
@@ -135,8 +135,8 @@
                 </table>
             </div>
 
-            <!-- Custom Module Picker (visible when Custom profile selected) -->
-            <div x-show="profile === 'custom' && modulesLoaded" x-collapse class="mt-3">
+            <!-- Custom Module Picker (visible when Custom profile + Metasploit selected) -->
+            <div x-show="profile === 'custom' && selectedTools.includes('metasploit') && modulesLoaded" x-collapse class="mt-3">
                 <div class="bg-gray-700/50 rounded-lg p-4">
                     <div class="flex items-center justify-between mb-3">
                         <div class="flex items-center gap-3">
@@ -202,18 +202,103 @@
                     </div>
                 </div>
             </div>
+
+            <!-- OpenVAS Custom Configuration (visible when Custom profile + OpenVAS selected) -->
+            <div x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasDataLoaded" x-collapse class="mt-3">
+                <div class="bg-gray-700/50 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <span class="text-gray-300 font-medium">OpenVAS Configuration</span>
+                        <div class="flex gap-2">
+                            <button @click="openvasCustomMode = 'preset'"
+                                    class="px-2 py-1 text-xs rounded transition-colors"
+                                    :class="openvasCustomMode === 'preset' ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'">
+                                Preset Config
+                            </button>
+                            <button @click="openvasCustomMode = 'families'"
+                                    class="px-2 py-1 text-xs rounded transition-colors"
+                                    :class="openvasCustomMode === 'families' ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'">
+                                NVT Families
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Preset Config Selection -->
+                    <div x-show="openvasCustomMode === 'preset'">
+                        <p class="text-xs text-gray-500 mb-3">Select a scan configuration available on your GVM installation.</p>
+                        <div class="space-y-1 max-h-64 overflow-y-auto pr-2">
+                            <template x-for="cfg in openvasConfigs" :key="cfg.id">
+                                <label class="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-700/50 text-sm"
+                                       :class="selectedOpenvasConfig === cfg.id ? 'bg-gray-700/80 ring-1 ring-cyan-500' : ''">
+                                    <input type="radio"
+                                           name="openvas_config"
+                                           :value="cfg.id"
+                                           x-model="selectedOpenvasConfig"
+                                           class="accent-cyan-500">
+                                    <div>
+                                        <span class="text-gray-200" x-text="cfg.name"></span>
+                                        <span class="text-xs text-gray-500 ml-2" x-text="cfg.id"></span>
+                                    </div>
+                                </label>
+                            </template>
+                            <div x-show="openvasConfigs.length === 0" class="text-gray-500 text-sm p-2">
+                                No configs found. Is OpenVAS running?
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NVT Family Selection -->
+                    <div x-show="openvasCustomMode === 'families'">
+                        <div class="flex items-center justify-between mb-3">
+                            <p class="text-xs text-gray-500">Select NVT families to include. Each family contains many individual vulnerability tests.</p>
+                            <div class="flex gap-2 flex-shrink-0 ml-4">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :class="selectedOpenvasFamilies.length > 0 ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-400'"
+                                      x-text="selectedOpenvasFamilies.length + ' / ' + openvasFamilies.length + ' families'"></span>
+                                <button @click="selectedOpenvasFamilies = openvasFamilies.map(f => f.name)"
+                                        class="px-2 py-0.5 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                    All
+                                </button>
+                                <button @click="selectedOpenvasFamilies = []"
+                                        class="px-2 py-0.5 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                    None
+                                </button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-1 max-h-72 overflow-y-auto pr-2">
+                            <template x-for="fam in openvasFamilies" :key="fam.name">
+                                <label class="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-gray-700/50 text-xs">
+                                    <input type="checkbox"
+                                           :value="fam.name"
+                                           :checked="selectedOpenvasFamilies.includes(fam.name)"
+                                           @change="toggleOpenvasFamily(fam.name)"
+                                           class="accent-cyan-500">
+                                    <span class="text-gray-200" x-text="fam.name"></span>
+                                    <span class="text-gray-500" x-text="'(' + fam.nvt_count + ' NVTs)'"></span>
+                                </label>
+                            </template>
+                            <div x-show="openvasFamilies.length === 0" class="text-gray-500 text-sm p-2 col-span-2">
+                                No NVT families found. Is OpenVAS running?
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Start Button -->
         <button
             @click="startScan"
-            :disabled="!target.trim() || selectedTools.length === 0 || (profile === 'custom' && selectedTools.includes('metasploit') && customModules.length === 0)"
+            :disabled="!target.trim() || selectedTools.length === 0 || customSelectionIncomplete"
             class="px-6 py-3 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
             Start Scan
         </button>
         <span x-show="profile === 'custom' && selectedTools.includes('metasploit') && customModules.length === 0"
               class="text-xs text-yellow-400 ml-3">Select at least one Metasploit module</span>
+        <span x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasCustomMode === 'families' && selectedOpenvasFamilies.length === 0"
+              class="text-xs text-yellow-400 ml-3">Select at least one OpenVAS NVT family</span>
+        <span x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasCustomMode === 'preset' && !selectedOpenvasConfig"
+              class="text-xs text-yellow-400 ml-3">Select an OpenVAS scan config</span>
     </div>
 
     <!-- Scan Progress (visible during/after scan) -->
