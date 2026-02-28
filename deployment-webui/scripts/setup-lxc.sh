@@ -114,13 +114,13 @@ fi
 # Setup application directory
 mkdir -p "$APP_DIR"
 
-# Copy web UI files if repository exists
+# Symlink web UI files from repository (so git pull updates the running app)
 if [ -d "$REPO_PATH/deployment-webui" ]; then
-    echo "Copying web UI files from repository..."
-    cp -r "$REPO_PATH/deployment-webui/app" "$APP_DIR/"
-    cp -r "$REPO_PATH/deployment-webui/static" "$APP_DIR/"
-    cp -r "$REPO_PATH/deployment-webui/templates" "$APP_DIR/"
-    cp "$REPO_PATH/deployment-webui/requirements.txt" "$APP_DIR/"
+    echo "Symlinking web UI files from repository..."
+    for item in app static templates requirements.txt; do
+        rm -rf "$APP_DIR/$item"
+        ln -sf "$REPO_PATH/deployment-webui/$item" "$APP_DIR/$item"
+    done
 fi
 
 # Create Python virtual environment and install dependencies
