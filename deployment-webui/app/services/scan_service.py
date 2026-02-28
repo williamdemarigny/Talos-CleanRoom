@@ -1366,7 +1366,7 @@ def send_gmp(sock, xml_str):
                         "create_task_response", "start_task_response",
                         "get_tasks_response", "get_reports_response",
                         "delete_target_response", "delete_task_response"]:
-                if f"</{tag}>" in text:
+                if f"</{{tag}}>" in text:
                     return text
         except socket.timeout:
             break
