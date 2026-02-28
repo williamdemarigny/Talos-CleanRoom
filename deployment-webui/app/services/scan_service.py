@@ -596,6 +596,108 @@ MSF_MODULE_CATALOG = [
         "description": "Elasticsearch index enumeration",
         "profiles": [],
     },
+    # --- Additional Web Discovery ---
+    {
+        "id": "auxiliary/scanner/http/open_proxy",
+        "name": "Open Proxy",
+        "category": "Additional Web",
+        "description": "Open HTTP proxy detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/sqli_simple",
+        "name": "SQL Injection Check",
+        "category": "Additional Web",
+        "description": "Simple SQL injection detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/iis_shortname_scanner",
+        "name": "IIS Short Name",
+        "category": "Additional Web",
+        "description": "IIS 8.3 short filename enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/svn_scanner",
+        "name": "SVN Repository",
+        "category": "Additional Web",
+        "description": "Exposed SVN repository detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/git_scanner",
+        "name": "Git Repository",
+        "category": "Additional Web",
+        "description": "Exposed .git directory detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/owa_login",
+        "name": "Outlook Web Access",
+        "category": "Additional Web",
+        "description": "OWA login page detection",
+        "profiles": [],
+    },
+    # --- Additional Service Discovery ---
+    {
+        "id": "auxiliary/scanner/misc/java_rmi_server",
+        "name": "Java RMI",
+        "category": "Additional Network",
+        "description": "Java RMI registry detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/x11/open_x11",
+        "name": "Open X11",
+        "category": "Additional Network",
+        "description": "Open X11 display detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rlogin_login",
+        "name": "rlogin Access",
+        "category": "Additional Network",
+        "description": "rlogin unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rsh_login",
+        "name": "rsh Access",
+        "category": "Additional Network",
+        "description": "rsh unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/llmnr/query",
+        "name": "LLMNR Query",
+        "category": "Additional Network",
+        "description": "LLMNR poisoning target detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/mdns/query",
+        "name": "mDNS Query",
+        "category": "Additional Network",
+        "description": "mDNS service discovery",
+        "profiles": [],
+    },
+    # --- IPMI Extended ---
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_dumphashes",
+        "name": "IPMI Hash Dump",
+        "category": "Additional Network",
+        "description": "IPMI password hash extraction",
+        "profiles": [],
+    },
+    # --- Printer/IoT ---
+    {
+        "id": "auxiliary/scanner/printer/printer_list_volumes",
+        "name": "Printer Volumes",
+        "category": "Additional Network",
+        "description": "Network printer volume enumeration",
+        "profiles": [],
+    },
 ]
 
 
