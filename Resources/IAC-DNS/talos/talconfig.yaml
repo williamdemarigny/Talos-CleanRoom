@@ -84,9 +84,6 @@ patches:
         - name: nvme_tcp
         - name: vfio_pci
         - name: uio_pci_generic
-        # Required by Longhorn (iSCSI storage engine)
-        - name: iscsi_tcp
-        - name: configfs
 # Control plane specific configuration
 controlPlane:
   patches:
@@ -136,20 +133,5 @@ worker:
         image: factory.talos.dev/metal-installer/88d1f7a5c4f1d3aba7df787c448c1d3d008ed29cfb34af53fa0df4336a56040b:v1.12.2
   # Note: node-role.kubernetes.io/* labels are protected and cannot be self-applied
   # The node-type: worker label is already set in per-node config above
-  # Longhorn storage configuration - mount secondary disk for Longhorn
-  - |-
-    machine:
-      kubelet:
-        extraMounts:
-          - destination: /var/lib/longhorn
-            type: bind
-            source: /var/lib/longhorn
-            options:
-              - bind
-              - rshared
-              - rw
-      disks:
-        - device: /dev/vdb
-          partitions:
-            - mountpoint: /var/lib/longhorn
+  # Storage: Ceph CSI (rbd module built into kernel, no local disk needed)
 

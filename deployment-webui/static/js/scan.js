@@ -7,6 +7,19 @@ function scanManager() {
         selectedTools: ['nmap'],
         profile: 'standard',
 
+        // Custom module state (Metasploit)
+        customModules: [],
+        moduleCatalog: [],
+        modulesLoaded: false,
+
+        // Custom OpenVAS state
+        openvasConfigs: [],
+        openvasFamilies: [],
+        selectedOpenvasConfig: null,
+        selectedOpenvasFamilies: [],
+        openvasCustomMode: 'preset',
+        openvasDataLoaded: false,
+
         // Scan state
         status: 'idle',
         scanTarget: '',
@@ -28,7 +41,8 @@ function scanManager() {
         profileDescriptions: {
             'quick': 'Fast discovery scan. Best for initial reconnaissance.',
             'standard': 'Service detection + vulnerability scanning. Recommended for most assessments.',
-            'thorough': 'Full port scan + comprehensive vulnerability checks. Slowest but most complete.'
+            'thorough': 'Full port scan + comprehensive vulnerability checks. Slowest but most complete.',
+            'custom': 'Choose individual Metasploit modules and OpenVAS scan configuration. Configure each tool below.'
         },
 
         showProfileInfo: false,
@@ -75,6 +89,24 @@ function scanManager() {
         get filteredLogs() {
             if (!this.logFilter) return this.logs;
             return this.logs.filter(l => l.tool === this.logFilter || !l.tool);
+        },
+
+        get customSelectionIncomplete() {
+            if (this.profile !== 'custom') return false;
+            // Check Metasploit: need at least one module
+            if (this.selectedTools.includes('metasploit') && this.customModules.length === 0) {
+                return true;
+            }
+            // Check OpenVAS: need a config selected or at least one family
+            if (this.selectedTools.includes('openvas')) {
+                if (this.openvasCustomMode === 'preset' && !this.selectedOpenvasConfig) {
+                    return true;
+                }
+                if (this.openvasCustomMode === 'families' && this.selectedOpenvasFamilies.length === 0) {
+                    return true;
+                }
+            }
+            return false;
         },
 
         get statusBannerClass() {
@@ -285,15 +317,27 @@ function scanManager() {
         async startScan() {
             if (!this.target.trim() || this.selectedTools.length === 0) return;
 
+            const payload = {
+                target: this.target,
+                tools: this.selectedTools,
+                profile: this.profile
+            };
+            if (this.profile === 'custom' && this.customModules.length > 0) {
+                payload.custom_modules = this.customModules;
+            }
+            if (this.profile === 'custom' && this.selectedTools.includes('openvas')) {
+                if (this.openvasCustomMode === 'preset' && this.selectedOpenvasConfig) {
+                    payload.openvas_config = this.selectedOpenvasConfig;
+                } else if (this.openvasCustomMode === 'families' && this.selectedOpenvasFamilies.length > 0) {
+                    payload.openvas_families = this.selectedOpenvasFamilies;
+                }
+            }
+
             try {
                 const response = await fetch('/api/scan/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        target: this.target,
-                        tools: this.selectedTools,
-                        profile: this.profile
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 if (response.ok) {
@@ -373,6 +417,95 @@ function scanManager() {
                 this.history = data.history || [];
             } catch (e) {
                 console.error('Failed to fetch scan history:', e);
+            }
+        },
+
+        // =================================================================
+        // Custom Module Selection
+        // =================================================================
+
+        async fetchModules() {
+            if (this.modulesLoaded) return;
+            try {
+                const response = await fetch('/api/scan/modules');
+                const data = await response.json();
+                this.moduleCatalog = data.modules || [];
+                this.modulesLoaded = true;
+            } catch (e) {
+                console.error('Failed to fetch module catalog:', e);
+            }
+        },
+
+        get moduleCategories() {
+            const cats = [];
+            for (const mod of this.moduleCatalog) {
+                if (!cats.includes(mod.category)) {
+                    cats.push(mod.category);
+                }
+            }
+            return cats;
+        },
+
+        categoryModules(category) {
+            return this.moduleCatalog.filter(m => m.category === category);
+        },
+
+        toggleModule(moduleId) {
+            const idx = this.customModules.indexOf(moduleId);
+            if (idx >= 0) {
+                this.customModules.splice(idx, 1);
+            } else {
+                this.customModules.push(moduleId);
+            }
+        },
+
+        selectCategory(category) {
+            const mods = this.categoryModules(category);
+            for (const mod of mods) {
+                if (!this.customModules.includes(mod.id)) {
+                    this.customModules.push(mod.id);
+                }
+            }
+        },
+
+        deselectCategory(category) {
+            const ids = this.categoryModules(category).map(m => m.id);
+            this.customModules = this.customModules.filter(id => !ids.includes(id));
+        },
+
+        loadPreset(preset) {
+            this.customModules = this.moduleCatalog
+                .filter(m => m.profiles.includes(preset))
+                .map(m => m.id);
+        },
+
+        // =================================================================
+        // OpenVAS Custom Configuration
+        // =================================================================
+
+        async fetchOpenvasData() {
+            if (this.openvasDataLoaded) return;
+            try {
+                const [configResp, familyResp] = await Promise.all([
+                    fetch('/api/scan/openvas-configs'),
+                    fetch('/api/scan/openvas-families')
+                ]);
+                const configData = await configResp.json();
+                const familyData = await familyResp.json();
+                this.openvasConfigs = configData.configs || [];
+                this.openvasFamilies = familyData.families || [];
+                this.openvasDataLoaded = true;
+            } catch (e) {
+                console.error('Failed to fetch OpenVAS data:', e);
+            }
+        },
+
+        toggleOpenvasFamily(name) {
+            const idx = this.selectedOpenvasFamilies.indexOf(name);
+            if (idx >= 0) {
+                this.selectedOpenvasFamilies.splice(idx, 1);
+            } else {
+                this.selectedOpenvasFamilies.push(name);
             }
         },
 

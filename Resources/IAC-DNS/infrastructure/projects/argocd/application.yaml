@@ -20,7 +20,7 @@ spec:
           - $values/Resources/IAC-DNS/infrastructure/argocd/values.yaml
     # Git repo containing values.yaml
     - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-      targetRevision: main
+      targetRevision: longhorn-to-ceph-csi
       ref: values
   destination:
     server: https://kubernetes.default.svc

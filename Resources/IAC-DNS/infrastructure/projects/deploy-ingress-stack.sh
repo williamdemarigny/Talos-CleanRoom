@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Kubernetes Infrastructure Stack Deployment Script
-# Deploys: MetalLB -> cert-manager -> Traefik -> Longhorn
+# Deploys: MetalLB -> cert-manager -> Traefik -> Ceph CSI RBD
 #
 # Prerequisites:
 # - Kubernetes cluster is running (Talos)
@@ -86,7 +86,7 @@ echo ""
 # ArgoCD's CreateNamespace=true only creates the namespace AFTER fetching and rendering the
 # Helm chart, which can be slow. Pre-creating avoids that race condition entirely.
 echo "Pre-creating namespaces..."
-for ns in metallb-system cert-manager traefik longhorn-system; do
+for ns in metallb-system cert-manager traefik ceph-csi; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null
 done
 echo "✓ Namespaces ready"
@@ -163,268 +163,126 @@ echo "✓ Wildcard certificate applied (uses letsencrypt-staging by default)"
 echo "  Note: Switch to letsencrypt-prod after testing"
 echo ""
 
-# Deploy Longhorn
-echo "[10/12] Deploying Longhorn..."
-# Note: The Longhorn Helm chart creates its own 'longhorn-critical' PriorityClass
-kubectl apply -f "${SCRIPT_DIR}/longhorn/application.yaml"
+# Deploy Ceph CSI RBD
+echo "[10/12] Deploying Ceph CSI RBD..."
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+CEPH_STORAGE_DIR="${REPO_ROOT}/ceph-storage"
 
-echo "Waiting for Longhorn to be ready..."
+# 1. Apply CephX secret (SOPS-encrypted)
+echo "  Applying Ceph CSI secret..."
+if [[ -f "${CEPH_STORAGE_DIR}/ceph-csi-secret.sops.yaml" ]]; then
+    sops -d "${CEPH_STORAGE_DIR}/ceph-csi-secret.sops.yaml" | kubectl apply -f -
+    echo "  ✓ Ceph CSI secret applied"
+elif [[ -f "${CEPH_STORAGE_DIR}/ceph-csi-secret.yaml" ]]; then
+    echo "  Warning: Using unencrypted secret (encrypt with SOPS for production)"
+    kubectl apply -f "${CEPH_STORAGE_DIR}/ceph-csi-secret.yaml"
+    echo "  ✓ Ceph CSI secret applied (unencrypted)"
+else
+    echo "  Error: No Ceph CSI secret found in ${CEPH_STORAGE_DIR}/"
+    exit 1
+fi
 
-# 1. Wait for longhorn-manager DaemonSet — one pod per node, core of Longhorn
-echo "  Waiting for longhorn-manager DaemonSet..."
-for i in $(seq 1 36); do
-    DESIRED=$(kubectl get daemonset longhorn-manager -n longhorn-system -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
-    READY=$(kubectl get daemonset longhorn-manager -n longhorn-system -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
-    if [[ "$DESIRED" -gt 0 && "$READY" -eq "$DESIRED" ]]; then
-        echo "  ✓ longhorn-manager: $READY/$DESIRED pods ready"
+# 2. Apply ArgoCD Application for ceph-csi-rbd Helm chart
+echo "  Applying Ceph CSI ArgoCD application..."
+kubectl apply -f "${CEPH_STORAGE_DIR}/application.yaml"
+
+# 3. Wait for csi-rbdplugin-provisioner Deployment (controller)
+# On freshly bootstrapped clusters, kubelet configmap cache sync can take 8-12 minutes
+echo "  Waiting for csi-rbdplugin-provisioner (up to 15 minutes on fresh clusters)..."
+PROVISIONER_READY=false
+for i in $(seq 1 90); do
+    REPLICAS=$(kubectl get deployment ceph-csi-rbd-provisioner -n ceph-csi \
+        -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
+    if [[ "$REPLICAS" =~ ^[1-9] ]]; then
+        echo "  ✓ csi-rbdplugin-provisioner ready ($REPLICAS replicas)"
+        PROVISIONER_READY=true
         break
     fi
-    echo "  longhorn-manager: $READY/$DESIRED ready... ($i/36)"
+    echo "  Waiting for provisioner... ($i/90)"
     sleep 10
 done
-if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
+if [[ "$PROVISIONER_READY" != "true" ]]; then
     echo ""
-    echo "  ===== longhorn-manager DaemonSet not fully ready ($READY/$DESIRED) ====="
+    echo "  ===== Ceph CSI provisioner not available — diagnostics ====="
     echo ""
-    echo "  --- All longhorn-manager pods (node placement + status) ---"
-    kubectl get pods -n longhorn-system -l app=longhorn-manager -o wide 2>/dev/null || true
+    echo "  --- Deployments in ceph-csi namespace ---"
+    kubectl get deployments -n ceph-csi -o wide 2>/dev/null || true
     echo ""
-    echo "  --- Non-running pods detail ---"
-    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
-        --field-selector=status.phase!=Running -o name 2>/dev/null); do
-        echo "  >>> $pod <<<"
-        kubectl describe "$pod" -n longhorn-system 2>/dev/null | tail -20
-        echo ""
-    done
-    echo "  --- Container logs from crash-looping pods ---"
-    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
-        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-        echo "  >>> $pod (last 30 lines) <<<"
-        kubectl logs "$pod" -n longhorn-system --tail=30 2>/dev/null || \
-            kubectl logs "$pod" -n longhorn-system --previous --tail=30 2>/dev/null || \
-            echo "  (no logs available)"
-        echo ""
-    done
-    echo "  --- Kubernetes node conditions ---"
-    kubectl get nodes -o wide 2>/dev/null || true
+    echo "  --- Pods in ceph-csi namespace ---"
+    kubectl get pods -n ceph-csi -o wide 2>/dev/null || true
     echo ""
-    echo "  --- Recent longhorn-system events (warnings/errors) ---"
-    kubectl get events -n longhorn-system --field-selector type!=Normal \
-        --sort-by='.lastTimestamp' 2>/dev/null | tail -10 || true
+    echo "  --- ArgoCD Application status ---"
+    kubectl get application ceph-csi-rbd -n argocd \
+        -o jsonpath='  sync={.status.sync.status} health={.status.health.status}' 2>/dev/null || true
+    echo ""
+    echo "  --- Recent ceph-csi events (warnings) ---"
+    kubectl get events -n ceph-csi --field-selector type!=Normal \
+        --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
     echo ""
     echo "  Troubleshooting tips:"
-    echo "    - Check if the failing node's /dev/vdb disk exists: talosctl -n <node-ip> disks"
-    echo "    - Check mount status: talosctl -n <node-ip> get mounts | grep longhorn"
-    echo "    - Check kubelet logs: talosctl -n <node-ip> logs kubelet | grep -i longhorn"
-    echo "    - Check loaded kernel modules: talosctl -n <node-ip> read /proc/modules | grep iscsi"
+    echo "    - Verify Ceph monitors are reachable: kubectl exec -n ceph-csi <pod> -- ceph -s"
+    echo "    - Check secret: kubectl get secret csi-rbd-secret -n ceph-csi -o yaml"
+    echo "    - Check ConfigMap: kubectl get configmap ceph-csi-config -n ceph-csi -o yaml"
     exit 1
 fi
 
-# 2. Poll for CSI controllers (created by longhorn-driver-deployer after manager is ready)
-echo "  Waiting for Longhorn CSI controllers..."
-for component in csi-attacher csi-provisioner csi-resizer csi-snapshotter; do
-    # Poll until the deployment exists and is available (up to 6 min)
-    FOUND=false
-    for i in $(seq 1 36); do
-        REPLICAS=$(kubectl get deployment ${component} -n longhorn-system -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo "")
-        if [[ "$REPLICAS" =~ ^[1-9] ]]; then
-            echo "  ✓ ${component} ready ($REPLICAS replicas available)"
-            FOUND=true
-            break
-        fi
-        echo "  Waiting for ${component}... ($i/36)"
-        sleep 10
-    done
-    if [[ "$FOUND" != true ]]; then
-        echo ""
-        echo "  ===== CSI component ${component} not available — diagnostics ====="
-        echo ""
-        echo "  --- All deployments in longhorn-system ---"
-        kubectl get deployments -n longhorn-system -o wide 2>/dev/null || true
-        echo ""
-        echo "  --- longhorn-driver-deployer pod status ---"
-        kubectl get pods -n longhorn-system -l app=longhorn-driver-deployer -o wide 2>/dev/null || true
-        echo ""
-        echo "  --- longhorn-driver-deployer logs ---"
-        for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-driver-deployer \
-            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            echo "  >>> $pod <<<"
-            kubectl logs "$pod" -n longhorn-system --tail=40 2>/dev/null || echo "  (no logs)"
-        done
-        echo ""
-        echo "  --- CSI-related pods ---"
-        kubectl get pods -n longhorn-system 2>/dev/null | grep -E "csi|driver" || echo "  (none found)"
-        echo ""
-        echo "  --- Recent longhorn-system events (warnings) ---"
-        kubectl get events -n longhorn-system --field-selector type!=Normal \
-            --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
-        echo ""
-        echo "  --- ArgoCD Application status for longhorn ---"
-        kubectl get application longhorn -n argocd \
-            -o jsonpath='  sync={.status.sync.status} health={.status.health.status}' 2>/dev/null || true
-        echo ""
-        kubectl get application longhorn -n argocd \
-            -o jsonpath='{.status.conditions[*].message}' 2>/dev/null || true
-        echo ""
-        exit 1
-    fi
-done
-
-# 3. Wait for longhorn-csi-plugin DaemonSet — per-node volume mount driver
-echo "  Waiting for longhorn-csi-plugin DaemonSet..."
+# 4. Wait for csi-rbdplugin DaemonSet (node plugin — mounts RBD on each node)
+echo "  Waiting for csi-rbdplugin DaemonSet..."
 for i in $(seq 1 36); do
-    DESIRED=$(kubectl get daemonset longhorn-csi-plugin -n longhorn-system -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
-    READY=$(kubectl get daemonset longhorn-csi-plugin -n longhorn-system -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
+    DESIRED=$(kubectl get daemonset ceph-csi-rbd-nodeplugin -n ceph-csi \
+        -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
+    READY=$(kubectl get daemonset ceph-csi-rbd-nodeplugin -n ceph-csi \
+        -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
     if [[ "$DESIRED" -gt 0 && "$READY" -eq "$DESIRED" ]]; then
-        echo "  ✓ longhorn-csi-plugin: $READY/$DESIRED pods ready"
+        echo "  ✓ csi-rbdplugin: $READY/$DESIRED pods ready"
         break
     fi
-    echo "  longhorn-csi-plugin: $READY/$DESIRED ready... ($i/36)"
+    echo "  csi-rbdplugin: $READY/$DESIRED ready... ($i/36)"
     sleep 10
 done
 if [[ "$READY" -ne "$DESIRED" || "$DESIRED" -eq 0 ]]; then
-    echo "  Error: longhorn-csi-plugin not fully ready ($READY/$DESIRED)"
-    kubectl get pods -n longhorn-system -l app=longhorn-csi-plugin -o wide 2>/dev/null || true
+    echo "  Error: csi-rbdplugin DaemonSet not fully ready ($READY/$DESIRED)"
+    kubectl get pods -n ceph-csi -l app=ceph-csi-rbd -o wide 2>/dev/null || true
     exit 1
 fi
 
-# 4. Wait for Longhorn UI
-echo "  Waiting for Longhorn UI..."
-wait_for_deployment longhorn-ui longhorn-system 300
+# 5. Apply StorageClass
+echo "  Applying Ceph RBD StorageClass..."
+kubectl apply -f "${CEPH_STORAGE_DIR}/storageclass.yaml"
+echo "  ✓ StorageClass 'ceph-rbd' created (default)"
 
-# 5. Verify Longhorn webhook configurations exist (webhooks are built into longhorn-manager)
-echo "  Verifying Longhorn webhooks..."
-for webhook in longhorn-webhook-mutator longhorn-webhook-validator; do
-    if kubectl get mutatingwebhookconfiguration ${webhook} &>/dev/null || \
-       kubectl get validatingwebhookconfiguration ${webhook} &>/dev/null; then
-        echo "  ✓ ${webhook} configured"
-    else
-        echo "  Note: ${webhook} not found (webhooks built into longhorn-manager in v1.7+)"
-    fi
-done
-
-# 6. Verify Engine Image is deployed on all nodes
-echo "  Verifying Longhorn engine image..."
-for i in $(seq 1 24); do
-    STATE=$(kubectl get engineimages.longhorn.io -n longhorn-system -o jsonpath='{.items[0].status.state}' 2>/dev/null || echo "")
-    if [[ "$STATE" == "deployed" ]]; then
-        echo "  ✓ Engine image deployed"
-        break
-    fi
-    echo "  Engine image state: ${STATE:-pending}... ($i/24)"
-    sleep 5
-done
-[[ "$STATE" == "deployed" ]] || { echo "Error: Longhorn engine image never became deployed"; exit 1; }
-
-# 7. Verify Longhorn nodes are registered and schedulable
-echo "  Verifying Longhorn nodes..."
-WORKER_NODES=$(kubectl get nodes --no-headers -l '!node-role.kubernetes.io/control-plane' 2>/dev/null | wc -l || echo "0")
-if [[ "$WORKER_NODES" -eq 0 ]]; then
-    WORKER_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l || echo "1")
-fi
-for i in $(seq 1 24); do
-    READY_NODES=$(kubectl get nodes.longhorn.io -n longhorn-system --no-headers 2>/dev/null | grep -c "True" || echo "0")
-    if [[ "$READY_NODES" -ge "$WORKER_NODES" ]]; then
-        echo "  ✓ All $READY_NODES Longhorn nodes ready"
-        break
-    fi
-    echo "  Longhorn nodes: $READY_NODES/$WORKER_NODES ready... ($i/24)"
-    sleep 5
-done
-[[ "$READY_NODES" -ge "$WORKER_NODES" ]] || { echo "Warning: Not all Longhorn nodes are ready ($READY_NODES/$WORKER_NODES)"; }
-
-# 8. Wait for Longhorn nodes to have schedulable disk storage
-# Nodes can report "ready" before their disks are fully discovered and initialized.
-# With defaultReplicaCount=2, we need at least 2 nodes with schedulable storage.
-echo "  Waiting for Longhorn node disks to become schedulable..."
-MIN_SCHEDULABLE=2
-for i in $(seq 1 36); do
-    SCHEDULABLE=$(kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
-        python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    count = 0
-    for node in data.get('items', []):
-        disks = node.get('status', {}).get('diskStatus', {})
-        for disk_id, disk in disks.items():
-            conditions = disk.get('conditions', {})
-            schedulable = conditions.get('Schedulable', {})
-            if schedulable.get('status') == 'True':
-                storage = disk.get('storageAvailable', 0)
-                if storage > 0:
-                    count += 1
-                    break
-    print(count)
-except:
-    print(0)
-" 2>/dev/null || echo "0")
-    if [[ "$SCHEDULABLE" -ge "$MIN_SCHEDULABLE" ]]; then
-        echo "  ✓ $SCHEDULABLE Longhorn nodes have schedulable disk storage"
-        break
-    fi
-    echo "  Schedulable nodes: $SCHEDULABLE/$MIN_SCHEDULABLE... ($i/36)"
-    sleep 10
-done
-if [[ "$SCHEDULABLE" -lt "$MIN_SCHEDULABLE" ]]; then
-    echo "  Warning: Only $SCHEDULABLE/$MIN_SCHEDULABLE nodes have schedulable storage"
-    echo "  --- Longhorn node disk status ---"
-    kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
-        python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for node in data.get('items', []):
-        name = node['metadata']['name']
-        disks = node.get('status', {}).get('diskStatus', {})
-        print(f'  Node: {name}')
-        if not disks:
-            print(f'    No disks registered')
-        for disk_id, disk in disks.items():
-            conditions = disk.get('conditions', {})
-            schedulable = conditions.get('Schedulable', {}).get('status', 'Unknown')
-            ready = conditions.get('Ready', {}).get('status', 'Unknown')
-            avail = disk.get('storageAvailable', 0)
-            total = disk.get('storageMaximum', 0)
-            print(f'    Disk {disk_id}: schedulable={schedulable} ready={ready} avail={avail/(1024**3):.1f}Gi total={total/(1024**3):.1f}Gi')
-except Exception as e:
-    print(f'  (parse error: {e})')
-" 2>/dev/null || echo "  (could not parse node status)"
-fi
-
-# 9. Verify the Longhorn StorageClass exists — confirms CSI is registered (was step 8)
-echo "  Verifying Longhorn StorageClass..."
+# 6. Verify StorageClass is registered
+echo "  Verifying StorageClass..."
 for i in $(seq 1 12); do
-    if kubectl get storageclass longhorn &>/dev/null; then
-        echo "  ✓ StorageClass 'longhorn' registered"
+    if kubectl get storageclass ceph-rbd &>/dev/null; then
+        echo "  ✓ StorageClass 'ceph-rbd' registered"
         break
     fi
     echo "  Waiting for StorageClass... ($i/12)"
-    sleep 10
+    sleep 5
 done
-kubectl get storageclass longhorn || { echo "Error: Longhorn StorageClass never appeared"; exit 1; }
+kubectl get storageclass ceph-rbd &>/dev/null || { echo "Error: ceph-rbd StorageClass not found"; exit 1; }
 
-# 10. Create and verify a test PVC — the definitive operational test
-echo "  Testing Longhorn with a test PVC..."
+# 7. Test with a PVC — the definitive operational test
+echo "  Testing Ceph CSI with a test PVC..."
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: longhorn-test-pvc
-  namespace: longhorn-system
+  name: ceph-rbd-test-pvc
+  namespace: ceph-csi
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
   resources:
     requests:
       storage: 1Gi
 EOF
 
-# Wait for PVC to bind (up to 3 minutes)
 PVC_BOUND=false
 for i in $(seq 1 36); do
-    PHASE=$(kubectl get pvc longhorn-test-pvc -n longhorn-system -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    PHASE=$(kubectl get pvc ceph-rbd-test-pvc -n ceph-csi -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
     if [[ "$PHASE" == "Bound" ]]; then
         echo "  ✓ Test PVC bound successfully"
         PVC_BOUND=true
@@ -439,64 +297,28 @@ if [[ "$PVC_BOUND" != true ]]; then
     echo "  ===== Test PVC failed to bind — diagnostics ====="
     echo ""
     echo "  --- PVC details ---"
-    kubectl describe pvc longhorn-test-pvc -n longhorn-system 2>/dev/null || true
+    kubectl describe pvc ceph-rbd-test-pvc -n ceph-csi 2>/dev/null || true
     echo ""
-    echo "  --- Longhorn volumes ---"
-    kubectl get volumes.longhorn.io -n longhorn-system 2>/dev/null || true
-    echo ""
-    echo "  --- Longhorn node disk status ---"
-    kubectl get nodes.longhorn.io -n longhorn-system -o json 2>/dev/null | \
-        python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for node in data.get('items', []):
-        name = node['metadata']['name']
-        allow = node.get('spec', {}).get('allowScheduling', False)
-        disks_spec = node.get('spec', {}).get('disks', {})
-        disks_status = node.get('status', {}).get('diskStatus', {})
-        print(f'  Node: {name}  allowScheduling={allow}')
-        if not disks_spec and not disks_status:
-            print(f'    No disks configured or detected')
-        for disk_id in set(list(disks_spec.keys()) + list(disks_status.keys())):
-            spec = disks_spec.get(disk_id, {})
-            status = disks_status.get(disk_id, {})
-            path = spec.get('path', 'unknown')
-            sched = spec.get('allowScheduling', False)
-            conditions = status.get('conditions', {})
-            s_sched = conditions.get('Schedulable', {}).get('status', 'Unknown')
-            s_ready = conditions.get('Ready', {}).get('status', 'Unknown')
-            s_reason = conditions.get('Schedulable', {}).get('reason', '')
-            avail = status.get('storageAvailable', 0)
-            total = status.get('storageMaximum', 0)
-            print(f'    Disk {disk_id}: path={path} allowScheduling={sched}')
-            print(f'      schedulable={s_sched} ready={s_ready} reason={s_reason}')
-            print(f'      available={avail/(1024**3):.1f}Gi total={total/(1024**3):.1f}Gi')
-except Exception as e:
-    print(f'  (parse error: {e})')
-" 2>/dev/null || echo "  (could not parse node status)"
-    echo ""
-    echo "  --- Recent longhorn-system events ---"
-    kubectl get events -n longhorn-system --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
-    echo ""
-    echo "  --- Longhorn manager logs (last 20 lines per pod) ---"
-    for pod in $(kubectl get pods -n longhorn-system -l app=longhorn-manager \
+    echo "  --- Provisioner logs ---"
+    for pod in $(kubectl get pods -n ceph-csi -l app=ceph-csi-rbd-provisioner \
         -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
         echo "  >>> $pod <<<"
-        kubectl logs "$pod" -n longhorn-system --tail=20 2>/dev/null || echo "  (no logs)"
+        kubectl logs "$pod" -n ceph-csi -c csi-rbdplugin --tail=30 2>/dev/null || echo "  (no logs)"
         echo ""
     done
+    echo "  --- Recent ceph-csi events ---"
+    kubectl get events -n ceph-csi --sort-by='.lastTimestamp' 2>/dev/null | tail -15 || true
 fi
 
-# Cleanup test PVC regardless of result
-kubectl delete pvc longhorn-test-pvc -n longhorn-system --ignore-not-found=true &>/dev/null
+# Cleanup test PVC
+kubectl delete pvc ceph-rbd-test-pvc -n ceph-csi --ignore-not-found=true &>/dev/null
 
 if [[ "$PVC_BOUND" != true ]]; then
-    echo "Error: Test PVC failed to bind - Longhorn may not be fully operational"
+    echo "Error: Test PVC failed to bind — Ceph CSI may not be fully operational"
     exit 1
 fi
 
-echo "✓ Longhorn fully deployed and operational"
+echo "✓ Ceph CSI RBD fully deployed and operational"
 echo ""
 
 # Get LoadBalancer IP
@@ -508,7 +330,6 @@ TRAEFIK_IP=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalanc
 echo "[12/12] Applying IngressRoutes..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
 kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/argocd-ingressroute.yaml"
-kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/longhorn-ingressroute.yaml"
 echo "✓ IngressRoutes applied"
 echo ""
 
@@ -524,26 +345,28 @@ echo ""
 echo "1. Configure DNS records in OPNsense pointing to ${TRAEFIK_IP}:"
 echo "   - traefik.knowledgeondemand.net"
 echo "   - argocd.knowledgeondemand.net"
-echo "   - longhorn.knowledgeondemand.net"
 echo ""
 echo "2. Default credentials (CHANGE IN PRODUCTION!):"
 echo "   All UIs use: admin / admin"
-echo "   - Traefik/Longhorn: update traefik/middlewares.yaml"
+echo "   - Traefik: update traefik/middlewares.yaml"
 echo "   - ArgoCD: update infrastructure/argocd/values.yaml"
 echo ""
 echo "3. Verify deployment:"
 echo "   kubectl get pods -n metallb-system"
 echo "   kubectl get pods -n cert-manager"
 echo "   kubectl get pods -n traefik"
-echo "   kubectl get pods -n longhorn-system"
+echo "   kubectl get pods -n ceph-csi"
 echo "   kubectl get svc -n traefik"
 echo ""
 echo "4. Access UIs (credentials: admin/admin):"
 echo "   - https://traefik.knowledgeondemand.net (Traefik Dashboard)"
-echo "   - https://longhorn.knowledgeondemand.net (Longhorn Storage)"
 echo "   - https://argocd.knowledgeondemand.net (ArgoCD)"
 echo ""
-echo "5. Deploy OpenVAS (optional, resource-intensive):"
+echo "5. Verify Ceph CSI storage:"
+echo "   kubectl get storageclass"
+echo "   kubectl get pods -n ceph-csi"
+echo ""
+echo "6. Deploy OpenVAS (optional, resource-intensive):"
 echo "   After the cluster is stable, run:"
 echo "   ./deploy-openvas.sh"
 echo ""
