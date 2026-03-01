@@ -12,7 +12,7 @@ spec:
   project: default
   source:
     repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-    targetRevision: longhorn-to-ceph-csi
+    targetRevision: main
     path: Resources/IAC-DNS/infrastructure/projects/openvas
     directory:
       recurse: false
