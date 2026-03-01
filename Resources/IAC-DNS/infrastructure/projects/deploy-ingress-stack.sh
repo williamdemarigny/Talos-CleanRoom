@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Kubernetes Infrastructure Stack Deployment Script
-# Deploys: MetalLB -> cert-manager -> Traefik -> Ceph CSI RBD
+# Deploys: Metrics Server -> MetalLB -> cert-manager -> Traefik -> Ceph CSI RBD
 #
 # Prerequisites:
 # - Kubernetes cluster is running (Talos)
@@ -53,7 +53,7 @@ echo "=============================================="
 echo ""
 
 # Check prerequisites
-echo "[1/10] Checking prerequisites..."
+echo "[1/13] Checking prerequisites..."
 
 if ! command -v kubectl &> /dev/null; then
     echo "Error: kubectl is not installed or not in PATH"
@@ -92,8 +92,18 @@ done
 echo "✓ Namespaces ready"
 echo ""
 
+# Deploy Metrics Server
+echo "[2/13] Deploying Metrics Server..."
+kubectl apply -f "${SCRIPT_DIR}/metrics-server/application.yaml"
+
+echo "Waiting for Metrics Server to be ready..."
+wait_for_deployment metrics-server kube-system 300
+
+echo "✓ Metrics Server deployed"
+echo ""
+
 # Deploy MetalLB
-echo "[2/10] Deploying MetalLB..."
+echo "[3/13] Deploying MetalLB..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/application.yaml"
 
 echo "Waiting for MetalLB to be ready..."
@@ -103,13 +113,13 @@ echo "✓ MetalLB deployed"
 echo ""
 
 # Configure MetalLB IP Pool
-echo "[3/10] Configuring MetalLB IP Pool..."
+echo "[4/13] Configuring MetalLB IP Pool..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/ip-pool.yaml"
 echo "✓ MetalLB IP Pool configured (10.83.3.200-10.83.3.250)"
 echo ""
 
 # Deploy cert-manager
-echo "[4/10] Deploying cert-manager..."
+echo "[5/13] Deploying cert-manager..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/application.yaml"
 
 echo "Waiting for cert-manager to be ready..."
@@ -122,7 +132,7 @@ echo "✓ cert-manager deployed"
 echo ""
 
 # Apply Cloudflare API token secret (required for DNS-01 challenge)
-echo "[5/12] Applying Cloudflare API token secret..."
+echo "[6/13] Applying Cloudflare API token secret..."
 if [[ -f "${SCRIPT_DIR}/cert-manager/cloudflare-secret.sops.yaml" ]]; then
     sops -d "${SCRIPT_DIR}/cert-manager/cloudflare-secret.sops.yaml" | kubectl apply -f -
     echo "✓ Cloudflare secret applied"
@@ -134,14 +144,14 @@ fi
 echo ""
 
 # Configure ClusterIssuers
-echo "[6/12] Configuring ClusterIssuers..."
+echo "[7/13] Configuring ClusterIssuers..."
 sleep 5  # Give webhook time to fully initialize
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/cluster-issuers.yaml"
 echo "✓ ClusterIssuers configured"
 echo ""
 
 # Deploy Traefik
-echo "[7/12] Deploying Traefik..."
+echo "[8/13] Deploying Traefik..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 
 echo "Waiting for Traefik to be ready..."
@@ -151,20 +161,20 @@ echo "✓ Traefik deployed"
 echo ""
 
 # Apply Middlewares
-echo "[8/12] Configuring Traefik Middlewares..."
+echo "[9/13] Configuring Traefik Middlewares..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/middlewares.yaml"
 echo "✓ Middlewares configured"
 echo ""
 
 # Apply Wildcard Certificate
-echo "[9/12] Applying Wildcard Certificate..."
+echo "[10/13] Applying Wildcard Certificate..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/wildcard-certificate.yaml"
 echo "✓ Wildcard certificate applied (uses letsencrypt-staging by default)"
 echo "  Note: Switch to letsencrypt-prod after testing"
 echo ""
 
 # Deploy Ceph CSI RBD
-echo "[10/12] Deploying Ceph CSI RBD..."
+echo "[11/13] Deploying Ceph CSI RBD..."
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CEPH_STORAGE_DIR="${REPO_ROOT}/ceph-storage"
 
@@ -322,12 +332,12 @@ echo "✓ Ceph CSI RBD fully deployed and operational"
 echo ""
 
 # Get LoadBalancer IP
-echo "[11/12] Retrieving Traefik LoadBalancer IP..."
+echo "[12/13] Retrieving Traefik LoadBalancer IP..."
 sleep 5
 TRAEFIK_IP=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
 
 # Apply IngressRoutes (excluding OpenVAS which will be added later)
-echo "[12/12] Applying IngressRoutes..."
+echo "[13/13] Applying IngressRoutes..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/dashboard-ingressroute.yaml"
 kubectl apply -f "${SCRIPT_DIR}/traefik/ingressroutes/argocd-ingressroute.yaml"
 echo "✓ IngressRoutes applied"
@@ -352,6 +362,7 @@ echo "   - Traefik: update traefik/middlewares.yaml"
 echo "   - ArgoCD: update infrastructure/argocd/values.yaml"
 echo ""
 echo "3. Verify deployment:"
+echo "   kubectl top nodes                    # Metrics Server"
 echo "   kubectl get pods -n metallb-system"
 echo "   kubectl get pods -n cert-manager"
 echo "   kubectl get pods -n traefik"
