@@ -27,6 +27,7 @@ class ScanProfile(str, Enum):
     QUICK = "quick"
     STANDARD = "standard"
     THOROUGH = "thorough"
+    CUSTOM = "custom"
 
 
 class ScanToolState(BaseModel):
@@ -45,6 +46,9 @@ class ScanState(BaseModel):
     id: str
     target: str
     profile: ScanProfile = ScanProfile.STANDARD
+    custom_modules: Optional[List[str]] = None  # Metasploit module IDs for custom profile
+    openvas_config: Optional[str] = None  # OpenVAS config ID for custom preset
+    openvas_families: Optional[List[str]] = None  # OpenVAS NVT family names for custom scan
     tools: List[ScanToolState] = []
     status: ScanStatus = ScanStatus.IDLE
     started_at: Optional[datetime] = None
@@ -65,3 +69,6 @@ class ScanRequest(BaseModel):
     target: str
     tools: List[ScanTool]
     profile: ScanProfile = ScanProfile.STANDARD
+    custom_modules: Optional[List[str]] = None  # Metasploit module IDs for custom profile
+    openvas_config: Optional[str] = None  # OpenVAS config ID for custom preset
+    openvas_families: Optional[List[str]] = None  # OpenVAS NVT family names for custom scan

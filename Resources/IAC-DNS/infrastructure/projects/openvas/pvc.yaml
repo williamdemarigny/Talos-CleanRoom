@@ -15,7 +15,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -31,7 +31,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -47,7 +47,7 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -63,7 +63,7 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -79,7 +79,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -96,7 +96,7 @@ spec:
     requests:
       # 40Gi required for full SCAP/CVE database import
       storage: 40Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -112,7 +112,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -128,7 +128,7 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -144,7 +144,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -160,4 +160,4 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  storageClassName: longhorn
+  storageClassName: ceph-rbd

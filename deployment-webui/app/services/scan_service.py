@@ -46,6 +46,660 @@ OPENVAS_SCAN_CONFIGS = {
 # Greenbone XML report format UUID
 OPENVAS_XML_FORMAT = "a994b278-1f62-11e1-96ac-406186ea4fc5"
 
+# =============================================================================
+# Metasploit Module Catalog — single source of truth for all profiles
+# =============================================================================
+MSF_MODULE_CATALOG = [
+    # --- Critical CVEs (included in standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_ms17_010",
+        "name": "EternalBlue (MS17-010)",
+        "category": "Critical CVEs",
+        "description": "SMB Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb_ms08_067",
+        "name": "Conficker (MS08-067)",
+        "category": "Critical CVEs",
+        "description": "SMB Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
+        "name": "BlueKeep (CVE-2019-0708)",
+        "category": "Critical CVEs",
+        "description": "RDP Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ssl/openssl_heartbleed",
+        "name": "Heartbleed (CVE-2014-0160)",
+        "category": "Critical CVEs",
+        "description": "OpenSSL memory disclosure",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/log4shell_scanner",
+        "name": "Log4Shell (CVE-2021-44228)",
+        "category": "Critical CVEs",
+        "description": "Apache Log4j Remote Code Execution",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_mod_cgi_bash_env",
+        "name": "Shellshock (CVE-2014-6271)",
+        "category": "Critical CVEs",
+        "description": "Bash environment variable injection via CGI",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/ms15_034_http_sys_memory_dump",
+        "name": "HTTP.sys (MS15-034)",
+        "category": "Critical CVEs",
+        "description": "IIS HTTP.sys memory disclosure",
+        "profiles": ["standard", "thorough"],
+    },
+    # --- Service Detection (included in standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_version",
+        "name": "SMB Version",
+        "category": "Service Detection",
+        "description": "SMB protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ssh/ssh_version",
+        "name": "SSH Version",
+        "category": "Service Detection",
+        "description": "SSH protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/http_version",
+        "name": "HTTP Version",
+        "category": "Service Detection",
+        "description": "HTTP server fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ftp/anonymous",
+        "name": "FTP Anonymous",
+        "category": "Service Detection",
+        "description": "FTP anonymous access check",
+        "profiles": ["standard", "thorough"],
+    },
+    # --- Extended SMB (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_enumshares",
+        "name": "SMB Share Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB shares",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb_enumusers",
+        "name": "SMB User Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB users",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smb/pipe_auditor",
+        "name": "SMB Pipe Auditor",
+        "category": "Extended SMB",
+        "description": "SMB named pipe auditing",
+        "profiles": ["thorough"],
+    },
+    # --- Extended RDP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/rdp/rdp_scanner",
+        "name": "RDP Scanner",
+        "category": "Extended RDP",
+        "description": "RDP service detection",
+        "profiles": ["thorough"],
+    },
+    # --- Extended SSH (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ssh/ssh_enumusers",
+        "name": "SSH User Enumeration",
+        "category": "Extended SSH",
+        "description": "Enumerate SSH users via wordlist",
+        "profiles": ["thorough"],
+        "extra_opts": {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"},
+    },
+    # --- HTTP/Web (thorough only) ---
+    {
+        "id": "auxiliary/scanner/http/title",
+        "name": "HTTP Title",
+        "category": "HTTP/Web",
+        "description": "HTTP page title extraction",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/dir_scanner",
+        "name": "Directory Scanner",
+        "category": "HTTP/Web",
+        "description": "HTTP directory brute-force",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/robots_txt",
+        "name": "Robots.txt",
+        "category": "HTTP/Web",
+        "description": "robots.txt discovery",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/http_put",
+        "name": "HTTP PUT",
+        "category": "HTTP/Web",
+        "description": "HTTP PUT method test",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/tomcat_mgr_login",
+        "name": "Tomcat Manager Login",
+        "category": "HTTP/Web",
+        "description": "Tomcat default credentials check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/wordpress_scanner",
+        "name": "WordPress Scanner",
+        "category": "HTTP/Web",
+        "description": "WordPress detection and enumeration",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/jenkins_enum",
+        "name": "Jenkins Enum",
+        "category": "HTTP/Web",
+        "description": "Jenkins open dashboard detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/webdav_scanner",
+        "name": "WebDAV Scanner",
+        "category": "HTTP/Web",
+        "description": "WebDAV detection",
+        "profiles": ["thorough"],
+    },
+    # --- SSL/TLS (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ssl/ssl_version",
+        "name": "SSL/TLS Version",
+        "category": "SSL/TLS",
+        "description": "SSL/TLS version and cipher analysis",
+        "profiles": ["thorough"],
+    },
+    # --- FTP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ftp/ftp_version",
+        "name": "FTP Version",
+        "category": "FTP",
+        "description": "FTP version fingerprint",
+        "profiles": ["thorough"],
+    },
+    # --- Email (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smtp/smtp_version",
+        "name": "SMTP Version",
+        "category": "Email",
+        "description": "SMTP server version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/smtp/smtp_relay",
+        "name": "SMTP Open Relay",
+        "category": "Email",
+        "description": "Open SMTP relay check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/pop3/pop3_version",
+        "name": "POP3 Version",
+        "category": "Email",
+        "description": "POP3 server version detection",
+        "profiles": ["thorough"],
+    },
+    # --- Database (thorough only) ---
+    {
+        "id": "auxiliary/scanner/mysql/mysql_version",
+        "name": "MySQL Version",
+        "category": "Database",
+        "description": "MySQL version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/postgres/postgres_version",
+        "name": "PostgreSQL Version",
+        "category": "Database",
+        "description": "PostgreSQL version detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/mssql/mssql_ping",
+        "name": "MSSQL Discovery",
+        "category": "Database",
+        "description": "MSSQL instance discovery",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/mongodb/mongodb_login",
+        "name": "MongoDB Login",
+        "category": "Database",
+        "description": "MongoDB unauthenticated access check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/redis/redis_server",
+        "name": "Redis Server",
+        "category": "Database",
+        "description": "Redis open access check",
+        "profiles": ["thorough"],
+    },
+    # --- Network Infrastructure (thorough only) ---
+    {
+        "id": "auxiliary/scanner/telnet/telnet_version",
+        "name": "Telnet Version",
+        "category": "Network Infrastructure",
+        "description": "Telnet service detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/snmp/snmp_enum",
+        "name": "SNMP Enumeration",
+        "category": "Network Infrastructure",
+        "description": "SNMP community string enumeration",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/netbios/nbname",
+        "name": "NetBIOS Name",
+        "category": "Network Infrastructure",
+        "description": "NetBIOS name resolution",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/discovery/udp_sweep",
+        "name": "UDP Sweep",
+        "category": "Network Infrastructure",
+        "description": "UDP service discovery",
+        "profiles": ["thorough"],
+    },
+    # --- Remote Access (thorough only) ---
+    {
+        "id": "auxiliary/scanner/vnc/vnc_none_auth",
+        "name": "VNC No-Auth",
+        "category": "Remote Access",
+        "description": "VNC no-authentication check",
+        "profiles": ["thorough"],
+    },
+    # =================================================================
+    # Additional modules (custom profile only — not in any preset)
+    # =================================================================
+    # --- Additional CVE Scanners ---
+    {
+        "id": "auxiliary/scanner/http/exchange_proxylogon",
+        "name": "ProxyLogon (CVE-2021-26855)",
+        "category": "Additional CVEs",
+        "description": "Exchange Server SSRF to RCE",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_normalize_path",
+        "name": "Apache Path Traversal (CVE-2021-41773)",
+        "category": "Additional CVEs",
+        "description": "Apache HTTP Server path traversal",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/citrix_dir_traversal",
+        "name": "Citrix ADC Traversal (CVE-2019-19781)",
+        "category": "Additional CVEs",
+        "description": "Citrix ADC/Gateway directory traversal",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_optionsbleed",
+        "name": "Optionsbleed (CVE-2017-9798)",
+        "category": "Additional CVEs",
+        "description": "Apache OPTIONS memory leak",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/vmware/vmauthd_version",
+        "name": "VMware Auth Daemon",
+        "category": "Additional CVEs",
+        "description": "VMware authentication daemon detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_cipher_zero",
+        "name": "IPMI Cipher Zero",
+        "category": "Additional CVEs",
+        "description": "IPMI cipher zero authentication bypass",
+        "profiles": [],
+    },
+    # --- Credential Checks ---
+    {
+        "id": "auxiliary/scanner/smb/smb_login",
+        "name": "SMB Login",
+        "category": "Credential Checks",
+        "description": "SMB default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ssh/ssh_login",
+        "name": "SSH Login",
+        "category": "Credential Checks",
+        "description": "SSH default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ftp/ftp_login",
+        "name": "FTP Login",
+        "category": "Credential Checks",
+        "description": "FTP default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/mysql/mysql_login",
+        "name": "MySQL Login",
+        "category": "Credential Checks",
+        "description": "MySQL default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/postgres/postgres_login",
+        "name": "PostgreSQL Login",
+        "category": "Credential Checks",
+        "description": "PostgreSQL default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/mssql/mssql_login",
+        "name": "MSSQL Login",
+        "category": "Credential Checks",
+        "description": "MSSQL default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/vnc/vnc_login",
+        "name": "VNC Login",
+        "category": "Credential Checks",
+        "description": "VNC default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/telnet/telnet_login",
+        "name": "Telnet Login",
+        "category": "Credential Checks",
+        "description": "Telnet default/weak credential check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/snmp/snmp_login",
+        "name": "SNMP Login",
+        "category": "Credential Checks",
+        "description": "SNMP community string brute-force",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/winrm/winrm_login",
+        "name": "WinRM Login",
+        "category": "Credential Checks",
+        "description": "WinRM default/weak credential check",
+        "profiles": [],
+    },
+    # --- Additional Web Application ---
+    {
+        "id": "auxiliary/scanner/http/joomla_version",
+        "name": "Joomla Detection",
+        "category": "Additional Web",
+        "description": "Joomla CMS version detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/drupal_views_user_enum",
+        "name": "Drupal User Enum",
+        "category": "Additional Web",
+        "description": "Drupal views user enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/jboss_vulnscan",
+        "name": "JBoss Vuln Scan",
+        "category": "Additional Web",
+        "description": "JBoss application server vulnerability scan",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/verb_auth_bypass",
+        "name": "HTTP Verb Tampering",
+        "category": "Additional Web",
+        "description": "HTTP verb tampering authentication bypass",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/backup_file",
+        "name": "Backup File Discovery",
+        "category": "Additional Web",
+        "description": "Common backup file detection (.bak, .old, etc)",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/trace_axd",
+        "name": "ASP.NET Trace",
+        "category": "Additional Web",
+        "description": "ASP.NET trace.axd information disclosure",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/files_dir",
+        "name": "Sensitive File Discovery",
+        "category": "Additional Web",
+        "description": "Common sensitive file and directory detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/cert",
+        "name": "SSL Certificate Info",
+        "category": "Additional Web",
+        "description": "SSL/TLS certificate information extraction",
+        "profiles": [],
+    },
+    # --- Windows / Active Directory ---
+    {
+        "id": "auxiliary/scanner/smb/smb_lookupsid",
+        "name": "SMB SID Lookup",
+        "category": "Windows/AD",
+        "description": "SID enumeration for user discovery",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb2",
+        "name": "SMBv2 Detection",
+        "category": "Windows/AD",
+        "description": "SMBv2 protocol support detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/winrm/winrm_auth_methods",
+        "name": "WinRM Auth Methods",
+        "category": "Windows/AD",
+        "description": "WinRM authentication method enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/dcerpc/endpoint_mapper",
+        "name": "DCERPC Endpoint Mapper",
+        "category": "Windows/AD",
+        "description": "DCERPC endpoint mapper enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/dcerpc/management",
+        "name": "DCERPC Management",
+        "category": "Windows/AD",
+        "description": "DCERPC management interface detection",
+        "profiles": [],
+    },
+    # --- Additional Network Infrastructure ---
+    {
+        "id": "auxiliary/scanner/dns/dns_amp",
+        "name": "DNS Amplification",
+        "category": "Additional Network",
+        "description": "DNS amplification vulnerability check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ntp/ntp_monlist",
+        "name": "NTP Monlist",
+        "category": "Additional Network",
+        "description": "NTP monlist amplification check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_version",
+        "name": "IPMI Version",
+        "category": "Additional Network",
+        "description": "IPMI version and capability detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/nfs/nfsmount",
+        "name": "NFS Exports",
+        "category": "Additional Network",
+        "description": "NFS export enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/sip/enumerator",
+        "name": "SIP Enumerator",
+        "category": "Additional Network",
+        "description": "SIP user/extension enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rsync/modules_list",
+        "name": "Rsync Modules",
+        "category": "Additional Network",
+        "description": "Rsync module listing",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/elasticsearch/indices_enum",
+        "name": "Elasticsearch Indices",
+        "category": "Additional Network",
+        "description": "Elasticsearch index enumeration",
+        "profiles": [],
+    },
+    # --- Additional Web Discovery ---
+    {
+        "id": "auxiliary/scanner/http/open_proxy",
+        "name": "Open Proxy",
+        "category": "Additional Web",
+        "description": "Open HTTP proxy detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/sqli_simple",
+        "name": "SQL Injection Check",
+        "category": "Additional Web",
+        "description": "Simple SQL injection detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/iis_shortname_scanner",
+        "name": "IIS Short Name",
+        "category": "Additional Web",
+        "description": "IIS 8.3 short filename enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/svn_scanner",
+        "name": "SVN Repository",
+        "category": "Additional Web",
+        "description": "Exposed SVN repository detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/git_scanner",
+        "name": "Git Repository",
+        "category": "Additional Web",
+        "description": "Exposed .git directory detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/owa_login",
+        "name": "Outlook Web Access",
+        "category": "Additional Web",
+        "description": "OWA login page detection",
+        "profiles": [],
+    },
+    # --- Additional Service Discovery ---
+    {
+        "id": "auxiliary/scanner/misc/java_rmi_server",
+        "name": "Java RMI",
+        "category": "Additional Network",
+        "description": "Java RMI registry detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/x11/open_x11",
+        "name": "Open X11",
+        "category": "Additional Network",
+        "description": "Open X11 display detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rlogin_login",
+        "name": "rlogin Access",
+        "category": "Additional Network",
+        "description": "rlogin unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rsh_login",
+        "name": "rsh Access",
+        "category": "Additional Network",
+        "description": "rsh unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/llmnr/query",
+        "name": "LLMNR Query",
+        "category": "Additional Network",
+        "description": "LLMNR poisoning target detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/mdns/query",
+        "name": "mDNS Query",
+        "category": "Additional Network",
+        "description": "mDNS service discovery",
+        "profiles": [],
+    },
+    # --- IPMI Extended ---
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_dumphashes",
+        "name": "IPMI Hash Dump",
+        "category": "Additional Network",
+        "description": "IPMI password hash extraction",
+        "profiles": [],
+    },
+    # --- Printer/IoT ---
+    {
+        "id": "auxiliary/scanner/printer/printer_list_volumes",
+        "name": "Printer Volumes",
+        "category": "Additional Network",
+        "description": "Network printer volume enumeration",
+        "profiles": [],
+    },
+]
+
 
 @dataclass
 class ScanService:
@@ -88,6 +742,185 @@ class ScanService:
                         pass  # Don't let broadcast failures crash the scan
                 break
 
+    def get_module_catalog(self) -> list:
+        """Return the Metasploit module catalog for custom profile selection."""
+        return MSF_MODULE_CATALOG
+
+    # ----- OpenVAS runtime discovery (configs & NVT families) ----------------
+
+    _openvas_configs_cache: Optional[list] = None
+    _openvas_families_cache: Optional[list] = None
+
+    async def _get_openvas_password(self) -> Optional[str]:
+        """Retrieve and decode the OpenVAS admin password from k8s secret."""
+        cred_result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "secret", "openvas-credentials", "-n", "openvas",
+             "-o", "jsonpath={.data.admin-password}"],
+            timeout=10
+        )
+        if not cred_result.success or not cred_result.output.strip():
+            return None
+        password_b64 = cred_result.output.strip()
+        decode_result = await self.process_manager.run_command_simple(
+            ["bash", "-c", f"echo '{password_b64}' | base64 -d"],
+            timeout=5
+        )
+        return decode_result.output.strip() if decode_result.success else None
+
+    async def get_openvas_configs(self) -> list:
+        """Query available OpenVAS scan configs from GVM via GMP."""
+        if self._openvas_configs_cache is not None:
+            return self._openvas_configs_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_configs_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(15)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_configs/>\')
+    root = ET.fromstring(resp)
+    for cfg in root.findall("config"):
+        cfg_id = cfg.attrib.get("id", "")
+        name = cfg.findtext("name", "")
+        # Skip the "empty" base configs used internally
+        if name and cfg_id:
+            print(f"CONFIG:{cfg_id}:{name}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=30
+        )
+
+        configs = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("CONFIG:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        configs.append({"id": parts[1], "name": parts[2]})
+
+        # Sort by name for consistent UI display
+        configs.sort(key=lambda c: c["name"])
+        self._openvas_configs_cache = configs
+        return configs
+
+    async def get_openvas_families(self) -> list:
+        """Query available OpenVAS NVT families from GVM via GMP."""
+        if self._openvas_families_cache is not None:
+            return self._openvas_families_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_nvt_families_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_nvt_families/>\')
+    root = ET.fromstring(resp)
+    for fam in root.findall(".//family"):
+        name = fam.findtext("name", "")
+        max_nvt = fam.findtext("max_nvt_count", "0")
+        if name:
+            print(f"FAMILY:{name}:{max_nvt}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=60
+        )
+
+        families = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("FAMILY:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        families.append({
+                            "name": parts[1],
+                            "nvt_count": int(parts[2]) if parts[2].isdigit() else 0
+                        })
+
+        # Sort by name for consistent UI display
+        families.sort(key=lambda f: f["name"])
+        self._openvas_families_cache = families
+        return families
+
     def get_status(self) -> Optional[ScanState]:
         """Get current scan status."""
         return self.current_scan
@@ -123,6 +956,9 @@ class ScanService:
             id=str(uuid.uuid4())[:8],
             target=target,
             profile=request.profile,
+            custom_modules=request.custom_modules,
+            openvas_config=request.openvas_config,
+            openvas_families=request.openvas_families,
             status=ScanStatus.RUNNING,
             started_at=datetime.utcnow(),
             tools=[
@@ -395,38 +1231,44 @@ class ScanService:
     async def _run_openvas_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run an OpenVAS scan via GMP protocol inside the gvmd container."""
         scan_id = self.current_scan.id
-        config_id = OPENVAS_SCAN_CONFIGS.get(profile, OPENVAS_SCAN_CONFIGS[ScanProfile.STANDARD])
+        openvas_config = self.current_scan.openvas_config
+        openvas_families = self.current_scan.openvas_families
+
+        # Determine config_id based on custom settings or profile
+        if profile == ScanProfile.CUSTOM and openvas_config:
+            # User selected a specific preset config
+            config_id = openvas_config
+            use_custom_families = False
+        elif profile == ScanProfile.CUSTOM and openvas_families:
+            # User selected specific NVT families — will create a custom config
+            config_id = None
+            use_custom_families = True
+        else:
+            # Standard profile-based config
+            config_id = OPENVAS_SCAN_CONFIGS.get(profile, OPENVAS_SCAN_CONFIGS[ScanProfile.STANDARD])
+            use_custom_families = False
 
         await self.log("openvas", "info", "Connecting to OpenVAS GVM daemon...")
 
         # Get OpenVAS admin password from k8s secret
-        cred_result = await self.process_manager.run_command_simple(
-            ["kubectl", "get", "secret", "openvas-credentials", "-n", "openvas",
-             "-o", "jsonpath={.data.admin-password}"],
-            timeout=10
-        )
-
-        if not cred_result.success or not cred_result.output.strip():
-            await self.log("openvas", "error", "Could not retrieve OpenVAS credentials from cluster")
-            return None
-
-        # Decode base64 password
-        password_b64 = cred_result.output.strip()
-        decode_result = await self.process_manager.run_command_simple(
-            ["bash", "-c", f"echo '{password_b64}' | base64 -d"],
-            timeout=5
-        )
-        openvas_password = decode_result.output.strip() if decode_result.success else ""
-
+        openvas_password = await self._get_openvas_password()
         if not openvas_password:
-            await self.log("openvas", "error", "Failed to decode OpenVAS password")
+            await self.log("openvas", "error", "Could not retrieve OpenVAS credentials from cluster")
             return None
 
         # Python GMP script that runs inside the gvmd container
         # Uses stdlib only: socket + xml.etree.ElementTree
-        gmp_script = self._build_gmp_script(scan_id, target, config_id)
+        if use_custom_families:
+            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families)
+        else:
+            gmp_script = self._build_gmp_script(scan_id, target, config_id)
 
-        await self.log("openvas", "info", f"Creating scan target and task for {target}...")
+        if use_custom_families:
+            await self.log("openvas", "info", f"Creating custom config with {len(openvas_families)} NVT families for {target}...")
+        elif profile == ScanProfile.CUSTOM and openvas_config:
+            await self.log("openvas", "info", f"Using selected config for {target}...")
+        else:
+            await self.log("openvas", "info", f"Creating scan target and task for {target}...")
 
         # Execute the GMP script inside the gvmd container
         result = await self.process_manager.run_command(
@@ -507,6 +1349,12 @@ TARGET = "{target}"
 CONFIG_ID = "{config_id}"
 SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Well-known port list UUIDs
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+    "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
+}}
 
 def send_gmp(sock, xml_str):
     """Send a GMP command and receive the response."""
@@ -523,25 +1371,21 @@ def send_gmp(sock, xml_str):
             for tag in ["authenticate_response", "create_target_response",
                         "create_task_response", "start_task_response",
                         "get_tasks_response", "get_reports_response",
-                        "delete_target_response", "delete_task_response"]:
-                if f"</{tag}>" in text:
+                        "delete_target_response", "delete_task_response",
+                        "get_port_lists_response"]:
+                if f"</{{tag}}>" in text:
                     return text
         except socket.timeout:
             break
     return response.decode("utf-8", errors="replace")
 
-def get_attr(xml_text, tag, attr):
-    """Extract an attribute from the first occurrence of a tag."""
+def get_status_info(xml_text):
+    """Get the status code and status_text from a GMP response."""
     try:
         root = ET.fromstring(xml_text)
-        elem = root if root.tag.endswith("_response") else root
-        return elem.attrib.get(attr, "")
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
     except ET.ParseError:
-        return ""
-
-def get_status(xml_text):
-    """Get the status code from a GMP response."""
-    return get_attr(xml_text, "", "status")
+        return "", ""
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -552,18 +1396,43 @@ try:
     # Authenticate
     auth_xml = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
     resp = send_gmp(sock, auth_xml)
-    if get_status(resp) != "200":
-        print(f"SCAN:FAILED:Authentication failed")
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}")
         sys.exit(1)
     print("STATUS: Authenticated with GVM")
 
-    # Create target
+    # Find a valid port list — try well-known UUIDs first, then query GVM
+    port_list_id = ""
+    for pl_name, pl_id in PORT_LISTS.items():
+        port_list_id = pl_id
+        break
+    # Verify port list exists by querying GVM
+    resp = send_gmp(sock, '<get_port_lists/>')
+    try:
+        root = ET.fromstring(resp)
+        available_pls = {{}}
+        for pl in root.findall("port_list"):
+            available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
+        # Prefer All IANA TCP and UDP, then All IANA TCP, then first available
+        for preferred in PORT_LISTS.values():
+            if preferred in available_pls:
+                port_list_id = preferred
+                break
+        else:
+            if available_pls:
+                port_list_id = next(iter(available_pls))
+        print(f"STATUS: Using port list {{port_list_id}} ({{available_pls.get(port_list_id, 'unknown')}})")
+    except ET.ParseError:
+        print(f"STATUS: Using default port list {{port_list_id}}")
+
+    # Create target (with port_list_id — required by GVM 22+)
     target_name = f"scan-{{SCAN_ID}}-target"
-    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts></create_target>'
+    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>'
     resp = send_gmp(sock, create_target)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create target failed (status {{status}})")
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -577,9 +1446,9 @@ try:
     task_name = f"scan-{{SCAN_ID}}-task"
     create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/></create_task>'
     resp = send_gmp(sock, create_task)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
-        print(f"SCAN:FAILED:Create task failed (status {{status}})")
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     try:
         root = ET.fromstring(resp)
@@ -592,9 +1461,9 @@ try:
     # Start task
     start = f'<start_task task_id="{{task_id}}"/>'
     resp = send_gmp(sock, start)
-    status = get_status(resp)
+    status, status_text = get_status_info(resp)
     if status not in ("200", "202"):
-        print(f"SCAN:FAILED:Start task failed (status {{status}})")
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}")
         sys.exit(1)
     # Extract report ID from start response
     try:
@@ -671,28 +1540,263 @@ except Exception as e:
     sys.exit(1)
 '''
 
+    def _build_gmp_custom_families_script(self, scan_id: str, target: str,
+                                            families: List[str]) -> str:
+        """Build a GMP script that creates a custom config with selected NVT families."""
+        # Build the family XML for modify_config
+        family_xml_parts = []
+        for fam in families:
+            family_xml_parts.append(
+                f'<family><name>{fam}</name><all>1</all><growing>1</growing></family>'
+            )
+        families_xml = "".join(family_xml_parts)
+
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+TARGET = "{target}"
+SCAN_ID = "{scan_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Base config: Full and Fast (we clone it, then replace families)
+BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+}}
+
+def send_gmp(sock, xml_str):
+    """Send a GMP command and receive the response."""
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "create_target_response",
+                        "create_config_response", "modify_config_response",
+                        "create_task_response", "start_task_response",
+                        "get_tasks_response", "get_reports_response",
+                        "delete_target_response", "delete_task_response",
+                        "delete_config_response", "get_port_lists_response"]:
+                if f"</{{tag}}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+def get_status_info(xml_text):
+    try:
+        root = ET.fromstring(xml_text)
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
+    except ET.ParseError:
+        return "", ""
+
+custom_config_id = None
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Connected to GVM daemon")
+
+    # Authenticate
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}")
+        sys.exit(1)
+    print("STATUS: Authenticated with GVM")
+
+    # Find a valid port list
+    port_list_id = PORT_LISTS["all_tcp_udp"]
+    resp = send_gmp(sock, '<get_port_lists/>')
+    try:
+        root = ET.fromstring(resp)
+        available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
+        for preferred in PORT_LISTS.values():
+            if preferred in available_pls:
+                port_list_id = preferred
+                break
+        else:
+            if available_pls:
+                port_list_id = next(iter(available_pls))
+        print(f"STATUS: Using port list {{available_pls.get(port_list_id, port_list_id)}}")
+    except ET.ParseError:
+        pass
+
+    # Create custom config by cloning base
+    config_name = f"scan-{{SCAN_ID}}-custom-config"
+    create_cfg = f\'<create_config><copy>{{BASE_CONFIG_ID}}</copy><name>{{config_name}}</name></create_config>\'
+    resp = send_gmp(sock, create_cfg)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create config failed (status {{status}}): {{status_text}}")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        custom_config_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse config ID")
+        sys.exit(1)
+    print(f"STATUS: Created custom config {{custom_config_id}}")
+
+    # Modify config to set selected NVT families
+    modify_xml = f\'<modify_config config_id="{{custom_config_id}}"><nvt_family_selection>{families_xml}</nvt_family_selection></modify_config>\'
+    resp = send_gmp(sock, modify_xml)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"STATUS: Warning - modify config returned status {{status}}: {{status_text}}")
+    else:
+        print("STATUS: Configured NVT families on custom config")
+
+    # Create target (with port_list_id — required by GVM 22+)
+    target_name = f"scan-{{SCAN_ID}}-target"
+    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>\'
+    resp = send_gmp(sock, create_target)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        target_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse target ID")
+        sys.exit(1)
+    print(f"STATUS: Created target {{target_id}}")
+
+    # Create task with custom config
+    task_name = f"scan-{{SCAN_ID}}-task"
+    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
+    resp = send_gmp(sock, create_task)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        task_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse task ID")
+        sys.exit(1)
+    print(f"STATUS: Created task {{task_id}}")
+
+    # Start task
+    start = f\'<start_task task_id="{{task_id}}"/>\'
+    resp = send_gmp(sock, start)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "202"):
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}")
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report_id")
+        report_id = report_elem.text if report_elem is not None else ""
+    except:
+        report_id = ""
+    print(f"STATUS: Scan started (report {{report_id}})")
+
+    # Poll for completion
+    max_polls = 720  # 2 hours at 10s intervals
+    for i in range(max_polls):
+        time.sleep(10)
+        get_task = f\'<get_tasks task_id="{{task_id}}"/>\'
+        resp = send_gmp(sock, get_task)
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                task_status = task_elem.findtext("status", "")
+                progress_elem = task_elem.find("progress")
+                progress = progress_elem.text if progress_elem is not None else "0"
+                print(f"PROGRESS: {{task_status}} ({{progress}}%)")
+                if task_status == "Done":
+                    if not report_id:
+                        report_elem = task_elem.find(".//report")
+                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    break
+                elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    print(f"SCAN:FAILED:Task ended with status {{task_status}}")
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+    else:
+        print("SCAN:FAILED:Scan timed out after 2 hours")
+        sys.exit(1)
+
+    # Get report in XML format
+    if report_id:
+        print("STATUS: Retrieving scan report...")
+        get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
+        sock.settimeout(120)
+        resp = send_gmp(sock, get_report)
+        print("REPORT_XML_START")
+        try:
+            root = ET.fromstring(resp)
+            report_elem = root.find(".//report")
+            if report_elem is not None:
+                print(ET.tostring(report_elem, encoding="unicode"))
+            else:
+                print(resp)
+        except:
+            print(resp)
+        print("REPORT_XML_END")
+    else:
+        print("SCAN:FAILED:No report ID available")
+
+    # Cleanup: delete task, target, and custom config
+    try:
+        send_gmp(sock, f\'<delete_task task_id="{{task_id}}" ultimate="1"/>\')
+        send_gmp(sock, f\'<delete_target target_id="{{target_id}}" ultimate="1"/>\')
+        if custom_config_id:
+            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
+            print("STATUS: Cleaned up custom config")
+    except:
+        pass
+
+    sock.close()
+    print("STATUS: OpenVAS scan complete")
+
+except Exception as e:
+    print(f"SCAN:FAILED:{{e}}")
+    # Try to clean up custom config on failure
+    try:
+        if custom_config_id:
+            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
+    except:
+        pass
+    sys.exit(1)
+'''
+
     # =========================================================================
     # METASPLOIT
     # =========================================================================
 
     def _build_msf_resource_script(self, target: str, profile: ScanProfile,
-                                     scan_id: str, xml_path: str) -> str:
+                                     scan_id: str, xml_path: str,
+                                     custom_modules: list = None) -> str:
         """Build a Metasploit resource script based on scan profile.
 
         Quick:    db_nmap discovery only (fast port scan, no vuln modules)
         Standard: db_nmap service detection + common vulnerability scanners
         Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
+        Custom:   db_nmap + user-selected modules from catalog
         """
         lines = []
 
         # Phase 1: Network discovery via db_nmap
-        # Use lighter nmap flags here — the standalone Nmap tool already does the
-        # comprehensive port scan. Metasploit's db_nmap just populates the MSF
-        # database so vulnerability modules know which hosts/ports to target.
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
             ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
         }.get(profile, "-T4 -sV --top-ports 1000")
 
         lines.append(f"db_nmap {nmap_flags} {target}")
@@ -708,79 +1812,18 @@ except Exception as e:
             lines.append(f"run")
             lines.append(f"back")
 
-        # =============================================================
-        # STANDARD profile: Critical CVEs + core service scanners
-        # =============================================================
-        if profile in (ScanProfile.STANDARD, ScanProfile.THOROUGH):
+        # Select modules from catalog based on profile
+        if profile == ScanProfile.CUSTOM:
+            selected_ids = set(custom_modules or [])
+            modules = [m for m in MSF_MODULE_CATALOG if m["id"] in selected_ids]
+        elif profile == ScanProfile.QUICK:
+            modules = []
+        else:
+            # standard or thorough — filter by profile name
+            modules = [m for m in MSF_MODULE_CATALOG if profile.value in m["profiles"]]
 
-            # --- Critical CVE Checks ---
-            add_module("auxiliary/scanner/smb/smb_ms17_010")       # EternalBlue (MS17-010) — critical RCE
-            add_module("auxiliary/scanner/smb/smb_ms08_067")       # Conficker (MS08-067) — critical RCE
-            add_module("auxiliary/scanner/rdp/cve_2019_0708_bluekeep")  # BlueKeep (CVE-2019-0708)
-            add_module("auxiliary/scanner/ssl/openssl_heartbleed") # Heartbleed (CVE-2014-0160)
-            add_module("auxiliary/scanner/http/log4shell_scanner") # Log4Shell (CVE-2021-44228)
-            add_module("auxiliary/scanner/http/apache_mod_cgi_bash_env")  # Shellshock (CVE-2014-6271)
-            add_module("auxiliary/scanner/http/ms15_034_http_sys_memory_dump")  # HTTP.sys (MS15-034)
-
-            # --- Core Service Detection ---
-            add_module("auxiliary/scanner/smb/smb_version")        # SMB version fingerprint
-            add_module("auxiliary/scanner/ssh/ssh_version")        # SSH version fingerprint
-            add_module("auxiliary/scanner/http/http_version")      # HTTP server fingerprint
-            add_module("auxiliary/scanner/ftp/anonymous")          # FTP anonymous access
-
-        # =============================================================
-        # THOROUGH profile: All Standard + extended scanners
-        # =============================================================
-        if profile == ScanProfile.THOROUGH:
-
-            # --- Extended SMB ---
-            add_module("auxiliary/scanner/smb/smb_enumshares")     # SMB share enumeration
-            add_module("auxiliary/scanner/smb/smb_enumusers")      # SMB user enumeration
-            add_module("auxiliary/scanner/smb/pipe_auditor")       # SMB named pipe auditing
-
-            # --- Extended RDP ---
-            add_module("auxiliary/scanner/rdp/rdp_scanner")        # RDP service detection
-
-            # --- Extended SSH ---
-            add_module("auxiliary/scanner/ssh/ssh_enumusers",      # SSH user enumeration
-                       {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"})
-
-            # --- Extended HTTP/Web ---
-            add_module("auxiliary/scanner/http/title")             # HTTP page title
-            add_module("auxiliary/scanner/http/dir_scanner")       # HTTP directory brute-force
-            add_module("auxiliary/scanner/http/robots_txt")        # robots.txt discovery
-            add_module("auxiliary/scanner/http/http_put")          # HTTP PUT method test
-            add_module("auxiliary/scanner/http/tomcat_mgr_login")  # Tomcat default creds
-            add_module("auxiliary/scanner/http/wordpress_scanner") # WordPress detection
-            add_module("auxiliary/scanner/http/jenkins_enum")      # Jenkins open dashboard
-            add_module("auxiliary/scanner/http/webdav_scanner")    # WebDAV detection
-
-            # --- SSL/TLS Extended ---
-            add_module("auxiliary/scanner/ssl/ssl_version")        # SSL/TLS version analysis
-
-            # --- FTP Extended ---
-            add_module("auxiliary/scanner/ftp/ftp_version")        # FTP version fingerprint
-
-            # --- Email ---
-            add_module("auxiliary/scanner/smtp/smtp_version")      # SMTP version
-            add_module("auxiliary/scanner/smtp/smtp_relay")        # Open SMTP relay check
-            add_module("auxiliary/scanner/pop3/pop3_version")      # POP3 version
-
-            # --- Database Scanners ---
-            add_module("auxiliary/scanner/mysql/mysql_version")    # MySQL version
-            add_module("auxiliary/scanner/postgres/postgres_version")  # PostgreSQL version
-            add_module("auxiliary/scanner/mssql/mssql_ping")       # MSSQL discovery
-            add_module("auxiliary/scanner/mongodb/mongodb_login")  # MongoDB unauth access
-            add_module("auxiliary/scanner/redis/redis_server")     # Redis open access
-
-            # --- Network Infrastructure ---
-            add_module("auxiliary/scanner/telnet/telnet_version")  # Telnet version
-            add_module("auxiliary/scanner/snmp/snmp_enum")         # SNMP enumeration
-            add_module("auxiliary/scanner/netbios/nbname")         # NetBIOS name resolution
-            add_module("auxiliary/scanner/discovery/udp_sweep")    # UDP service discovery
-
-            # --- Remote Access ---
-            add_module("auxiliary/scanner/vnc/vnc_none_auth")      # VNC no-auth check
+        for mod in modules:
+            add_module(mod["id"], mod.get("extra_opts"))
 
         # Print discovered vulns summary
         lines.append("vulns")
@@ -796,16 +1839,24 @@ except Exception as e:
         scan_id = self.current_scan.id
         xml_path = f"/tmp/msf-scan-{scan_id}.xml"
         rc_path = f"/tmp/scan-{scan_id}.rc"
+        custom_modules = self.current_scan.custom_modules
 
         # Select timeout based on profile
-        msf_timeout = {
-            ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
-            ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
-            ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
-        }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
+        if profile == ScanProfile.CUSTOM:
+            module_count_est = len(custom_modules) if custom_modules else 0
+            # Base 15 min for db_nmap + ~3 min per module
+            msf_timeout = 900 + (module_count_est * 180)
+        else:
+            msf_timeout = {
+                ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
+                ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
+                ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
+            }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
 
         # Build the resource script
-        rc_content = self._build_msf_resource_script(target, profile, scan_id, xml_path)
+        rc_content = self._build_msf_resource_script(
+            target, profile, scan_id, xml_path, custom_modules=custom_modules
+        )
 
         module_count = rc_content.count("use auxiliary/")
         if module_count > 0:
@@ -830,6 +1881,7 @@ except Exception as e:
             ScanProfile.QUICK: "-T4 --top-ports 100",
             ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
             ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
         }.get(profile, "-T4 -sV --top-ports 1000")
         await self.log("metasploit", "info", f"Phase 1: db_nmap {nmap_flags} {target}")
         if module_count > 0:

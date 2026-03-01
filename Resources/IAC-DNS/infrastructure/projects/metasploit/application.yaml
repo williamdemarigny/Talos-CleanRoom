@@ -6,13 +6,13 @@ metadata:
   finalizers:
     - argoproj.io/resources-finalizer
   annotations:
-    # Deploy after Longhorn (needs storage class)
+    # Deploy after Ceph CSI (needs storage class)
     argocd.argoproj.io/sync-wave: "1"
 spec:
   project: default
   source:
     repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-    targetRevision: HEAD
+    targetRevision: longhorn-to-ceph-csi
     path: Resources/IAC-DNS/infrastructure/projects/metasploit
     directory:
       recurse: false
