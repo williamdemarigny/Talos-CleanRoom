@@ -1322,7 +1322,13 @@ except Exception as e:
                         break
                 return xml_content
 
-        await self.log("openvas", "warn", "Could not extract XML report from OpenVAS output")
+        output_len = len(output)
+        await self.log("openvas", "warn", f"Could not extract XML report from OpenVAS output ({output_len} bytes)")
+        # Log last 30 lines for debugging (like Nmap handler)
+        for line in output.split("\n")[-30:]:
+            line = line.strip()
+            if line and not line.startswith("<"):
+                await self.log("openvas", "info", f"  {line}")
         return None
 
     async def _log_openvas_line(self, line: str):
@@ -1356,25 +1362,30 @@ PORT_LISTS = {{
     "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
 }}
 
-def send_gmp(sock, xml_str):
+def send_gmp(sock, xml_str, end_tag=None):
     """Send a GMP command and receive the response."""
     sock.sendall(xml_str.encode("utf-8"))
     response = b""
+    # Determine which end tag to look for
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "create_target_response",
+                    "create_task_response", "start_task_response",
+                    "get_tasks_response", "get_reports_response",
+                    "delete_target_response", "delete_task_response",
+                    "get_port_lists_response"]
     while True:
         try:
-            chunk = sock.recv(65536)
+            chunk = sock.recv(131072)
             if not chunk:
                 break
             response += chunk
-            # GMP responses end with a closing tag
-            text = response.decode("utf-8", errors="replace")
-            for tag in ["authenticate_response", "create_target_response",
-                        "create_task_response", "start_task_response",
-                        "get_tasks_response", "get_reports_response",
-                        "delete_target_response", "delete_task_response",
-                        "get_port_lists_response"]:
-                if f"</{{tag}}>" in text:
-                    return text
+            # Only check the tail of the response for the end tag (avoids O(n^2))
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{{tag}}>" in tail:
+                    return response.decode("utf-8", errors="replace")
         except socket.timeout:
             break
     return response.decode("utf-8", errors="replace")
@@ -1507,9 +1518,14 @@ try:
     if report_id:
         print("STATUS: Retrieving scan report...")
         get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>'
-        # Need larger timeout for report retrieval
-        sock.settimeout(120)
-        resp = send_gmp(sock, get_report)
+        # Large reports need generous timeout (300s per chunk wait)
+        sock.settimeout(300)
+        resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        resp_len = len(resp)
+        print(f"STATUS: Report response received ({{resp_len}} bytes)")
+        if resp_len == 0:
+            print("SCAN:FAILED:Empty response when retrieving report")
+            sys.exit(1)
         print("REPORT_XML_START")
         # Extract the report XML from the GMP response
         try:
@@ -1518,8 +1534,15 @@ try:
             if report_elem is not None:
                 print(ET.tostring(report_elem, encoding="unicode"))
             else:
-                print(resp)
-        except:
+                print(f"ERROR: No <report> element found in response ({{resp_len}} bytes)")
+                # Print first 500 chars for debugging
+                print(resp[:500])
+        except ET.ParseError as parse_err:
+            print(f"ERROR: XML parse failed: {{parse_err}}")
+            # Check if we got a partial response
+            if "</get_reports_response>" not in resp:
+                print(f"ERROR: Response appears truncated ({{resp_len}} bytes, no closing tag)")
+            # Still output what we have - extraction code will try to use it
             print(resp)
         print("REPORT_XML_END")
     else:
@@ -1567,25 +1590,30 @@ PORT_LISTS = {{
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
 }}
 
-def send_gmp(sock, xml_str):
+def send_gmp(sock, xml_str, end_tag=None):
     """Send a GMP command and receive the response."""
     sock.sendall(xml_str.encode("utf-8"))
     response = b""
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "create_target_response",
+                    "create_config_response", "modify_config_response",
+                    "create_task_response", "start_task_response",
+                    "get_tasks_response", "get_reports_response",
+                    "delete_target_response", "delete_task_response",
+                    "delete_config_response", "get_port_lists_response"]
     while True:
         try:
-            chunk = sock.recv(65536)
+            chunk = sock.recv(131072)
             if not chunk:
                 break
             response += chunk
-            text = response.decode("utf-8", errors="replace")
-            for tag in ["authenticate_response", "create_target_response",
-                        "create_config_response", "modify_config_response",
-                        "create_task_response", "start_task_response",
-                        "get_tasks_response", "get_reports_response",
-                        "delete_target_response", "delete_task_response",
-                        "delete_config_response", "get_port_lists_response"]:
-                if f"</{{tag}}>" in text:
-                    return text
+            # Only check the tail of the response for the end tag (avoids O(n^2))
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{{tag}}>" in tail:
+                    return response.decode("utf-8", errors="replace")
         except socket.timeout:
             break
     return response.decode("utf-8", errors="replace")
@@ -1735,8 +1763,13 @@ try:
     if report_id:
         print("STATUS: Retrieving scan report...")
         get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
-        sock.settimeout(120)
-        resp = send_gmp(sock, get_report)
+        sock.settimeout(300)
+        resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        resp_len = len(resp)
+        print(f"STATUS: Report response received ({{resp_len}} bytes)")
+        if resp_len == 0:
+            print("SCAN:FAILED:Empty response when retrieving report")
+            sys.exit(1)
         print("REPORT_XML_START")
         try:
             root = ET.fromstring(resp)
@@ -1744,8 +1777,12 @@ try:
             if report_elem is not None:
                 print(ET.tostring(report_elem, encoding="unicode"))
             else:
-                print(resp)
-        except:
+                print(f"ERROR: No <report> element found in response ({{resp_len}} bytes)")
+                print(resp[:500])
+        except ET.ParseError as parse_err:
+            print(f"ERROR: XML parse failed: {{parse_err}}")
+            if "</get_reports_response>" not in resp:
+                print(f"ERROR: Response appears truncated ({{resp_len}} bytes, no closing tag)")
             print(resp)
         print("REPORT_XML_END")
     else:
