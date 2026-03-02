@@ -1,9 +1,13 @@
 /* Custom styles for Talos CleanRoom Deployment Web UI */
 
-/* Force GPU compositing layer promotion on main containers.
-   Prevents Chrome rendering artifacts (ghost images, stale paints)
-   when Alpine.js toggles visibility on elements with transparency. */
-main, [x-data] {
+/* Chrome GPU compositing fix — prevents stale paint artifacts
+   when Alpine.js toggles visibility on elements with transparency.
+   transform: translateZ(0) forces each toggled section onto its own
+   compositing layer so Chrome properly invalidates on display changes. */
+[x-show] {
+    transform: translateZ(0);
+}
+[x-data] {
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
 }
