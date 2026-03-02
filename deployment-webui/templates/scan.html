@@ -3,7 +3,7 @@
 {% block title %}Security Scanner - Talos CleanRoom{% endblock %}
 
 {% block content %}
-<div x-data="scanManager()" x-init="init()">
+<div x-data="scanManager()" x-init="init()" x-cloak>
     <div class="flex justify-between items-center mb-8">
         <div>
             <h1 class="text-2xl font-bold text-white">Security Scanner</h1>
@@ -110,7 +110,7 @@
             </div>
 
             <!-- Profile Details Panel -->
-            <div x-show="showProfileInfo && profile !== 'custom'" x-collapse class="mt-3 bg-gray-700/50 rounded-lg p-4 text-sm">
+            <div x-show="showProfileInfo && profile !== 'custom'" x-collapse x-cloak class="mt-3 bg-gray-700/50 rounded-lg p-4 text-sm">
                 <div class="flex items-center justify-between mb-3">
                     <span class="text-gray-300 font-medium capitalize" x-text="profile + ' Profile'"></span>
                     <span class="text-gray-500 text-xs">
@@ -136,7 +136,7 @@
             </div>
 
             <!-- Custom Module Picker (visible when Custom profile + Metasploit selected) -->
-            <div x-show="profile === 'custom' && selectedTools.includes('metasploit') && modulesLoaded" x-collapse class="mt-3">
+            <div x-show="profile === 'custom' && selectedTools.includes('metasploit') && modulesLoaded" x-collapse x-cloak class="mt-3">
                 <div class="bg-gray-700/50 rounded-lg p-4">
                     <div class="flex items-center justify-between mb-3">
                         <div class="flex items-center gap-3">
@@ -204,7 +204,7 @@
             </div>
 
             <!-- OpenVAS Custom Configuration (visible when Custom profile + OpenVAS selected) -->
-            <div x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasDataLoaded" x-collapse class="mt-3">
+            <div x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasDataLoaded" x-collapse x-cloak class="mt-3">
                 <div class="bg-gray-700/50 rounded-lg p-4">
                     <div class="flex items-center justify-between mb-3">
                         <span class="text-gray-300 font-medium">OpenVAS Configuration</span>
