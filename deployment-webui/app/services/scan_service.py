@@ -6,6 +6,7 @@ for consolidated vulnerability management.
 """
 
 import asyncio
+import base64
 import re
 import uuid
 from datetime import datetime
@@ -1295,44 +1296,79 @@ except Exception as e:
             await self.log("openvas", "error", f"OpenVAS scan failed: {error_line}")
             return None
 
-        # Extract XML report from output
+        # The GMP script writes the report to a temp file inside the container.
+        # Look for REPORT_FILE:<path>:<size> in the output, then kubectl cp it out.
+        report_file_line = None
+        for line in output.split("\n"):
+            if line.strip().startswith("REPORT_FILE:"):
+                report_file_line = line.strip()
+                break
+
+        if report_file_line:
+            # Parse REPORT_FILE:/tmp/gvm-report-xxx.xml:12345
+            parts = report_file_line.split(":", 3)  # REPORT_FILE, /tmp/gvm-report-xxx.xml, size
+            remote_path = parts[1] if len(parts) >= 2 else ""
+            report_size = parts[2] if len(parts) >= 3 else "?"
+            await self.log("openvas", "info", f"Report written to container ({report_size} bytes), retrieving...")
+
+            # Get the pod name for kubectl cp
+            pod_result = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app=greenbone",
+                 "-o", "jsonpath={.items[0].metadata.name}"],
+                timeout=15
+            )
+            pod_name = (pod_result.output or "").strip()
+            if not pod_name:
+                await self.log("openvas", "error", "Could not determine greenbone pod name for kubectl cp")
+                return None
+
+            # Retrieve via base64 to avoid kubectl SPDY chunking limits on large files
+            b64_result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                 "--", "base64", remote_path],
+                timeout=120
+            )
+
+            # Clean up the temp file in the container
+            await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                 "--", "rm", "-f", remote_path],
+                timeout=15
+            )
+
+            if b64_result.success and b64_result.output:
+                try:
+                    xml_content = base64.b64decode(b64_result.output.strip()).decode("utf-8")
+                    result_count = xml_content.count("<result ")
+                    await self.log("openvas", "info", f"OpenVAS found {result_count} result(s) ({len(xml_content)} bytes)")
+                    for ts in self.current_scan.tools:
+                        if ts.tool == ScanTool.OPENVAS:
+                            ts.findings_count = result_count
+                            break
+                    return xml_content
+                except Exception as decode_err:
+                    await self.log("openvas", "error", f"Failed to decode report: {decode_err}")
+                    return None
+            else:
+                await self.log("openvas", "error",
+                               f"Failed to retrieve report file from container: {b64_result.output or 'no output'}")
+                return None
+
+        # Fallback: try to extract from stdout (for backwards compatibility or small reports)
         xml_start = output.find("<?xml")
-        # The GMP response wraps the report - find the actual report content
-        report_start = output.find("<report ")
         report_end = output.rfind("</report>")
-
-        if xml_start >= 0:
-            # If we got a full XML document
-            xml_end = output.rfind("</report>")
-            if xml_end >= 0:
-                xml_content = output[xml_start:xml_end + len("</report>")]
-                result_count = xml_content.count("<result ")
-                await self.log("openvas", "info", f"OpenVAS found {result_count} result(s)")
-                for ts in self.current_scan.tools:
-                    if ts.tool == ScanTool.OPENVAS:
-                        ts.findings_count = result_count
-                        break
-                return xml_content
-
-        # Try to get the REPORT_XML tagged output from our script
-        xml_marker = "REPORT_XML_START"
-        xml_end_marker = "REPORT_XML_END"
-        if xml_marker in output and xml_end_marker in output:
-            start_idx = output.index(xml_marker) + len(xml_marker) + 1
-            end_idx = output.index(xml_end_marker)
-            xml_content = output[start_idx:end_idx].strip()
-            if xml_content:
-                result_count = xml_content.count("<result ")
-                await self.log("openvas", "info", f"OpenVAS found {result_count} result(s)")
-                for ts in self.current_scan.tools:
-                    if ts.tool == ScanTool.OPENVAS:
-                        ts.findings_count = result_count
-                        break
-                return xml_content
+        if xml_start >= 0 and report_end >= 0:
+            xml_content = output[xml_start:report_end + len("</report>")]
+            result_count = xml_content.count("<result ")
+            await self.log("openvas", "info", f"OpenVAS found {result_count} result(s)")
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.OPENVAS:
+                    ts.findings_count = result_count
+                    break
+            return xml_content
 
         output_len = len(output)
         await self.log("openvas", "warn", f"Could not extract XML report from OpenVAS output ({output_len} bytes)")
-        # Log last 30 lines for debugging (like Nmap handler)
         for line in output.split("\n")[-30:]:
             line = line.strip()
             if line and not line.startswith("<"):
@@ -1350,6 +1386,8 @@ except Exception as e:
             await self.log("openvas", "error", line.replace("ERROR:", "").strip())
         elif line.startswith("PROGRESS:"):
             await self.log("openvas", "info", line.replace("PROGRESS:", "").strip())
+        elif line.startswith("DEBUG"):
+            await self.log("openvas", "debug", line)
 
     def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
                           profile: ScanProfile = ScanProfile.STANDARD) -> str:
@@ -1520,24 +1558,55 @@ try:
     while True:
         time.sleep(10)
         poll_count += 1
-        get_task = f'<get_tasks task_id="{{task_id}}"/>'
+        get_task = f'<get_tasks task_id="{{task_id}}" details="1"/>'
         resp = send_gmp(sock, get_task)
         try:
             root = ET.fromstring(resp)
             task_elem = root.find(".//task")
             if task_elem is not None:
+                # Diagnostic dump on first few polls to understand GMP response structure
+                if poll_count <= 3:
+                    progress_elem_dump = task_elem.find("progress")
+                    if progress_elem_dump is not None:
+                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
+                        # Truncate if huge
+                        if len(prog_xml) > 500:
+                            prog_xml = prog_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_PROGRESS_XML: {{prog_xml}}", flush=True)
+                    cr_dump = task_elem.find(".//current_report")
+                    if cr_dump is not None:
+                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
+                        if len(cr_xml) > 500:
+                            cr_xml = cr_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_REPORT_XML: {{cr_xml}}", flush=True)
+                    elif poll_count == 1:
+                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
                 task_status = task_elem.findtext("status", "")
                 progress_elem = task_elem.find("progress")
-                progress = progress_elem.text if progress_elem is not None else "0"
-                progress_int = int(progress) if progress.isdigit() else 0
-                # Extract intermediate result count
+                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
+                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
+                # Extract intermediate result count — try multiple paths
                 result_count = 0
                 current_report = task_elem.find(".//current_report")
                 if current_report is not None:
-                    rc = current_report.findtext(".//result_count/full", "0")
-                    result_count = int(rc) if rc.isdigit() else 0
-                # Extract per-host progress (format: "host_ip:percentage")
+                    # Try several known paths for result count
+                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
+                        rc = current_report.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                # Also check task-level result count
+                if result_count == 0:
+                    for rc_path in [".//result_count/full", ".//result_count"]:
+                        rc = task_elem.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                # Extract per-host progress — try both direct children and nested
                 host_progress_elems = task_elem.findall(".//progress/host_progress")
+                if not host_progress_elems and progress_elem is not None:
+                    # Try direct children of progress element
+                    host_progress_elems = list(progress_elem)
                 active_hosts = 0
                 host_pcts = []
                 host_progress_parts = []
@@ -1607,7 +1676,8 @@ try:
         print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
         sys.exit(1)
 
-    # Get report in XML format
+    # Get report in XML format — write to temp file (too large for kubectl stdout)
+    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
         get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>'
@@ -1619,27 +1689,27 @@ try:
         if resp_len == 0:
             print("SCAN:FAILED:Empty response when retrieving report", flush=True)
             sys.exit(1)
-        print("REPORT_XML_START", flush=True)
-        # Extract the report XML from the GMP response
+        # Extract report XML and write to file instead of stdout
         try:
             root = ET.fromstring(resp)
             report_elem = root.find(".//report")
             if report_elem is not None:
-                print(ET.tostring(report_elem, encoding="unicode"), flush=True)
+                report_xml = ET.tostring(report_elem, encoding="unicode")
+                with open(REPORT_FILE, "w") as f:
+                    f.write(report_xml)
+                print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
             else:
-                print(f"ERROR: No <report> element found in response ({{resp_len}} bytes)", flush=True)
-                # Print first 500 chars for debugging
-                print(resp[:500], flush=True)
+                print(f"SCAN:FAILED:No <report> element found in response ({{resp_len}} bytes)", flush=True)
+                sys.exit(1)
         except ET.ParseError as parse_err:
-            print(f"ERROR: XML parse failed: {{parse_err}}", flush=True)
-            # Check if we got a partial response
-            if "</get_reports_response>" not in resp:
-                print(f"ERROR: Response appears truncated ({{resp_len}} bytes, no closing tag)", flush=True)
-            # Still output what we have - extraction code will try to use it
-            print(resp, flush=True)
-        print("REPORT_XML_END", flush=True)
+            # Try writing raw response as fallback
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+            print(f"STATUS: Warning - XML parse failed ({{parse_err}}), wrote raw response", flush=True)
     else:
         print("SCAN:FAILED:No report ID available", flush=True)
+        sys.exit(1)
 
     # Cleanup: delete task and target
     try:
@@ -1854,24 +1924,51 @@ try:
     while True:
         time.sleep(10)
         poll_count += 1
-        get_task = f\'<get_tasks task_id="{{task_id}}"/>\'
+        get_task = f\'<get_tasks task_id="{{task_id}}" details="1"/>\'
         resp = send_gmp(sock, get_task)
         try:
             root = ET.fromstring(resp)
             task_elem = root.find(".//task")
             if task_elem is not None:
+                # Diagnostic dump on first few polls to understand GMP response structure
+                if poll_count <= 3:
+                    progress_elem_dump = task_elem.find("progress")
+                    if progress_elem_dump is not None:
+                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
+                        if len(prog_xml) > 500:
+                            prog_xml = prog_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_PROGRESS_XML: {{prog_xml}}", flush=True)
+                    cr_dump = task_elem.find(".//current_report")
+                    if cr_dump is not None:
+                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
+                        if len(cr_xml) > 500:
+                            cr_xml = cr_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_REPORT_XML: {{cr_xml}}", flush=True)
+                    elif poll_count == 1:
+                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
                 task_status = task_elem.findtext("status", "")
                 progress_elem = task_elem.find("progress")
-                progress = progress_elem.text if progress_elem is not None else "0"
-                progress_int = int(progress) if progress.isdigit() else 0
-                # Extract intermediate result count
+                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
+                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
+                # Extract intermediate result count — try multiple paths
                 result_count = 0
                 current_report = task_elem.find(".//current_report")
                 if current_report is not None:
-                    rc = current_report.findtext(".//result_count/full", "0")
-                    result_count = int(rc) if rc.isdigit() else 0
-                # Extract per-host progress (format: "host_ip:percentage")
+                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
+                        rc = current_report.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                if result_count == 0:
+                    for rc_path in [".//result_count/full", ".//result_count"]:
+                        rc = task_elem.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                # Extract per-host progress — try both nested and direct children
                 host_progress_elems = task_elem.findall(".//progress/host_progress")
+                if not host_progress_elems and progress_elem is not None:
+                    host_progress_elems = list(progress_elem)
                 active_hosts = 0
                 host_pcts = []
                 host_progress_parts = []
@@ -1940,7 +2037,8 @@ try:
         print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
         sys.exit(1)
 
-    # Get report in XML format
+    # Get report in XML format — write to temp file (too large for kubectl stdout)
+    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
         get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
@@ -1951,23 +2049,27 @@ try:
         if resp_len == 0:
             print("SCAN:FAILED:Empty response when retrieving report", flush=True)
             sys.exit(1)
-        print("REPORT_XML_START", flush=True)
+        # Extract report XML and write to file instead of stdout
         try:
             root = ET.fromstring(resp)
             report_elem = root.find(".//report")
             if report_elem is not None:
-                print(ET.tostring(report_elem, encoding="unicode"), flush=True)
+                report_xml = ET.tostring(report_elem, encoding="unicode")
+                with open(REPORT_FILE, "w") as f:
+                    f.write(report_xml)
+                print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
             else:
-                print(f"ERROR: No <report> element found in response ({{resp_len}} bytes)", flush=True)
-                print(resp[:500], flush=True)
+                print(f"SCAN:FAILED:No <report> element found in response ({{resp_len}} bytes)", flush=True)
+                sys.exit(1)
         except ET.ParseError as parse_err:
-            print(f"ERROR: XML parse failed: {{parse_err}}", flush=True)
-            if "</get_reports_response>" not in resp:
-                print(f"ERROR: Response appears truncated ({{resp_len}} bytes, no closing tag)", flush=True)
-            print(resp, flush=True)
-        print("REPORT_XML_END", flush=True)
+            # Try writing raw response as fallback
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+            print(f"STATUS: Warning - XML parse failed ({{parse_err}}), wrote raw response", flush=True)
     else:
         print("SCAN:FAILED:No report ID available", flush=True)
+        sys.exit(1)
 
     # Cleanup: delete task, target, and custom config
     try:
