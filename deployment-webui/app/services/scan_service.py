@@ -1311,18 +1311,19 @@ except Exception as e:
             report_size = parts[2] if len(parts) >= 3 else "?"
             await self.log("openvas", "info", f"Report written to container ({report_size} bytes), retrieving...")
 
-            # Get the pod name for kubectl cp
+            # Get the pod name for kubectl exec
             pod_result = await self.process_manager.run_command_simple(
-                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app=greenbone",
+                ["kubectl", "get", "pods", "-n", "openvas", "-l", "app.kubernetes.io/name=greenbone",
                  "-o", "jsonpath={.items[0].metadata.name}"],
                 timeout=15
             )
             pod_name = (pod_result.output or "").strip()
             if not pod_name:
-                await self.log("openvas", "error", "Could not determine greenbone pod name for kubectl cp")
+                await self.log("openvas", "error", "Could not determine greenbone pod name")
                 return None
 
             # Retrieve via base64 to avoid kubectl SPDY chunking limits on large files
+            await self.log("openvas", "info", f"Downloading report from {pod_name} via base64...")
             b64_result = await self.process_manager.run_command_simple(
                 ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
                  "--", "base64", remote_path],
@@ -1337,6 +1338,7 @@ except Exception as e:
             )
 
             if b64_result.success and b64_result.output:
+                await self.log("openvas", "info", f"Received {len(b64_result.output)} bytes (base64), decoding...")
                 try:
                     xml_content = base64.b64decode(b64_result.output.strip()).decode("utf-8")
                     result_count = xml_content.count("<result ")
@@ -1386,6 +1388,10 @@ except Exception as e:
             await self.log("openvas", "error", line.replace("ERROR:", "").strip())
         elif line.startswith("PROGRESS:"):
             await self.log("openvas", "info", line.replace("PROGRESS:", "").strip())
+        elif line.startswith("REPORT_FILE:"):
+            parts = line.split(":", 3)
+            size = parts[2] if len(parts) >= 3 else "?"
+            await self.log("openvas", "info", f"Report saved in container ({size} bytes)")
         elif line.startswith("DEBUG"):
             await self.log("openvas", "debug", line)
 
