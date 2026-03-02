@@ -1,5 +1,13 @@
 /* Custom styles for Talos CleanRoom Deployment Web UI */
 
+/* Force GPU compositing layer promotion on main containers.
+   Prevents Chrome rendering artifacts (ghost images, stale paints)
+   when Alpine.js toggles visibility on elements with transparency. */
+main, [x-data] {
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px;
