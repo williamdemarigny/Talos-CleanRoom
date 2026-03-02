@@ -1507,12 +1507,14 @@ try:
     print(f"STATUS: Scan started (report {{report_id}})", flush=True)
 
     # Poll for completion — progress-aware timeout
-    # Stale limit: if no progress change for 30 minutes, bail out
+    # Stale limit: if no progress change for 60 minutes, bail out
+    # Tracks overall progress, result count, AND per-host NVT progress
     # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
-    stale_limit = 180  # 180 x 10s = 30 min with no progress change
+    stale_limit = 360  # 360 x 10s = 60 min with no progress change at any level
     stale_count = 0
     last_result_count = 0
     last_progress_val = -1
+    last_host_progress_sig = ""  # track per-host changes
     poll_count = 0
     scan_done = False
     while True:
@@ -1538,9 +1540,11 @@ try:
                 host_progress_elems = task_elem.findall(".//progress/host_progress")
                 active_hosts = 0
                 host_pcts = []
+                host_progress_parts = []
                 for hp in host_progress_elems:
                     host_text = (hp.text or "").strip()
                     if ":" in host_text:
+                        host_progress_parts.append(host_text)
                         parts = host_text.rsplit(":", 1)
                         try:
                             pct = int(parts[1])
@@ -1551,6 +1555,8 @@ try:
                         except (ValueError, IndexError):
                             pass
                 avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
+                # Signature of all host progress — changes when any host advances
+                host_progress_sig = "|".join(sorted(host_progress_parts))
                 # Build detailed progress line
                 elapsed = poll_count * 10
                 elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
@@ -1561,11 +1567,15 @@ try:
                 stale_remaining = (stale_limit - stale_count) * 10 // 60
                 detail += f" | stale timeout in {{stale_remaining}}m"
                 print(f"PROGRESS: {{detail}}", flush=True)
-                # Check for progress change — reset stale counter if anything moved
-                if result_count != last_result_count or progress_int != last_progress_val:
+                # Check for progress change — reset stale counter if ANYTHING moved
+                # This includes overall %, result count, or any individual host progress
+                if (result_count != last_result_count
+                        or progress_int != last_progress_val
+                        or host_progress_sig != last_host_progress_sig):
                     stale_count = 0
                     last_result_count = result_count
                     last_progress_val = progress_int
+                    last_host_progress_sig = host_progress_sig
                 else:
                     stale_count += 1
                 if task_status == "Done":
@@ -1586,10 +1596,10 @@ try:
                         break
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}", flush=True)
                     sys.exit(1)
-                # Stale timeout — no progress for 30 minutes
+                # Stale timeout — no progress at any level for 60 minutes
                 if stale_count >= stale_limit:
                     elapsed_total = poll_count * 10
-                    print(f"SCAN:FAILED:Scan stalled — no progress change for 30 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
                     sys.exit(1)
         except ET.ParseError:
             pass
@@ -1831,12 +1841,14 @@ try:
     print(f"STATUS: Scan started (report {{report_id}})", flush=True)
 
     # Poll for completion — progress-aware timeout
-    # Stale limit: if no progress change for 30 minutes, bail out
+    # Stale limit: if no progress change for 60 minutes, bail out
+    # Tracks overall progress, result count, AND per-host NVT progress
     # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
-    stale_limit = 180  # 180 x 10s = 30 min with no progress change
+    stale_limit = 360  # 360 x 10s = 60 min with no progress change at any level
     stale_count = 0
     last_result_count = 0
     last_progress_val = -1
+    last_host_progress_sig = ""  # track per-host changes
     poll_count = 0
     scan_done = False
     while True:
@@ -1862,9 +1874,11 @@ try:
                 host_progress_elems = task_elem.findall(".//progress/host_progress")
                 active_hosts = 0
                 host_pcts = []
+                host_progress_parts = []
                 for hp in host_progress_elems:
                     host_text = (hp.text or "").strip()
                     if ":" in host_text:
+                        host_progress_parts.append(host_text)
                         parts = host_text.rsplit(":", 1)
                         try:
                             pct = int(parts[1])
@@ -1875,6 +1889,8 @@ try:
                         except (ValueError, IndexError):
                             pass
                 avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
+                # Signature of all host progress — changes when any host advances
+                host_progress_sig = "|".join(sorted(host_progress_parts))
                 # Build detailed progress line
                 elapsed = poll_count * 10
                 elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
@@ -1885,11 +1901,15 @@ try:
                 stale_remaining = (stale_limit - stale_count) * 10 // 60
                 detail += f" | stale timeout in {{stale_remaining}}m"
                 print(f"PROGRESS: {{detail}}", flush=True)
-                # Check for progress change — reset stale counter if anything moved
-                if result_count != last_result_count or progress_int != last_progress_val:
+                # Check for progress change — reset stale counter if ANYTHING moved
+                # This includes overall %, result count, or any individual host progress
+                if (result_count != last_result_count
+                        or progress_int != last_progress_val
+                        or host_progress_sig != last_host_progress_sig):
                     stale_count = 0
                     last_result_count = result_count
                     last_progress_val = progress_int
+                    last_host_progress_sig = host_progress_sig
                 else:
                     stale_count += 1
                 if task_status == "Done":
@@ -1909,10 +1929,10 @@ try:
                         break
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}", flush=True)
                     sys.exit(1)
-                # Stale timeout — no progress for 30 minutes
+                # Stale timeout — no progress at any level for 60 minutes
                 if stale_count >= stale_limit:
                     elapsed_total = poll_count * 10
-                    print(f"SCAN:FAILED:Scan stalled — no progress change for 30 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
                     sys.exit(1)
         except ET.ParseError:
             pass
