@@ -25,11 +25,11 @@ Internet/Network
 │   LoadBalancer  │
 └────────┬────────┘
          │
-    ┌────┴────┐
-    ▼         ▼
-┌───────┐ ┌───────┐
-│ArgoCD │ │Longhorn│  (Services)
-└───────┘ └───────┘
+    ┌────┴────┬─────────┐
+    ▼         ▼         ▼
+┌───────┐ ┌───────┐ ┌───────┐
+│ArgoCD │ │Harbor │ │OpenVAS│  (Services)
+└───────┘ └───────┘ └───────┘
 ```
 
 ## Components
@@ -108,9 +108,12 @@ kubectl apply -f traefik/ingressroutes/
 Add DNS records pointing to the Traefik LoadBalancer IP:
 
 ```
-traefik.knowledgeondemand.net  -> <TRAEFIK_LB_IP>
-argocd.knowledgeondemand.net   -> <TRAEFIK_LB_IP>
-longhorn.knowledgeondemand.net -> <TRAEFIK_LB_IP>
+traefik.knowledgeondemand.net      -> <TRAEFIK_LB_IP>
+argocd.knowledgeondemand.net       -> <TRAEFIK_LB_IP>
+harbor.knowledgeondemand.net       -> <TRAEFIK_LB_IP>
+openvas.knowledgeondemand.net      -> <TRAEFIK_LB_IP>
+faraday.knowledgeondemand.net      -> <TRAEFIK_LB_IP>
+threatdragon.knowledgeondemand.net -> <TRAEFIK_LB_IP>
 ```
 
 Get the LoadBalancer IP:
@@ -245,7 +248,7 @@ traefik/
 ├── dashboard-ingressroute.yaml # Traefik dashboard access
 ├── ingressroutes/
 │   ├── argocd-ingressroute.yaml
-│   └── longhorn-ingressroute.yaml
+│   └── longhorn-ingressroute.yaml  # Legacy (Longhorn replaced by Ceph CSI)
 └── README.md
 
 metallb/

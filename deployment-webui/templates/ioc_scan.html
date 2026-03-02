@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+
+{% block title %}IOC Scanner - Talos CleanRoom{% endblock %}
+
+{% block content %}
+<div x-data="iocScanManager()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">IOC Scanner</h1>
+            <p class="text-gray-400">Scan remote filesystems for indicators of compromise using LOKI-RS</p>
+        </div>
+        <div class="flex gap-4">
+            <button
+                @click="abortScan"
+                x-show="isRunning"
+                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+            >
+                Abort Scan
+            </button>
+        </div>
+    </div>
+
+    <!-- Scan Configuration -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6" x-show="!isRunning && !hasResults">
+        <h2 class="text-lg font-medium text-white mb-4">Scan Configuration</h2>
+
+        <!-- Target Input -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Target Host</label>
+            <input
+                type="text"
+                x-model="target"
+                placeholder="e.g. 192.168.1.100 or hostname.local"
+                class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500"
+            >
+            <p class="text-xs text-gray-500 mt-1">IP address or hostname of the target to scan.</p>
+        </div>
+
+        <!-- Mount Type Selection -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-3">Mount Protocol</label>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- SSH -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="mountType === 'ssh' ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="radio" value="ssh" x-model="mountType" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">SSH (sshfs)</span>
+                        <p class="text-xs text-gray-400 mt-1">Mount via SSH. Best for Linux/Unix targets. Requires SSH credentials.</p>
+                    </div>
+                </label>
+
+                <!-- SMB -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="mountType === 'smb' ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="radio" value="smb" x-model="mountType" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">SMB / CIFS</span>
+                        <p class="text-xs text-gray-400 mt-1">Mount a Windows share. Requires share name and credentials.</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- SSH Credentials -->
+        <div x-show="mountType === 'ssh'" x-collapse class="mb-6 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">SSH Username</label>
+                    <input type="text" x-model="sshUsername" placeholder="root"
+                           class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">SSH Password</label>
+                    <input type="password" x-model="sshPassword" placeholder="Password"
+                           class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Remote Path</label>
+                <input type="text" x-model="scanPath" placeholder="/"
+                       class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                <p class="text-xs text-gray-500 mt-1">Directory on the remote host to scan. Default: / (entire filesystem)</p>
+            </div>
+        </div>
+
+        <!-- SMB Credentials -->
+        <div x-show="mountType === 'smb'" x-collapse class="mb-6 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Share Name</label>
+                    <input type="text" x-model="smbShare" placeholder="C$"
+                           class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Username</label>
+                    <input type="text" x-model="smbUsername" placeholder="Administrator"
+                           class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                    <input type="password" x-model="smbPassword" placeholder="Password"
+                           class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Domain</label>
+                <input type="text" x-model="smbDomain" placeholder="WORKGROUP"
+                       class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500">
+            </div>
+        </div>
+
+        <!-- Advanced Options -->
+        <div class="mb-6">
+            <button @click="showAdvanced = !showAdvanced"
+                    class="text-sm text-gray-400 hover:text-cyan-400 flex items-center gap-1">
+                <svg class="w-4 h-4 transition-transform" :class="showAdvanced ? 'rotate-90' : ''" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                </svg>
+                Advanced Options
+            </button>
+            <div x-show="showAdvanced" x-collapse class="mt-3 bg-gray-700/50 rounded-lg p-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Max File Size (MB)</label>
+                        <input type="number" x-model.number="maxFileSizeMb" min="1" max="1024"
+                               class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                        <p class="text-xs text-gray-500 mt-1">Files larger than this will be skipped.</p>
+                    </div>
+                    <div class="flex items-center pt-6">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" x-model="scanArchives" class="accent-cyan-500 w-4 h-4">
+                            <div>
+                                <span class="text-sm text-gray-300">Scan Archive Contents</span>
+                                <p class="text-xs text-gray-500">Scan inside ZIP archives</p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Start Button -->
+        <button
+            @click="startScan"
+            :disabled="!canStart"
+            class="px-6 py-3 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+            Start IOC Scan
+        </button>
+        <span x-show="!target.trim()" class="text-xs text-yellow-400 ml-3">Enter a target host</span>
+        <span x-show="target.trim() && mountType === 'ssh' && !sshUsername" class="text-xs text-yellow-400 ml-3">SSH username is required</span>
+        <span x-show="target.trim() && mountType === 'smb' && !smbShare" class="text-xs text-yellow-400 ml-3">SMB share name is required</span>
+    </div>
+
+    <!-- Scan Progress (visible during/after scan) -->
+    <div x-show="status !== 'idle'" class="mb-6">
+        <!-- Status Banner -->
+        <div class="mb-6 p-4 rounded-lg" :class="statusBannerClass">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <span class="text-lg font-medium" x-text="statusText"></span>
+                    <span x-show="isRunning" class="ml-3">
+                        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                </div>
+                <div class="text-sm">
+                    <span x-show="scanTarget" class="text-gray-300">Target: <span x-text="scanTarget"></span></span>
+                    <span x-show="elapsedTime" class="ml-4">Elapsed: <span x-text="elapsedTime"></span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Phase Progress -->
+        <div class="grid grid-cols-4 gap-2 mb-6">
+            <template x-for="phase in phases" :key="phase.id">
+                <div class="bg-gray-800 rounded-lg p-3 text-center"
+                     :class="phaseClass(phase.id)">
+                    <div class="text-sm font-medium" x-text="phase.label"></div>
+                    <div class="text-xs mt-1" x-text="phaseStatus(phase.id)"></div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Findings Summary Cards -->
+        <div x-show="totalFindings > 0" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="bg-gray-800 rounded-lg p-4 border-l-4 border-red-500">
+                <div class="text-2xl font-bold text-red-400" x-text="alertsCount"></div>
+                <div class="text-sm text-gray-400">Alerts</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border-l-4 border-yellow-500">
+                <div class="text-2xl font-bold text-yellow-400" x-text="warningsCount"></div>
+                <div class="text-sm text-gray-400">Warnings</div>
+            </div>
+            <div class="bg-gray-800 rounded-lg p-4 border-l-4 border-cyan-500">
+                <div class="text-2xl font-bold text-cyan-400" x-text="noticesCount"></div>
+                <div class="text-sm text-gray-400">Notices</div>
+            </div>
+        </div>
+
+        <!-- Findings Table -->
+        <div x-show="findings.length > 0" class="bg-gray-800 rounded-lg p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-medium text-white">Findings</h2>
+                <div class="flex gap-2">
+                    <button @click="findingsFilter = null"
+                            class="px-3 py-1 text-sm rounded"
+                            :class="findingsFilter === null ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'">
+                        All (<span x-text="findings.length"></span>)
+                    </button>
+                    <button @click="findingsFilter = 'alert'"
+                            class="px-3 py-1 text-sm rounded"
+                            :class="findingsFilter === 'alert' ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300'">
+                        Alerts (<span x-text="alertsCount"></span>)
+                    </button>
+                    <button @click="findingsFilter = 'warning'"
+                            class="px-3 py-1 text-sm rounded"
+                            :class="findingsFilter === 'warning' ? 'bg-yellow-600 text-white' : 'bg-gray-700 text-gray-300'">
+                        Warnings (<span x-text="warningsCount"></span>)
+                    </button>
+                    <button @click="findingsFilter = 'notice'"
+                            class="px-3 py-1 text-sm rounded"
+                            :class="findingsFilter === 'notice' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'">
+                        Notices (<span x-text="noticesCount"></span>)
+                    </button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-gray-700">
+                            <th class="text-left pb-3 pr-4 w-24">Severity</th>
+                            <th class="text-left pb-3 pr-4 w-16">Score</th>
+                            <th class="text-left pb-3 pr-4">File Path</th>
+                            <th class="text-left pb-3 pr-4">Rule / Match</th>
+                            <th class="text-left pb-3">Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(finding, idx) in filteredFindings" :key="idx">
+                            <tr class="border-b border-gray-700/50 cursor-pointer hover:bg-gray-700/30"
+                                @click="toggleFinding(idx)">
+                                <td class="py-3 pr-4">
+                                    <span class="px-2 py-1 rounded text-xs font-medium uppercase"
+                                          :class="severityBadgeClass(finding.severity)"
+                                          x-text="finding.severity"></span>
+                                </td>
+                                <td class="py-3 pr-4 font-mono" x-text="finding.score"></td>
+                                <td class="py-3 pr-4 font-mono text-xs max-w-xs truncate" x-text="finding.file_path" :title="finding.file_path"></td>
+                                <td class="py-3 pr-4 text-cyan-400" x-text="finding.rule_name || '-'"></td>
+                                <td class="py-3 max-w-sm truncate" x-text="finding.description" :title="finding.description"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Expanded Finding Detail -->
+            <template x-for="(finding, idx) in filteredFindings" :key="'detail-' + idx">
+                <div x-show="expandedFinding === idx" x-collapse
+                     class="bg-gray-900 rounded-lg p-4 mt-1 mb-2 text-sm">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <span class="text-gray-500">Full Path:</span>
+                            <span class="text-gray-200 ml-2 font-mono text-xs break-all" x-text="finding.file_path"></span>
+                        </div>
+                        <div x-show="finding.rule_name">
+                            <span class="text-gray-500">Rule:</span>
+                            <span class="text-cyan-400 ml-2" x-text="finding.rule_name"></span>
+                        </div>
+                        <div x-show="finding.hash_md5">
+                            <span class="text-gray-500">MD5:</span>
+                            <span class="text-gray-200 ml-2 font-mono text-xs" x-text="finding.hash_md5"></span>
+                        </div>
+                        <div x-show="finding.hash_sha256">
+                            <span class="text-gray-500">SHA256:</span>
+                            <span class="text-gray-200 ml-2 font-mono text-xs" x-text="finding.hash_sha256"></span>
+                        </div>
+                    </div>
+                    <div x-show="finding.matched_strings && finding.matched_strings.length > 0" class="mt-3">
+                        <span class="text-gray-500">Matched Strings:</span>
+                        <div class="mt-1 bg-gray-800 rounded p-2 font-mono text-xs text-yellow-300">
+                            <template x-for="str in (finding.matched_strings || [])" :key="str">
+                                <div x-text="str"></div>
+                            </template>
+                        </div>
+                    </div>
+                    <div x-show="finding.tags && finding.tags.length > 0" class="mt-3">
+                        <span class="text-gray-500">Tags:</span>
+                        <div class="flex gap-1 mt-1 flex-wrap">
+                            <template x-for="tag in (finding.tags || [])" :key="tag">
+                                <span class="px-2 py-0.5 bg-gray-700 text-gray-300 rounded text-xs" x-text="tag"></span>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Results Summary (after completion) -->
+        <div x-show="status === 'completed'" class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-lg font-medium text-white mb-3">Results Summary</h2>
+            <div class="flex flex-wrap gap-4 items-center">
+                <span class="text-gray-300">
+                    <span class="font-bold" :class="alertsCount > 0 ? 'text-red-400' : 'text-green-400'"
+                          x-text="totalFindings"></span> IOC(s) found
+                </span>
+                <span x-show="uploadedToFaraday" class="text-cyan-400">
+                    Uploaded to Faraday
+                </span>
+                <a href="https://faraday.knowledgeondemand.net"
+                   target="_blank" rel="noopener noreferrer"
+                   class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 text-sm"
+                   x-show="uploadedToFaraday">
+                    Open Faraday
+                </a>
+                <button @click="resetScan"
+                        class="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 text-sm">
+                    New Scan
+                </button>
+            </div>
+        </div>
+
+        <!-- Failed/Aborted reset button -->
+        <div x-show="status === 'failed' || status === 'aborted'" class="mb-6">
+            <button @click="resetScan"
+                    class="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 text-sm">
+                New Scan
+            </button>
+        </div>
+    </div>
+
+    <!-- Live Log Stream -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-white">Scan Log</h2>
+            <div class="flex gap-2">
+                <button
+                    @click="autoScroll = !autoScroll"
+                    class="px-3 py-1 text-sm rounded"
+                    :class="autoScroll ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'"
+                >
+                    Auto-scroll
+                </button>
+                <button
+                    @click="logs = []"
+                    class="px-3 py-1 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
+                >
+                    Clear
+                </button>
+            </div>
+        </div>
+        <div
+            x-ref="logContainer"
+            class="bg-gray-900 rounded p-4 font-mono text-sm h-80 overflow-y-auto"
+        >
+            <template x-for="log in logs" :key="log.timestamp + log.message">
+                <div :class="logClass(log)">
+                    <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
+                    <span x-text="log.message"></span>
+                </div>
+            </template>
+            <div x-show="logs.length === 0" class="text-gray-500">
+                No logs yet. Configure and start an IOC scan to see output.
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan History -->
+    <div class="bg-gray-800 rounded-lg p-6 mt-6" x-show="history.length > 0">
+        <h2 class="text-lg font-medium text-white mb-4">IOC Scan History</h2>
+        <div class="space-y-2">
+            <template x-for="scan in history.slice().reverse()" :key="scan.id">
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg text-sm">
+                    <div class="flex items-center gap-4">
+                        <span class="font-mono text-gray-400" x-text="scan.id"></span>
+                        <span class="text-white" x-text="scan.target"></span>
+                        <span class="text-gray-400 uppercase text-xs" x-text="scan.mount_type"></span>
+                        <span class="text-gray-500 text-xs" x-text="scan.scan_path"></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span x-show="scan.alerts > 0" class="text-red-400 text-xs" x-text="scan.alerts + ' alerts'"></span>
+                        <span x-show="scan.warnings > 0" class="text-yellow-400 text-xs" x-text="scan.warnings + ' warnings'"></span>
+                        <span x-show="scan.notices > 0" class="text-cyan-400 text-xs" x-text="scan.notices + ' notices'"></span>
+                        <span x-show="scan.total_findings === 0 && scan.status === 'completed'" class="text-green-400 text-xs">Clean</span>
+                        <span :class="scan.status === 'completed' ? 'text-green-400' : scan.status === 'failed' ? 'text-red-400' : 'text-orange-400'"
+                              x-text="scan.status" class="capitalize font-medium"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="fixed bottom-4 right-4">
+        <div class="px-3 py-1 rounded-full text-sm" :class="wsConnected ? 'bg-green-600' : 'bg-red-600'">
+            <span x-text="wsConnected ? 'Connected' : 'Disconnected'"></span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ioc_scan.js"></script>
+{% endblock %}
