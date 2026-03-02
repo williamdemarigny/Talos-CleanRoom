@@ -31,6 +31,10 @@ spec:
         app.kubernetes.io/component: scanner
         app.kubernetes.io/part-of: security-platform
     spec:
+      # Enables the pause container as PID 1, which automatically reaps zombie
+      # child processes (defunct nmap/openvas workers from completed scans).
+      # Without this, ospd-openvas (PID 1) doesn't call waitpid() on orphans.
+      shareProcessNamespace: true
       # ============================================================
       # INIT CONTAINERS - Data feeds and configuration
       # ============================================================
