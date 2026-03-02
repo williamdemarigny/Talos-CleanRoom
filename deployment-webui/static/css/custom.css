@@ -85,10 +85,7 @@ button {
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
 }
 
-/* Alpine.js collapse transition */
-[x-collapse] {
-    overflow: hidden;
-}
+/* Alpine.js collapse transition — handled by @alpinejs/collapse plugin */
 
 /* Code block styling */
 pre {
