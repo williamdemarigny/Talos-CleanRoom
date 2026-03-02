@@ -1565,6 +1565,14 @@ try:
                     scan_done = True
                     break
                 elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    # If scan was nearly done, try to retrieve partial results
+                    if progress_int >= 80 and task_status == "Stopped":
+                        print(f"STATUS: Scan stopped at {{progress_int}}% — attempting to retrieve partial results")
+                        if not report_id:
+                            report_elem = task_elem.find(".//report")
+                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                        scan_done = True
+                        break
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}")
                     sys.exit(1)
                 # Stale timeout — no progress for 30 minutes
@@ -1869,6 +1877,14 @@ try:
                     scan_done = True
                     break
                 elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    # If scan was nearly done, try to retrieve partial results
+                    if progress_int >= 80 and task_status == "Stopped":
+                        print(f"STATUS: Scan stopped at {{progress_int}}% — attempting to retrieve partial results")
+                        if not report_id:
+                            report_elem = task_elem.find(".//report")
+                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                        scan_done = True
+                        break
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}")
                     sys.exit(1)
                 # Stale timeout — no progress for 30 minutes

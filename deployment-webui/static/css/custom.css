@@ -1,17 +1,5 @@
 /* Custom styles for Talos CleanRoom Deployment Web UI */
 
-/* Chrome GPU compositing fix — prevents stale paint artifacts
-   when Alpine.js toggles visibility on elements with transparency.
-   transform: translateZ(0) forces each toggled section onto its own
-   compositing layer so Chrome properly invalidates on display changes. */
-[x-show] {
-    transform: translateZ(0);
-}
-[x-data] {
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
-}
-
 /* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px;
