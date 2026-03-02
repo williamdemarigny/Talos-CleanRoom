@@ -1266,9 +1266,9 @@ except Exception as e:
         # Python GMP script that runs inside the gvmd container
         # Uses stdlib only: socket + xml.etree.ElementTree
         if use_custom_families:
-            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families)
+            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families, profile)
         else:
-            gmp_script = self._build_gmp_script(scan_id, target, config_id)
+            gmp_script = self._build_gmp_script(scan_id, target, config_id, profile)
 
         if use_custom_families:
             await self.log("openvas", "info", f"Creating custom config with {len(openvas_families)} NVT families for {target}...")
@@ -1351,8 +1351,20 @@ except Exception as e:
         elif line.startswith("PROGRESS:"):
             await self.log("openvas", "info", line.replace("PROGRESS:", "").strip())
 
-    def _build_gmp_script(self, scan_id: str, target: str, config_id: str) -> str:
+    def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
+                          profile: ScanProfile = ScanProfile.STANDARD) -> str:
         """Build a self-contained Python GMP script for OpenVAS scanning."""
+        # Map profile to preferred port list key
+        # Quick: all TCP + top 100 UDP (skips full UDP scan)
+        # Standard: all TCP only (skip slow UDP scan entirely)
+        # Thorough/Custom: all TCP + all UDP (comprehensive)
+        port_list_pref = {
+            ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
+            ScanProfile.STANDARD: "all_tcp",
+            ScanProfile.THOROUGH: "all_tcp_udp",
+            ScanProfile.CUSTOM: "all_tcp_udp",
+        }.get(profile, "all_tcp")
+
         return f'''
 import socket, os, sys, time
 import xml.etree.ElementTree as ET
@@ -1363,6 +1375,8 @@ TARGET = "{target}"
 CONFIG_ID = "{config_id}"
 SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Profile-based port list preference
+PREFERRED_PORT_LIST = "{port_list_pref}"
 # Well-known port list UUIDs
 PORT_LISTS = {{
     "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
@@ -1421,27 +1435,26 @@ try:
         sys.exit(1)
     print("STATUS: Authenticated with GVM")
 
-    # Find a valid port list — try well-known UUIDs first, then query GVM
-    port_list_id = ""
-    for pl_name, pl_id in PORT_LISTS.items():
-        port_list_id = pl_id
-        break
-    # Verify port list exists by querying GVM
+    # Find a valid port list — use profile-based preference, verify against GVM
+    preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, "")
+    port_list_id = preferred_id
     resp = send_gmp(sock, '<get_port_lists/>')
     try:
         root = ET.fromstring(resp)
         available_pls = {{}}
         for pl in root.findall("port_list"):
             available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
-        # Prefer All IANA TCP and UDP, then All IANA TCP, then first available
-        for preferred in PORT_LISTS.values():
-            if preferred in available_pls:
-                port_list_id = preferred
-                break
+        if preferred_id and preferred_id in available_pls:
+            port_list_id = preferred_id
+            print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})")
         else:
-            if available_pls:
+            # Fallback: try all_tcp, then first available
+            fallback = PORT_LISTS.get("all_tcp", "")
+            if fallback in available_pls:
+                port_list_id = fallback
+            elif available_pls:
                 port_list_id = next(iter(available_pls))
-        print(f"STATUS: Using port list {{port_list_id}} ({{available_pls.get(port_list_id, 'unknown')}})")
+            print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}")
     except ET.ParseError:
         print(f"STATUS: Using default port list {{port_list_id}}")
 
@@ -1615,7 +1628,8 @@ except Exception as e:
 '''
 
     def _build_gmp_custom_families_script(self, scan_id: str, target: str,
-                                            families: List[str]) -> str:
+                                            families: List[str],
+                                            profile: ScanProfile = ScanProfile.STANDARD) -> str:
         """Build a GMP script that creates a custom config with selected NVT families."""
         # Build the family XML for modify_config
         family_xml_parts = []
@@ -1624,6 +1638,15 @@ except Exception as e:
                 f'<family><name>{fam}</name><all>1</all><growing>1</growing></family>'
             )
         families_xml = "".join(family_xml_parts)
+
+        # Map profile to preferred port list key (same logic as standard script)
+        # Custom families are typically used with Standard+ profiles
+        port_list_pref = {
+            ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
+            ScanProfile.STANDARD: "all_tcp",
+            ScanProfile.THOROUGH: "all_tcp_udp",
+            ScanProfile.CUSTOM: "all_tcp_udp",
+        }.get(profile, "all_tcp")
 
         return f'''
 import socket, os, sys, time
@@ -1636,9 +1659,12 @@ SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
 # Base config: Full and Fast (we clone it, then replace families)
 BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
+# Profile-based port list preference
+PREFERRED_PORT_LIST = "{port_list_pref}"
 PORT_LISTS = {{
     "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+    "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
 }}
 
 def send_gmp(sock, xml_str, end_tag=None):
@@ -1693,20 +1719,23 @@ try:
         sys.exit(1)
     print("STATUS: Authenticated with GVM")
 
-    # Find a valid port list
-    port_list_id = PORT_LISTS["all_tcp_udp"]
+    # Find a valid port list — use profile-based preference, verify against GVM
+    preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, PORT_LISTS["all_tcp"])
+    port_list_id = preferred_id
     resp = send_gmp(sock, '<get_port_lists/>')
     try:
         root = ET.fromstring(resp)
         available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
-        for preferred in PORT_LISTS.values():
-            if preferred in available_pls:
-                port_list_id = preferred
-                break
+        if preferred_id in available_pls:
+            port_list_id = preferred_id
+            print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})")
         else:
-            if available_pls:
+            fallback = PORT_LISTS.get("all_tcp", "")
+            if fallback in available_pls:
+                port_list_id = fallback
+            elif available_pls:
                 port_list_id = next(iter(available_pls))
-        print(f"STATUS: Using port list {{available_pls.get(port_list_id, port_list_id)}}")
+            print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}")
     except ET.ParseError:
         pass
 
