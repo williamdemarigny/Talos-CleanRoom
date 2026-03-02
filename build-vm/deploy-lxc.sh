@@ -1,0 +1,428 @@
+#!/bin/bash
+# Talos CleanRoom Build VM - LXC Deployment Script
+# Deploys a build VM as an LXC container on Proxmox for Docker image builds
+#
+# Usage: ./deploy-lxc.sh
+
+set -euo pipefail
+
+# Disable bash history expansion to handle '!' in API tokens (e.g., user@pam!tokenid=secret)
+set +H
+
+# Configuration - Edit these values
+PROXMOX_HOST="pve01.knowledgeondemand.net"
+PROXMOX_API_URL="https://${PROXMOX_HOST}:8006"
+
+# LXC Container Settings
+LXC_VMID=201
+LXC_HOSTNAME="build-vm"
+LXC_IP="10.83.3.191/24"          # Adjust to your network
+LXC_GATEWAY="10.83.3.1"          # Adjust to your gateway
+LXC_CORES=2
+LXC_MEMORY=4096
+LXC_DISK=50
+LXC_STORAGE="local-lvm"
+NETWORK_BRIDGE="vmbr0"
+VLAN_ID=3                        # Set to 0 for no VLAN
+
+# DNS Settings
+DNS_DOMAIN="knowledgeondemand.net"
+DNS_SERVERS='["8.8.8.8", "8.8.4.4"]'
+
+# SSH User Settings (non-root user for SSH access)
+SSH_USER="deploy"                # Non-root user for SSH access
+SSH_USER_GROUPS="sudo,docker"    # Groups for the SSH user (docker for container builds)
+
+# GitHub SSH Settings (for private repository access)
+GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
+GITHUB_REPO_URL="git@github.com:williamdemarigny/Talos-CleanRoom.git"
+GIT_BRANCH="main"                                  # Branch to clone
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${GREEN}"
+echo "============================================"
+echo "Talos CleanRoom Build VM"
+echo "LXC Container Deployment"
+echo "============================================"
+echo -e "${NC}"
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TERRAFORM_DIR="${SCRIPT_DIR}/terraform"
+
+# Check for terraform
+if ! command -v terraform &> /dev/null; then
+    echo -e "${RED}Error: terraform is not installed${NC}"
+    exit 1
+fi
+
+# ===========================================
+# COLLECT ALL CREDENTIALS UPFRONT
+# ===========================================
+
+echo -e "${YELLOW}Please provide the following credentials:${NC}"
+echo ""
+
+if [ -z "${PROXMOX_API_TOKEN:-}" ]; then
+    echo -e "${YELLOW}Proxmox API Token (format: user@pam!tokenid=secret):${NC}"
+    read -r PROXMOX_API_TOKEN
+fi
+
+if [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
+    echo -e "${YELLOW}Proxmox SSH password for root:${NC}"
+    read -rs PROXMOX_SSH_PASSWORD
+    echo ""
+fi
+
+if [ -z "${LXC_ROOT_PASSWORD:-}" ]; then
+    echo -e "${YELLOW}Password for LXC container root user:${NC}"
+    read -rs LXC_ROOT_PASSWORD
+    echo ""
+fi
+
+if [ -z "${SSH_USER_PASSWORD:-}" ]; then
+    echo -e "${YELLOW}Password for deploy user '${SSH_USER}' (used for SSH to container):${NC}"
+    read -rs SSH_USER_PASSWORD
+    echo ""
+fi
+
+# Prompt for GitHub SSH key
+if [ -z "${GITHUB_SSH_KEY:-}" ]; then
+    # Check common SSH key locations
+    DEFAULT_KEY=""
+    for key_path in ~/.ssh/id_ed25519 ~/.ssh/id_rsa ~/.ssh/github ~/.ssh/id_ecdsa; do
+        if [ -f "$key_path" ]; then
+            DEFAULT_KEY="$key_path"
+            break
+        fi
+    done
+
+    if [ -n "$DEFAULT_KEY" ]; then
+        echo -e "${YELLOW}Path to GitHub SSH private key [${DEFAULT_KEY}]:${NC}"
+        read -r GITHUB_SSH_KEY
+        GITHUB_SSH_KEY="${GITHUB_SSH_KEY:-$DEFAULT_KEY}"
+    else
+        echo -e "${YELLOW}Path to GitHub SSH private key:${NC}"
+        read -r GITHUB_SSH_KEY
+    fi
+fi
+
+# Validate SSH key exists
+if [ ! -f "$GITHUB_SSH_KEY" ]; then
+    echo -e "${RED}Error: SSH key not found at ${GITHUB_SSH_KEY}${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Using SSH key: ${GITHUB_SSH_KEY}${NC}"
+
+# ===========================================
+# VALIDATE KUBECONFIG
+# ===========================================
+
+# Get the repo root (parent of build-vm)
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Check for kubeconfig
+KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
+if [ -z "${KUBECONFIG_FILE}" ]; then
+    DEFAULT_KUBECONFIG="${HOME}/.kube/config"
+    if [ -f "$DEFAULT_KUBECONFIG" ]; then
+        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [${DEFAULT_KUBECONFIG}]:${NC}"
+        read -r KUBECONFIG_FILE
+        KUBECONFIG_FILE="${KUBECONFIG_FILE:-$DEFAULT_KUBECONFIG}"
+    else
+        echo -e "${YELLOW}Path to kubeconfig for Talos cluster:${NC}"
+        read -r KUBECONFIG_FILE
+    fi
+fi
+
+if [ ! -f "$KUBECONFIG_FILE" ]; then
+    echo -e "${RED}Error: Kubeconfig not found at ${KUBECONFIG_FILE}${NC}"
+    echo "  The build VM needs kubectl access to create Harbor pull secrets."
+    echo "  Generate one with: talosctl kubeconfig --nodes <control-plane-ip>"
+    exit 1
+fi
+echo -e "${GREEN}Found kubeconfig: ${KUBECONFIG_FILE}${NC}"
+
+# ===========================================
+# SSH SETUP
+# ===========================================
+
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30"
+
+# Check if sshpass is available (optional - enables automation)
+SSHPASS_AVAILABLE=false
+if command -v sshpass &> /dev/null; then
+    SSHPASS_AVAILABLE=true
+    echo -e "${GREEN}sshpass found - SSH will be automated${NC}"
+else
+    echo -e "${YELLOW}sshpass not found - you will be prompted for passwords${NC}"
+    echo -e "${YELLOW}(Install sshpass to automate: choco install sshpass)${NC}"
+fi
+
+# Helper: SSH to Proxmox (uses sshpass if available)
+proxmox_ssh() {
+    if [ "$SSHPASS_AVAILABLE" = true ]; then
+        sshpass -p "${PROXMOX_SSH_PASSWORD}" ssh ${SSH_OPTS} root@${PROXMOX_HOST} "$@"
+    else
+        ssh ${SSH_OPTS} root@${PROXMOX_HOST} "$@"
+    fi
+}
+
+# ===========================================
+# CHECK LXC TEMPLATE
+# ===========================================
+
+echo -e "${GREEN}[1/6] Checking LXC template on Proxmox...${NC}"
+echo -e "${YELLOW}  (You may be prompted for Proxmox password once)${NC}"
+
+TEMPLATE_NAME="debian-12-standard_12.12-1_amd64.tar.zst"
+TEMPLATE_STORAGE="cephfs"
+
+# Check and download template in one SSH session
+proxmox_ssh << TEMPLATE_CHECK
+TEMPLATE_EXISTS=\$(pveam list ${TEMPLATE_STORAGE} 2>/dev/null | grep -c '${TEMPLATE_NAME}' || echo "0")
+if [ "\$TEMPLATE_EXISTS" = "0" ]; then
+    echo "  Template not found. Downloading..."
+    pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME} || {
+        echo "  Failed to download template."
+        echo "  Please download manually: pveam download ${TEMPLATE_STORAGE} ${TEMPLATE_NAME}"
+        exit 1
+    }
+else
+    echo "  Template exists"
+fi
+TEMPLATE_CHECK
+
+echo -e "${GREEN}  Template check complete${NC}"
+
+# ===========================================
+# CREATE TERRAFORM CONFIG
+# ===========================================
+
+echo -e "${GREEN}[2/6] Creating Terraform configuration...${NC}"
+
+cat > "${TERRAFORM_DIR}/terraform.tfvars" << EOF
+# Auto-generated by deploy-lxc.sh on $(date)
+
+# Proxmox Connection
+proxmox_api_url      = "${PROXMOX_API_URL}"
+proxmox_api_token    = "${PROXMOX_API_TOKEN}"
+proxmox_ssh_user     = "root"
+proxmox_ssh_password = "${PROXMOX_SSH_PASSWORD}"
+proxmox_node         = ""
+proxmox_pool         = ""
+
+# LXC Container Configuration
+lxc_vmid      = ${LXC_VMID}
+lxc_hostname  = "${LXC_HOSTNAME}"
+lxc_cores     = ${LXC_CORES}
+lxc_memory    = ${LXC_MEMORY}
+lxc_swap      = 512
+lxc_disk_size = ${LXC_DISK}
+lxc_storage   = "${LXC_STORAGE}"
+lxc_tags      = ["build", "docker", "management"]
+
+# Template
+template_storage      = "${TEMPLATE_STORAGE}"
+lxc_template_filename = "${TEMPLATE_NAME}"
+
+# Network
+network_bridge  = "${NETWORK_BRIDGE}"
+vlan_id         = ${VLAN_ID}
+lxc_ip_address  = "${LXC_IP}"
+lxc_gateway     = "${LXC_GATEWAY}"
+lxc_mac_address = ""
+
+# DNS
+dns_domain  = "${DNS_DOMAIN}"
+dns_servers = ${DNS_SERVERS}
+
+# Auth
+lxc_root_password = "${LXC_ROOT_PASSWORD}"
+ssh_public_keys   = []
+
+# SSH User (created via pct exec after deployment)
+ssh_user          = "${SSH_USER}"
+ssh_user_password = "${SSH_USER_PASSWORD}"
+ssh_user_groups   = "${SSH_USER_GROUPS}"
+EOF
+
+echo "  Config written to ${TERRAFORM_DIR}/terraform.tfvars"
+
+# ===========================================
+# TERRAFORM DEPLOY
+# ===========================================
+
+echo -e "${GREEN}[3/6] Running Terraform...${NC}"
+cd "${TERRAFORM_DIR}"
+terraform init
+terraform plan -out=.tfplan
+
+echo ""
+echo -e "${YELLOW}Deploy Build VM LXC container?${NC}"
+echo "  Host: ${PROXMOX_HOST}"
+echo "  VMID: ${LXC_VMID}"
+echo "  IP:   ${LXC_IP}"
+echo "  RAM:  ${LXC_MEMORY}MB"
+echo "  Disk: ${LXC_DISK}GB"
+read -p "Proceed? (y/n) " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Cancelled."
+    exit 0
+fi
+
+terraform apply .tfplan
+
+CONTAINER_IP="${LXC_IP%/*}"
+
+echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
+
+# ===========================================
+# SETUP VIA SINGLE PCT EXEC SESSION
+# ===========================================
+
+echo -e "${GREEN}[4/6] Setting up container via pct exec...${NC}"
+echo -e "${YELLOW}  (One Proxmox password prompt for entire setup)${NC}"
+
+# Read the GitHub SSH key content
+GITHUB_SSH_KEY_CONTENT=$(cat "${GITHUB_SSH_KEY}")
+
+# Clear old host keys for the container IP
+ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
+
+# Use pct exec via Proxmox SSH — everything in ONE session
+proxmox_ssh "pct exec ${LXC_VMID} -- bash -c '
+set -e
+
+echo \"=== Installing packages ===\"
+apt-get update && apt-get install -y sudo git locales
+
+# Fix locale warnings
+sed -i \"s/# en_US.UTF-8/en_US.UTF-8/\" /etc/locale.gen
+locale-gen en_US.UTF-8
+
+echo \"=== Creating non-root SSH user: ${SSH_USER} ===\"
+useradd -m -s /bin/bash -G sudo ${SSH_USER} 2>/dev/null || echo \"User exists\"
+echo \"${SSH_USER}:${SSH_USER_PASSWORD}\" | chpasswd
+echo \"${SSH_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${SSH_USER}
+chmod 440 /etc/sudoers.d/${SSH_USER}
+
+echo \"=== Disabling root SSH login ===\"
+sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config
+systemctl restart ssh
+
+echo \"=== Setting up GitHub SSH key for ${SSH_USER} ===\"
+SSH_USER_HOME=\"/home/${SSH_USER}\"
+mkdir -p \${SSH_USER_HOME}/.ssh
+chmod 700 \${SSH_USER_HOME}/.ssh
+
+cat > \${SSH_USER_HOME}/.ssh/github_deploy_key << \"KEYEOF\"
+${GITHUB_SSH_KEY_CONTENT}
+KEYEOF
+chmod 600 \${SSH_USER_HOME}/.ssh/github_deploy_key
+
+cat > \${SSH_USER_HOME}/.ssh/config << \"SSHCONFIG\"
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy_key
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+SSHCONFIG
+chmod 600 \${SSH_USER_HOME}/.ssh/config
+
+chown -R ${SSH_USER}:${SSH_USER} \${SSH_USER_HOME}/.ssh
+
+# Also setup root SSH for GitHub (build scripts may run as root)
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+cp \${SSH_USER_HOME}/.ssh/github_deploy_key /root/.ssh/
+cp \${SSH_USER_HOME}/.ssh/config /root/.ssh/
+chmod 600 /root/.ssh/github_deploy_key /root/.ssh/config
+ssh-keyscan -t ed25519,rsa github.com >> /root/.ssh/known_hosts 2>/dev/null
+
+echo \"=== Testing GitHub connectivity ===\"
+su - ${SSH_USER} -c \"ssh -T git@github.com 2>&1\" || true
+
+echo \"=== Cloning repository (branch: ${GIT_BRANCH}) ===\"
+# Create /opt/talos-cleanroom with correct ownership before cloning
+mkdir -p /opt/talos-cleanroom
+chown ${SSH_USER}:${SSH_USER} /opt/talos-cleanroom
+su - ${SSH_USER} -c \"git clone -b ${GIT_BRANCH} ${GITHUB_REPO_URL} /opt/talos-cleanroom\"
+
+# Add safe.directory for root (build scripts may run as root but repo owned by deploy user)
+git config --global --add safe.directory /opt/talos-cleanroom
+
+echo \"=== Running setup script ===\"
+cd /opt/talos-cleanroom/build-vm/scripts
+chmod +x setup-lxc.sh
+./setup-lxc.sh
+
+echo \"=== Adding ${SSH_USER} to docker group ===\"
+usermod -aG docker ${SSH_USER} 2>/dev/null || echo \"docker group not ready yet\"
+
+echo \"\"
+echo \"=== Setup Complete ===\"
+echo \"SSH user: ${SSH_USER}\"
+echo \"Root SSH: disabled\"
+'"
+
+echo -e "${GREEN}[5/6] Container setup complete${NC}"
+
+# ===========================================
+# COPY SECRETS TO CONTAINER
+# ===========================================
+
+echo -e "${GREEN}[6/6] Copying secrets to container...${NC}"
+
+# Wait for SSH to be ready on container
+echo "  Waiting for container SSH..."
+for i in {1..12}; do
+    if ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "echo ok" 2>/dev/null | grep -q ok; then
+        echo -e "${GREEN}  Container SSH is ready${NC}"
+        break
+    fi
+    sleep 5
+done
+
+# Copy kubeconfig (so kubectl can reach the Talos cluster)
+echo "  Copying kubeconfig..."
+ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "sudo mkdir -p /root/.kube"
+scp ${SSH_OPTS} "${KUBECONFIG_FILE}" ${SSH_USER}@${CONTAINER_IP}:/tmp/kubeconfig
+ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "sudo mv /tmp/kubeconfig /root/.kube/config && sudo chmod 600 /root/.kube/config"
+
+# Also copy to deploy user's home for non-root kubectl usage
+ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "mkdir -p ~/.kube && sudo cp /root/.kube/config ~/.kube/config && sudo chown ${SSH_USER}:${SSH_USER} ~/.kube/config && chmod 600 ~/.kube/config"
+echo -e "${GREEN}  Kubeconfig copied (root + ${SSH_USER})${NC}"
+
+# ===========================================
+# DONE
+# ===========================================
+
+echo ""
+echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}Build VM Setup Complete!${NC}"
+echo -e "${GREEN}============================================${NC}"
+echo ""
+echo "SSH access:"
+echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
+echo ""
+echo -e "${GREEN}Secrets copied:${NC}"
+echo "  - Kubeconfig (kubectl access to Talos cluster)"
+echo ""
+echo "To build and push the LOKI-RS image to Harbor:"
+echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
+echo "  cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki"
+echo "  ./build-and-push.sh"
+echo ""
+echo -e "${YELLOW}Recovery (if locked out):${NC}"
+echo "  ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"
+echo ""

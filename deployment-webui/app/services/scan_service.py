@@ -23,7 +23,14 @@ from app.services.process_manager import ProcessManager
 NMAP_TIMEOUT_QUICK = 300       # 5 min for ping sweep
 NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
 NMAP_TIMEOUT_THOROUGH = 3600   # 60 min for full port scan
-OPENVAS_TIMEOUT = 7200         # 2 hours for OpenVAS
+# OpenVAS timeouts per profile (seconds) — outer safety net for asyncio.wait_for.
+# GMP scripts self-terminate on stale progress (30min no change), so these are generous ceilings.
+OPENVAS_TIMEOUTS = {
+    ScanProfile.QUICK: 7500,        # 2h 5min — host discovery finishes fast
+    ScanProfile.STANDARD: 28800,    # 8h — full-and-fast on large subnets
+    ScanProfile.THOROUGH: 50400,    # 14h — full-and-deep, many hosts
+    ScanProfile.CUSTOM: 50400,      # 14h — custom family scans may be thorough
+}
 METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
 METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (11 vuln modules)
 METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln modules)
@@ -1271,12 +1278,13 @@ except Exception as e:
             await self.log("openvas", "info", f"Creating scan target and task for {target}...")
 
         # Execute the GMP script inside the gvmd container
+        openvas_timeout = OPENVAS_TIMEOUTS.get(profile, OPENVAS_TIMEOUTS[ScanProfile.STANDARD])
         result = await self.process_manager.run_command(
             ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
              "--", "env", f"GMP_PASSWORD={openvas_password}",
              "python3", "-c", gmp_script],
             on_output=lambda line: self._log_openvas_line(line),
-            timeout=OPENVAS_TIMEOUT
+            timeout=openvas_timeout
         )
 
         output = result.output or ""
@@ -1485,10 +1493,18 @@ try:
         report_id = ""
     print(f"STATUS: Scan started (report {{report_id}})")
 
-    # Poll for completion
-    max_polls = 720  # 2 hours at 10s intervals
-    for i in range(max_polls):
+    # Poll for completion — progress-aware timeout
+    # Stale limit: if no progress change for 30 minutes, bail out
+    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
+    stale_limit = 180  # 180 x 10s = 30 min with no progress change
+    stale_count = 0
+    last_result_count = 0
+    last_progress_val = -1
+    poll_count = 0
+    scan_done = False
+    while True:
         time.sleep(10)
+        poll_count += 1
         get_task = f'<get_tasks task_id="{{task_id}}"/>'
         resp = send_gmp(sock, get_task)
         try:
@@ -1498,20 +1514,55 @@ try:
                 task_status = task_elem.findtext("status", "")
                 progress_elem = task_elem.find("progress")
                 progress = progress_elem.text if progress_elem is not None else "0"
-                print(f"PROGRESS: {{task_status}} ({{progress}}%)")
+                progress_int = int(progress) if progress.isdigit() else 0
+                # Extract intermediate result count
+                result_count = 0
+                current_report = task_elem.find(".//current_report")
+                if current_report is not None:
+                    rc = current_report.findtext(".//result_count/full", "0")
+                    result_count = int(rc) if rc.isdigit() else 0
+                # Extract per-host progress
+                host_progress_elems = task_elem.findall(".//progress/host_progress")
+                host_details = []
+                for hp in host_progress_elems:
+                    host_text = hp.text if hp.text else ""
+                    if host_text:
+                        host_details.append(host_text)
+                # Build detailed progress line
+                elapsed = poll_count * 10
+                elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
+                detail = f"{{task_status}} ({{progress}}%) | {{result_count}} results | elapsed {{elapsed_str}}"
+                if host_details:
+                    detail += f" | hosts: {{', '.join(host_details[:3])}}"
+                stale_remaining = (stale_limit - stale_count) * 10 // 60
+                detail += f" | stale timeout in {{stale_remaining}}m"
+                print(f"PROGRESS: {{detail}}")
+                # Check for progress change — reset stale counter if anything moved
+                if result_count != last_result_count or progress_int != last_progress_val:
+                    stale_count = 0
+                    last_result_count = result_count
+                    last_progress_val = progress_int
+                else:
+                    stale_count += 1
                 if task_status == "Done":
                     # Get the report ID from the task
                     if not report_id:
                         report_elem = task_elem.find(".//report")
                         report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    scan_done = True
                     break
                 elif task_status in ("Stop Requested", "Stopped", "Error"):
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}")
                     sys.exit(1)
+                # Stale timeout — no progress for 30 minutes
+                if stale_count >= stale_limit:
+                    elapsed_total = poll_count * 10
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 30 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)")
+                    sys.exit(1)
         except ET.ParseError:
             pass
-    else:
-        print("SCAN:FAILED:Scan timed out after 2 hours")
+    if not scan_done:
+        print("SCAN:FAILED:Polling loop exited unexpectedly")
         sys.exit(1)
 
     # Get report in XML format
@@ -1731,10 +1782,18 @@ try:
         report_id = ""
     print(f"STATUS: Scan started (report {{report_id}})")
 
-    # Poll for completion
-    max_polls = 720  # 2 hours at 10s intervals
-    for i in range(max_polls):
+    # Poll for completion — progress-aware timeout
+    # Stale limit: if no progress change for 30 minutes, bail out
+    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
+    stale_limit = 180  # 180 x 10s = 30 min with no progress change
+    stale_count = 0
+    last_result_count = 0
+    last_progress_val = -1
+    poll_count = 0
+    scan_done = False
+    while True:
         time.sleep(10)
+        poll_count += 1
         get_task = f\'<get_tasks task_id="{{task_id}}"/>\'
         resp = send_gmp(sock, get_task)
         try:
@@ -1744,19 +1803,54 @@ try:
                 task_status = task_elem.findtext("status", "")
                 progress_elem = task_elem.find("progress")
                 progress = progress_elem.text if progress_elem is not None else "0"
-                print(f"PROGRESS: {{task_status}} ({{progress}}%)")
+                progress_int = int(progress) if progress.isdigit() else 0
+                # Extract intermediate result count
+                result_count = 0
+                current_report = task_elem.find(".//current_report")
+                if current_report is not None:
+                    rc = current_report.findtext(".//result_count/full", "0")
+                    result_count = int(rc) if rc.isdigit() else 0
+                # Extract per-host progress
+                host_progress_elems = task_elem.findall(".//progress/host_progress")
+                host_details = []
+                for hp in host_progress_elems:
+                    host_text = hp.text if hp.text else ""
+                    if host_text:
+                        host_details.append(host_text)
+                # Build detailed progress line
+                elapsed = poll_count * 10
+                elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
+                detail = f"{{task_status}} ({{progress}}%) | {{result_count}} results | elapsed {{elapsed_str}}"
+                if host_details:
+                    detail += f" | hosts: {{', '.join(host_details[:3])}}"
+                stale_remaining = (stale_limit - stale_count) * 10 // 60
+                detail += f" | stale timeout in {{stale_remaining}}m"
+                print(f"PROGRESS: {{detail}}")
+                # Check for progress change — reset stale counter if anything moved
+                if result_count != last_result_count or progress_int != last_progress_val:
+                    stale_count = 0
+                    last_result_count = result_count
+                    last_progress_val = progress_int
+                else:
+                    stale_count += 1
                 if task_status == "Done":
                     if not report_id:
                         report_elem = task_elem.find(".//report")
                         report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    scan_done = True
                     break
                 elif task_status in ("Stop Requested", "Stopped", "Error"):
                     print(f"SCAN:FAILED:Task ended with status {{task_status}}")
                     sys.exit(1)
+                # Stale timeout — no progress for 30 minutes
+                if stale_count >= stale_limit:
+                    elapsed_total = poll_count * 10
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 30 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)")
+                    sys.exit(1)
         except ET.ParseError:
             pass
-    else:
-        print("SCAN:FAILED:Scan timed out after 2 hours")
+    if not scan_done:
+        print("SCAN:FAILED:Polling loop exited unexpectedly")
         sys.exit(1)
 
     # Get report in XML format

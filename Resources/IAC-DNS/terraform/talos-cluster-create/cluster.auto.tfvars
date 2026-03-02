@@ -47,7 +47,7 @@ opnsense_vms = [
 # Confirm filenames match Proxmox storage list.
 talos_iso_file = "cephfs:iso/metal-amd64.iso" # Talos v1.12.2 with qemu-guest-agent
 
-# Datastore for all VM disks (primary + Longhorn secondary). Uses shared Ceph storage for HA compatibility.
+# Datastore for all VM disks. Uses shared Ceph storage for HA compatibility.
 disk_storage = "CleanRoom_Storage"
 
 # Proxmox network bridge
@@ -57,7 +57,7 @@ network_bridge = "vmbr0"
 # Fields:
 # - vmid: unique VM ID per Proxmox node
 # - role: controlplane | worker
-# NOTE: All Talos VMs get a secondary 75GB VirtIO disk for Longhorn (configured in main.tf)
+# Storage is provided by Ceph CSI (RBD) — no secondary disks needed
 
 nodes = [
   # Control Plane Node - Uses standard Talos ISO
@@ -74,7 +74,7 @@ nodes = [
   },
 
   # Regular Worker Node - Uses standard Talos ISO
-  # Secondary 75GB VirtIO disk configured in main.tf for Longhorn storage
+  # Storage via Ceph CSI (RBD) — no secondary disk needed
   {
     name        = "talos-CleanRoom-worker-01",
     vmid        = 3001,
@@ -88,7 +88,7 @@ nodes = [
   },
 
   # Regular Worker Node - Uses standard Talos ISO
-  # Secondary 75GB VirtIO disk configured in main.tf for Longhorn storage
+  # Storage via Ceph CSI (RBD) — no secondary disk needed
   {
     name        = "talos-CleanRoom-worker-02",
     vmid        = 3002,
@@ -102,7 +102,7 @@ nodes = [
   },
 
   # Regular Worker Node - Uses standard Talos ISO
-  # Secondary 75GB VirtIO disk configured in main.tf for Longhorn storage
+  # Storage via Ceph CSI (RBD) — no secondary disk needed
   {
     name        = "talos-CleanRoom-worker-03",
     vmid        = 3003,

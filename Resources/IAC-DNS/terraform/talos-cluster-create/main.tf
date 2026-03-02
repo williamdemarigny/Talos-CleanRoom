@@ -149,7 +149,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   }
 
   # Storage: Ceph CSI mounts RBD images directly from the Proxmox Ceph cluster
-  # No secondary disk needed — eliminates double-replication (Longhorn + Ceph)
+  # No secondary disk needed — Ceph RBD handles replication at the storage layer
 
   # Assign to resource pool for cluster-level organization
   pool_id = var.proxmox_pool != "" ? var.proxmox_pool : null
