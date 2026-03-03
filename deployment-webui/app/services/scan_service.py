@@ -1297,12 +1297,18 @@ except Exception as e:
                            f"GMP script exited with code {result.return_code} — last output:\n{last_lines}")
             # Still try to extract results in case the script wrote the report before dying
 
-        # Parse task_id and report_id from output (needed for recovery)
+        # Parse task_id, target_id, and report_id from output (needed for recovery)
         gmp_task_id = ""
+        gmp_target_id = ""
         gmp_report_id = ""
         for line in output.split("\n"):
             line = line.strip()
-            if "Created task " in line:
+            if "Created target " in line:
+                # STATUS: Created target <uuid>
+                parts = line.split("Created target ")
+                if len(parts) >= 2:
+                    gmp_target_id = parts[-1].strip()
+            elif "Created task " in line:
                 # STATUS: Created task <uuid>
                 parts = line.split("Created task ")
                 if len(parts) >= 2:
@@ -1325,7 +1331,8 @@ except Exception as e:
             ])
             if scan_was_running and (retrieval_failure or not result.success) and gmp_task_id:
                 await self.log("openvas", "warn", "Scan was progressing before failure — attempting report recovery...")
-                recovered = await self._attempt_openvas_recovery(scan_id, gmp_task_id, gmp_report_id, openvas_password)
+                recovered = await self._attempt_openvas_recovery(
+                    scan_id, gmp_task_id, gmp_target_id, gmp_report_id, openvas_password)
                 if recovered:
                     return recovered
             return None
@@ -1381,6 +1388,8 @@ except Exception as e:
                         if ts.tool == ScanTool.OPENVAS:
                             ts.findings_count = result_count
                             break
+                    # Report successfully transferred — now safe to clean up GVM
+                    await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password)
                     return xml_content
                 except Exception as decode_err:
                     await self.log("openvas", "error", f"Failed to decode report: {decode_err}")
@@ -1401,6 +1410,7 @@ except Exception as e:
                 if ts.tool == ScanTool.OPENVAS:
                     ts.findings_count = result_count
                     break
+            await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password)
             return xml_content
 
         output_len = len(output)
@@ -1425,22 +1435,85 @@ except Exception as e:
                 await self.log("openvas", "warn",
                                "Scan was progressing before script exited — attempting report recovery...")
                 recovered = await self._attempt_openvas_recovery(
-                    scan_id, gmp_task_id, gmp_report_id, openvas_password)
+                    scan_id, gmp_task_id, gmp_target_id, gmp_report_id, openvas_password)
                 if recovered:
                     return recovered
                 await self.log("openvas", "error", "Report recovery failed")
 
         return None
 
+    async def _cleanup_gvm_task(self, task_id: str, target_id: str,
+                                openvas_password: str):
+        """Delete a scan task and target from GVM after the report has been transferred.
+
+        Runs a short GMP script via kubectl exec. Failures are non-fatal — orphaned
+        tasks/targets in GVM are harmless and can be cleaned up manually.
+        """
+        if not task_id and not target_id:
+            return
+
+        delete_cmds = []
+        if task_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_task task_id="{task_id}" ultimate="1"/>\')')
+        if target_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_target target_id="{target_id}" ultimate="1"/>\')')
+        delete_block = "\n    ".join(delete_cmds)
+
+        cleanup_script = f'''
+import socket, os, sys
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            if b"_response>" in response[-128:]:
+                break
+        except socket.timeout:
+            break
+    return response
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    auth = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
+    send_gmp(sock, auth)
+    {delete_block}
+    sock.close()
+    print("CLEANUP:OK", flush=True)
+except Exception as e:
+    print(f"CLEANUP:FAIL:{{e}}", flush=True)
+'''
+        try:
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+                 "--", "env", f"GMP_PASSWORD={openvas_password}",
+                 "python3", "-u", "-c", cleanup_script],
+                timeout=60
+            )
+            if result.success and "CLEANUP:OK" in (result.output or ""):
+                await self.log("openvas", "debug", "GVM task/target cleaned up")
+            else:
+                await self.log("openvas", "debug",
+                               f"GVM cleanup returned non-OK (non-fatal): {(result.output or '')[-100:]}")
+        except Exception as e:
+            await self.log("openvas", "debug", f"GVM cleanup failed (non-fatal): {e}")
+
     async def _attempt_openvas_recovery(self, scan_id: str, task_id: str,
-                                         report_id: str, openvas_password: str) -> Optional[str]:
+                                         target_id: str, report_id: str,
+                                         openvas_password: str) -> Optional[str]:
         """Attempt to recover an OpenVAS report after the primary GMP script failed.
 
         Runs a separate GMP script that waits for the task to complete (if still
         running) and retrieves the report. This handles the case where kubectl exec
         dropped but the scan continued running in GVM.
         """
-        recovery_script = self._build_gmp_recovery_script(scan_id, task_id, report_id)
+        recovery_script = self._build_gmp_recovery_script(scan_id, task_id, target_id, report_id)
 
         recovery_result = await self.process_manager.run_command(
             ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
@@ -1529,12 +1602,13 @@ except Exception as e:
         elif line.startswith("DEBUG"):
             await self.log("openvas", "debug", line)
 
-    def _build_gmp_recovery_script(self, scan_id: str, task_id: str, report_id: str) -> str:
+    def _build_gmp_recovery_script(self, scan_id: str, task_id: str,
+                                    target_id: str, report_id: str) -> str:
         """Build a GMP script that waits for a task to finish and retrieves its report.
 
         Used when the primary GMP script was interrupted (kubectl drop, pod restart)
         but the scan was still running in GVM. Polls the task until Done, then retrieves
-        the report and writes it to a temp file.
+        the report and writes it to a temp file. Cleans up the task and target afterward.
         """
         return f'''
 import socket, os, sys, time
@@ -1544,6 +1618,7 @@ SOCK_PATH = "/run/gvmd/gvmd.sock"
 PASSWORD = os.environ.get("GMP_PASSWORD", "")
 SCAN_ID = "{scan_id}"
 TASK_ID = "{task_id}"
+TARGET_ID = "{target_id}"
 REPORT_ID = "{report_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
 
@@ -1553,7 +1628,8 @@ def send_gmp(sock, xml_str, end_tag=None):
     if end_tag:
         search_tags = [end_tag]
     else:
-        search_tags = ["authenticate_response", "get_tasks_response", "get_reports_response"]
+        search_tags = ["authenticate_response", "get_tasks_response", "get_reports_response",
+                        "delete_task_response", "delete_target_response"]
     while True:
         try:
             chunk = sock.recv(131072)
@@ -1642,8 +1718,10 @@ try:
 
     try:
         root = ET.fromstring(resp)
-        report_elem = root.find(".//report")
-        if report_elem is not None:
+        outer_report = root.find(".//report")
+        if outer_report is not None:
+            inner_report = outer_report.find("report")
+            report_elem = inner_report if inner_report is not None else outer_report
             report_xml = ET.tostring(report_elem, encoding="unicode")
             with open(REPORT_FILE, "w") as f:
                 f.write(report_xml)
@@ -1656,6 +1734,16 @@ try:
             f.write(resp)
         print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
         print(f"STATUS: Recovery - XML parse failed ({{pe}}), wrote raw response", flush=True)
+
+    # Cleanup: delete task and target from GVM
+    try:
+        if TASK_ID:
+            send_gmp(sock, f'<delete_task task_id="{{TASK_ID}}" ultimate="1"/>')
+        if TARGET_ID:
+            send_gmp(sock, f'<delete_target target_id="{{TARGET_ID}}" ultimate="1"/>')
+        print("STATUS: Recovery - cleaned up task and target from GVM", flush=True)
+    except:
+        print("STATUS: Recovery - cleanup failed (non-fatal)", flush=True)
 
     sock.close()
     print("STATUS: Recovery complete", flush=True)
@@ -1967,10 +2055,21 @@ try:
             print("SCAN:FAILED:Empty response when retrieving report", flush=True)
             sys.exit(1)
         # Extract report XML and write to file instead of stdout
+        # GMP response has nested <report> elements:
+        #   <get_reports_response>
+        #     <report format_id="..." ...>       ← outer wrapper
+        #       <report id="...">                ← inner with actual <results>
+        #         <results><result>...</results>
+        #       </report>
+        #     </report>
+        #   </get_reports_response>
+        # We need the INNER <report> for faraday-plugins to parse correctly.
         try:
             root = ET.fromstring(resp)
-            report_elem = root.find(".//report")
-            if report_elem is not None:
+            outer_report = root.find(".//report")
+            if outer_report is not None:
+                inner_report = outer_report.find("report")
+                report_elem = inner_report if inner_report is not None else outer_report
                 report_xml = ET.tostring(report_elem, encoding="unicode")
                 with open(REPORT_FILE, "w") as f:
                     f.write(report_xml)
@@ -1988,13 +2087,9 @@ try:
         print("SCAN:FAILED:No report ID available", flush=True)
         sys.exit(1)
 
-    # Cleanup: delete task and target
-    try:
-        send_gmp(sock, f'<delete_task task_id="{{task_id}}" ultimate="1"/>')
-        send_gmp(sock, f'<delete_target target_id="{{target_id}}" ultimate="1"/>')
-    except:
-        pass
-
+    # NOTE: Do NOT delete task/target here. The report file must be transferred
+    # out of the container first (done by _run_openvas_scan via base64). Cleanup
+    # happens after successful transfer to avoid data loss.
     sock.close()
     print("STATUS: OpenVAS scan complete", flush=True)
 
@@ -2328,11 +2423,13 @@ try:
         if resp_len == 0:
             print("SCAN:FAILED:Empty response when retrieving report", flush=True)
             sys.exit(1)
-        # Extract report XML and write to file instead of stdout
+        # Extract report XML — use inner <report> (see standard script for structure)
         try:
             root = ET.fromstring(resp)
-            report_elem = root.find(".//report")
-            if report_elem is not None:
+            outer_report = root.find(".//report")
+            if outer_report is not None:
+                inner_report = outer_report.find("report")
+                report_elem = inner_report if inner_report is not None else outer_report
                 report_xml = ET.tostring(report_elem, encoding="unicode")
                 with open(REPORT_FILE, "w") as f:
                     f.write(report_xml)
@@ -2350,16 +2447,9 @@ try:
         print("SCAN:FAILED:No report ID available", flush=True)
         sys.exit(1)
 
-    # Cleanup: delete task, target, and custom config
-    try:
-        send_gmp(sock, f\'<delete_task task_id="{{task_id}}" ultimate="1"/>\')
-        send_gmp(sock, f\'<delete_target target_id="{{target_id}}" ultimate="1"/>\')
-        if custom_config_id:
-            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
-            print("STATUS: Cleaned up custom config", flush=True)
-    except:
-        pass
-
+    # NOTE: Do NOT delete task/target/config here. The report file must be transferred
+    # out of the container first (done by _run_openvas_scan via base64). Cleanup
+    # happens after successful transfer to avoid data loss.
     sock.close()
     print("STATUS: OpenVAS scan complete", flush=True)
 
@@ -2816,7 +2906,10 @@ except Exception as e:
                 "    plugin.parseOutputString(xml_data)\n"
                 "    bulk_json = json.loads(plugin.get_json())\n"
                 "    hosts = bulk_json.get('hosts', [])\n"
-                "    print(f'UPLOAD:PARSED:{len(hosts)} hosts')\n"
+                "    total_svcs = sum(len(h.get('services', [])) for h in hosts)\n"
+                "    total_hvulns = sum(len(h.get('vulnerabilities', [])) for h in hosts)\n"
+                "    total_svulns = sum(len(v) for h in hosts for s in h.get('services', []) for v in [s.get('vulnerabilities', [])])\n"
+                "    print(f'UPLOAD:PARSED:{len(hosts)} hosts, {total_svcs} services, {total_hvulns} host-vulns, {total_svulns} svc-vulns')\n"
                 "except Exception as e:\n"
                 "    print(f'UPLOAD:PARSE_FAILED:{e}')\n"
                 "    sys.exit(0)\n"
