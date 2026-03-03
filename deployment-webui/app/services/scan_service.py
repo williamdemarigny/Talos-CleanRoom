@@ -1290,10 +1290,44 @@ except Exception as e:
 
         output = result.output or ""
 
+        # Log command result for debugging
+        if not result.success:
+            last_lines = "\n".join(output.split("\n")[-10:]) if output else "(empty)"
+            await self.log("openvas", "error",
+                           f"GMP script exited with code {result.return_code} — last output:\n{last_lines}")
+            # Still try to extract results in case the script wrote the report before dying
+
+        # Parse task_id and report_id from output (needed for recovery)
+        gmp_task_id = ""
+        gmp_report_id = ""
+        for line in output.split("\n"):
+            line = line.strip()
+            if "Created task " in line:
+                # STATUS: Created task <uuid>
+                parts = line.split("Created task ")
+                if len(parts) >= 2:
+                    gmp_task_id = parts[-1].strip()
+            elif "Scan started (report " in line:
+                # STATUS: Scan started (report <uuid>)
+                parts = line.split("(report ")
+                if len(parts) >= 2:
+                    gmp_report_id = parts[-1].rstrip(")")
+
         # Parse status lines from the script
         if "SCAN:FAILED" in output:
             error_line = [l for l in output.split("\n") if "SCAN:FAILED" in l]
-            await self.log("openvas", "error", f"OpenVAS scan failed: {error_line}")
+            error_str = str(error_line)
+            await self.log("openvas", "error", f"OpenVAS scan failed: {error_str}")
+            # If the failure was during report retrieval (not scan itself), try recovery
+            scan_was_running = any("PROGRESS:" in l and "Running" in l for l in output.split("\n"))
+            retrieval_failure = any(kw in error_str for kw in [
+                "Empty response", "No <report>", "No report ID", "parse"
+            ])
+            if scan_was_running and (retrieval_failure or not result.success) and gmp_task_id:
+                await self.log("openvas", "warn", "Scan was progressing before failure — attempting report recovery...")
+                recovered = await self._attempt_openvas_recovery(scan_id, gmp_task_id, gmp_report_id, openvas_password)
+                if recovered:
+                    return recovered
             return None
 
         # The GMP script writes the report to a temp file inside the container.
@@ -1370,11 +1404,111 @@ except Exception as e:
             return xml_content
 
         output_len = len(output)
-        await self.log("openvas", "warn", f"Could not extract XML report from OpenVAS output ({output_len} bytes)")
-        for line in output.split("\n")[-30:]:
+        has_report_file = "REPORT_FILE:" in output
+        has_done = "Done" in output
+        has_xml = "<?xml" in output
+        await self.log("openvas", "warn",
+                       f"Could not extract XML report ({output_len} bytes, "
+                       f"REPORT_FILE={has_report_file}, Done={has_done}, XML={has_xml}, "
+                       f"exit_code={result.return_code})")
+        for line in output.split("\n")[-15:]:
             line = line.strip()
             if line and not line.startswith("<"):
-                await self.log("openvas", "info", f"  {line}")
+                await self.log("openvas", "debug", f"  {line}")
+
+        # Recovery: if the scan was making progress but the GMP script died
+        # (kubectl drop, pod restart, etc.), the report may still exist in GVM.
+        # Try a separate kubectl exec to retrieve it.
+        if gmp_task_id:
+            scan_was_progressing = any("PROGRESS:" in l for l in output.split("\n"))
+            if scan_was_progressing:
+                await self.log("openvas", "warn",
+                               "Scan was progressing before script exited — attempting report recovery...")
+                recovered = await self._attempt_openvas_recovery(
+                    scan_id, gmp_task_id, gmp_report_id, openvas_password)
+                if recovered:
+                    return recovered
+                await self.log("openvas", "error", "Report recovery failed")
+
+        return None
+
+    async def _attempt_openvas_recovery(self, scan_id: str, task_id: str,
+                                         report_id: str, openvas_password: str) -> Optional[str]:
+        """Attempt to recover an OpenVAS report after the primary GMP script failed.
+
+        Runs a separate GMP script that waits for the task to complete (if still
+        running) and retrieves the report. This handles the case where kubectl exec
+        dropped but the scan continued running in GVM.
+        """
+        recovery_script = self._build_gmp_recovery_script(scan_id, task_id, report_id)
+
+        recovery_result = await self.process_manager.run_command(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={openvas_password}",
+             "python3", "-u", "-c", recovery_script],
+            on_output=lambda line: self._log_openvas_line(line),
+            timeout=1200  # 20 min max for recovery (15 min poll + report retrieval)
+        )
+
+        recovery_output = recovery_result.output or ""
+
+        if "SCAN:FAILED" in recovery_output:
+            error_line = [l for l in recovery_output.split("\n") if "SCAN:FAILED" in l]
+            await self.log("openvas", "error", f"Recovery failed: {error_line}")
+            return None
+
+        # Look for REPORT_FILE in recovery output
+        for line in recovery_output.split("\n"):
+            if line.strip().startswith("REPORT_FILE:"):
+                parts = line.strip().split(":", 3)
+                remote_path = parts[1] if len(parts) >= 2 else ""
+                report_size = parts[2] if len(parts) >= 3 else "?"
+                await self.log("openvas", "info",
+                               f"Recovery: report written to container ({report_size} bytes), retrieving...")
+
+                # Get pod name and retrieve via base64
+                pod_result = await self.process_manager.run_command_simple(
+                    ["kubectl", "get", "pods", "-n", "openvas", "-l", "app.kubernetes.io/name=greenbone",
+                     "-o", "jsonpath={.items[0].metadata.name}"],
+                    timeout=15
+                )
+                pod_name = (pod_result.output or "").strip()
+                if not pod_name:
+                    await self.log("openvas", "error", "Recovery: could not determine pod name")
+                    return None
+
+                b64_result = await self.process_manager.run_command_simple(
+                    ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                     "--", "base64", remote_path],
+                    timeout=120
+                )
+
+                # Clean up temp file
+                await self.process_manager.run_command_simple(
+                    ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                     "--", "rm", "-f", remote_path],
+                    timeout=15
+                )
+
+                if b64_result.success and b64_result.output:
+                    try:
+                        xml_content = base64.b64decode(b64_result.output.strip()).decode("utf-8")
+                        result_count = xml_content.count("<result ")
+                        await self.log("openvas", "info",
+                                       f"Recovery successful: {result_count} result(s) ({len(xml_content)} bytes)")
+                        for ts in self.current_scan.tools:
+                            if ts.tool == ScanTool.OPENVAS:
+                                ts.findings_count = result_count
+                                break
+                        return xml_content
+                    except Exception as decode_err:
+                        await self.log("openvas", "error", f"Recovery: failed to decode report: {decode_err}")
+                        return None
+                else:
+                    await self.log("openvas", "error", "Recovery: failed to retrieve report file")
+                    return None
+
+        await self.log("openvas", "error", "Recovery: no REPORT_FILE in output")
         return None
 
     async def _log_openvas_line(self, line: str):
@@ -1394,6 +1528,142 @@ except Exception as e:
             await self.log("openvas", "info", f"Report saved in container ({size} bytes)")
         elif line.startswith("DEBUG"):
             await self.log("openvas", "debug", line)
+
+    def _build_gmp_recovery_script(self, scan_id: str, task_id: str, report_id: str) -> str:
+        """Build a GMP script that waits for a task to finish and retrieves its report.
+
+        Used when the primary GMP script was interrupted (kubectl drop, pod restart)
+        but the scan was still running in GVM. Polls the task until Done, then retrieves
+        the report and writes it to a temp file.
+        """
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+SCAN_ID = "{scan_id}"
+TASK_ID = "{task_id}"
+REPORT_ID = "{report_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+
+def send_gmp(sock, xml_str, end_tag=None):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "get_tasks_response", "get_reports_response"]
+    while True:
+        try:
+            chunk = sock.recv(131072)
+            if not chunk:
+                break
+            response += chunk
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{{tag}}>" in tail:
+                    return response.decode("utf-8", errors="replace")
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Recovery - connected to GVM daemon", flush=True)
+
+    # Authenticate
+    auth_xml = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
+    resp = send_gmp(sock, auth_xml)
+    try:
+        root = ET.fromstring(resp)
+        if root.attrib.get("status") != "200":
+            print(f"SCAN:FAILED:Recovery auth failed", flush=True)
+            sys.exit(1)
+    except:
+        print("SCAN:FAILED:Recovery auth parse error", flush=True)
+        sys.exit(1)
+    print("STATUS: Recovery - authenticated", flush=True)
+
+    # Poll task until Done (max 15 min = 90 x 10s)
+    report_id = REPORT_ID
+    for i in range(90):
+        resp = send_gmp(sock, f'<get_tasks task_id="{{TASK_ID}}" details="1"/>')
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                task_status = task_elem.findtext("status", "")
+                progress = task_elem.findtext("progress", "0").strip()
+                result_count = 0
+                for rc_path in [".//result_count/full", ".//result_count"]:
+                    rc = task_elem.findtext(rc_path, "")
+                    if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                        result_count = int(rc.strip())
+                        break
+                print(f"PROGRESS: Recovery - {{task_status}} ({{progress}}%) | {{result_count}} results | poll {{i+1}}/90", flush=True)
+                if task_status == "Done":
+                    if not report_id:
+                        re = task_elem.find(".//report")
+                        report_id = re.attrib.get("id", "") if re is not None else ""
+                    break
+                elif task_status in ("Stopped", "Error"):
+                    if not report_id:
+                        re = task_elem.find(".//report")
+                        report_id = re.attrib.get("id", "") if re is not None else ""
+                    if report_id:
+                        print(f"STATUS: Recovery - task {{task_status}}, attempting report retrieval", flush=True)
+                        break
+                    print(f"SCAN:FAILED:Recovery - task {{task_status}} with no report", flush=True)
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+        time.sleep(10)
+    else:
+        print("SCAN:FAILED:Recovery - task did not complete within 15 minutes", flush=True)
+        sys.exit(1)
+
+    if not report_id:
+        print("SCAN:FAILED:Recovery - no report ID found", flush=True)
+        sys.exit(1)
+
+    # Retrieve report
+    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}-recovery.xml"
+    print(f"STATUS: Recovery - retrieving report {{report_id}}...", flush=True)
+    sock.settimeout(600)
+    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>', end_tag="get_reports_response")
+    resp_len = len(resp)
+    print(f"STATUS: Recovery - report response ({{resp_len}} bytes)", flush=True)
+    if resp_len == 0:
+        print("SCAN:FAILED:Recovery - empty report response", flush=True)
+        sys.exit(1)
+
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report")
+        if report_elem is not None:
+            report_xml = ET.tostring(report_elem, encoding="unicode")
+            with open(REPORT_FILE, "w") as f:
+                f.write(report_xml)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
+        else:
+            print(f"SCAN:FAILED:Recovery - no report element in response", flush=True)
+            sys.exit(1)
+    except ET.ParseError as pe:
+        with open(REPORT_FILE, "w") as f:
+            f.write(resp)
+        print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+        print(f"STATUS: Recovery - XML parse failed ({{pe}}), wrote raw response", flush=True)
+
+    sock.close()
+    print("STATUS: Recovery complete", flush=True)
+
+except Exception as e:
+    print(f"SCAN:FAILED:Recovery error: {{e}}", flush=True)
+    sys.exit(1)
+'''
 
     def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
                           profile: ScanProfile = ScanProfile.STANDARD) -> str:
@@ -1687,8 +1957,9 @@ try:
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
         get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>'
-        # Large reports need generous timeout (300s per chunk wait)
-        sock.settimeout(300)
+        # Large reports need generous timeout (600s per chunk wait — gvmd may take
+        # minutes to generate XML for hundreds of results)
+        sock.settimeout(600)
         resp = send_gmp(sock, get_report, end_tag="get_reports_response")
         resp_len = len(resp)
         print(f"STATUS: Report response received ({{resp_len}} bytes)", flush=True)
@@ -2048,7 +2319,9 @@ try:
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
         get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
-        sock.settimeout(300)
+        # Large reports need generous timeout (600s per chunk wait — gvmd may take
+        # minutes to generate XML for hundreds of results)
+        sock.settimeout(600)
         resp = send_gmp(sock, get_report, end_tag="get_reports_response")
         resp_len = len(resp)
         print(f"STATUS: Report response received ({{resp_len}} bytes)", flush=True)
