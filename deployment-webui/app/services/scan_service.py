@@ -1709,7 +1709,7 @@ try:
     REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}-recovery.xml"
     print(f"STATUS: Recovery - retrieving report {{report_id}}...", flush=True)
     sock.settimeout(600)
-    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>', end_tag="get_reports_response")
+    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>', end_tag="get_reports_response")
     resp_len = len(resp)
     print(f"STATUS: Recovery - report response ({{resp_len}} bytes)", flush=True)
     if resp_len == 0:
@@ -2042,7 +2042,7 @@ try:
     REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
-        get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>'
+        get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>'
         # Large reports need generous timeout (600s per chunk wait — gvmd may take
         # minutes to generate XML for hundreds of results)
         sock.settimeout(600)
@@ -2403,7 +2403,7 @@ try:
     REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
-        get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1"/>\'
+        get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>\'
         # Large reports need generous timeout (600s per chunk wait — gvmd may take
         # minutes to generate XML for hundreds of results)
         sock.settimeout(600)
@@ -2971,17 +2971,20 @@ except Exception as e:
                 "                host_ids[host_ip] = hr.get('id')\n"
                 "                created_hosts += 1\n"
                 "            except urllib.error.HTTPError as e:\n"
+                "                body = e.read().decode()\n"
                 "                if e.code == 409:\n"
                 "                    try:\n"
-                "                        ex = json.loads(e.read().decode())\n"
+                "                        ex = json.loads(body)\n"
                 "                        host_ids[host_ip] = ex.get('object', {}).get('id')\n"
                 "                        if host_ids[host_ip]:\n"
                 "                            created_hosts += 1\n"
                 "                    except:\n"
                 "                        pass\n"
                 "                else:\n"
+                "                    print(f'UPLOAD:ERR:host {host_ip}: HTTP {e.code}: {body[:200]}')\n"
                 "                    errors += 1\n"
-                "            except Exception:\n"
+                "            except Exception as e:\n"
+                "                print(f'UPLOAD:ERR:host {host_ip}: {e}')\n"
                 "                errors += 1\n"
                 "        hid = host_ids.get(host_ip)\n"
                 "        if not hid:\n"
@@ -2999,17 +3002,20 @@ except Exception as e:
                 "                    svc_ids[skey] = sr.get('id')\n"
                 "                    created_services += 1\n"
                 "                except urllib.error.HTTPError as e:\n"
+                "                    body = e.read().decode()\n"
                 "                    if e.code == 409:\n"
                 "                        try:\n"
-                "                            ex = json.loads(e.read().decode())\n"
+                "                            ex = json.loads(body)\n"
                 "                            svc_ids[skey] = ex.get('object', {}).get('id')\n"
                 "                            if svc_ids[skey]:\n"
                 "                                created_services += 1\n"
                 "                        except:\n"
                 "                            pass\n"
                 "                    else:\n"
+                "                        print(f'UPLOAD:ERR:svc {host_ip}:{port_num}: HTTP {e.code}: {body[:200]}')\n"
                 "                        errors += 1\n"
-                "                except Exception:\n"
+                "                except Exception as e:\n"
+                "                    print(f'UPLOAD:ERR:svc {host_ip}:{port_num}: {e}')\n"
                 "                    errors += 1\n"
                 "            sid = svc_ids.get(skey)\n"
                 "\n"
@@ -3030,9 +3036,14 @@ except Exception as e:
                 "        try:\n"
                 "            api_post(f'/_api/v3/ws/{WS}/vulns', vbody)\n"
                 "            created_vulns += 1\n"
-                "        except urllib.error.HTTPError:\n"
+                "        except urllib.error.HTTPError as e:\n"
+                "            body = e.read().decode()\n"
+                "            if errors < 5:\n"
+                "                print(f'UPLOAD:ERR:vuln {host_ip}:{port_num} \"{vuln_name[:50]}\": HTTP {e.code}: {body[:200]}')\n"
                 "            errors += 1\n"
-                "        except Exception:\n"
+                "        except Exception as e:\n"
+                "            if errors < 5:\n"
+                "                print(f'UPLOAD:ERR:vuln {host_ip}:{port_num}: {e}')\n"
                 "            errors += 1\n"
                 "\n"
                 "else:\n"
@@ -3183,6 +3194,9 @@ except Exception as e:
                     await self.log(tool_name, "warn", f"Failed to parse scan results: {line}")
                 elif line.startswith("UPLOAD:HOST_ERROR"):
                     await self.log(tool_name, "warn", f"Error creating host: {line}")
+                elif line.startswith("UPLOAD:ERR"):
+                    detail = line.split(":", 2)[-1] if ":" in line[11:] else line
+                    await self.log(tool_name, "warn", f"API error: {detail}")
                 elif line.startswith("UPLOAD:FAILED"):
                     await self.log(tool_name, "warn", f"Upload failed: {line}")
 
