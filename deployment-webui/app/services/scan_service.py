@@ -2964,7 +2964,7 @@ except Exception as e:
                 "        # Ensure host exists in Faraday\n"
                 "        if host_ip not in host_ids:\n"
                 "            hd = host_detail_map.get(host_ip, {})\n"
-                "            hbody = {'ip': host_ip, 'os': hd.get('os', ''),\n"
+                "            hbody = {'ip': host_ip, 'os': hd.get('os', ''), 'description': '',\n"
                 "                     'hostnames': hd.get('hostnames', []), 'tags': list(TOOL_TAGS)}\n"
                 "            try:\n"
                 "                hr = api_post(f'/_api/v3/ws/{WS}/hosts', hbody)\n"
