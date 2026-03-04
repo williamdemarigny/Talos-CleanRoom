@@ -78,5 +78,6 @@ DEPLOYMENT_STEPS = [
     DeploymentStep(id=12, name="deploy_faraday", description="Deploy Faraday"),
     DeploymentStep(id=13, name="deploy_metasploit", description="Deploy Metasploit"),
     DeploymentStep(id=14, name="deploy_threat_dragon", description="Deploy Threat Dragon"),
-    DeploymentStep(id=15, name="configure_integrations", description="Configure Integrations"),
+    DeploymentStep(id=15, name="deploy_harbor", description="Deploy Harbor Registry"),
+    DeploymentStep(id=16, name="configure_integrations", description="Configure Integrations"),
 ]
