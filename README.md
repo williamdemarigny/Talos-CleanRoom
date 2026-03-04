@@ -162,14 +162,15 @@ Talos-CleanRoom/
 ### Required Tools
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | >= 1.0 | Infrastructure provisioning |
-| talhelper | v3.0.45+ | Talos configuration generator |
-| talosctl | v1.12.2+ | Talos CLI tool |
-| SOPS | v3.8.1+ | Secrets encryption (with Age) |
+| Terraform | >= 1.14.6 | Infrastructure provisioning |
+| talhelper | v3.1.5+ | Talos configuration generator |
+| talosctl | v1.12.4+ | Talos CLI tool |
+| SOPS | v3.12.1+ | Secrets encryption (with Age) |
+| age | v1.3.1+ | Age encryption backend for SOPS |
 | jq | v1.8.1+ | JSON processor for scripts |
 | curl | - | HTTP requests |
-| helm | v3.0+ | Kubernetes package manager |
-| kubectl | v1.29+ | Kubernetes CLI |
+| helm | v3.17+ | Kubernetes package manager |
+| kubectl | v1.32+ | Kubernetes CLI (match cluster version) |
 
 ### Infrastructure Requirements
 - **Proxmox VE** cluster with API access and valid API token
