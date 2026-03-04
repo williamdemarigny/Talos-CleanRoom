@@ -3009,6 +3009,27 @@ except Exception as e:
                 "            if svc_name_map:\n"
                 "                print(f'UPLOAD:SVC_NAMES_NVT:{len(svc_name_map)} service names from NVT names')\n"
                 "\n"
+                "        # Final fallback: parse /etc/services for port->name mapping\n"
+                "        os_svc_db = {}\n"
+                "        if len(svc_name_map) == 0:\n"
+                "            try:\n"
+                "                with open('/etc/services') as sf:\n"
+                "                    for sline in sf:\n"
+                "                        sline = sline.strip()\n"
+                "                        if not sline or sline.startswith('#'):\n"
+                "                            continue\n"
+                "                        sp = sline.split()\n"
+                "                        if len(sp) >= 2 and '/' in sp[1]:\n"
+                "                            sn = sp[0]\n"
+                "                            pp = sp[1].split('/')\n"
+                "                            try:\n"
+                "                                os_svc_db[(int(pp[0]), pp[1])] = sn\n"
+                "                            except ValueError:\n"
+                "                                pass\n"
+                "                print(f'UPLOAD:SVC_DB:loaded {len(os_svc_db)} entries from /etc/services')\n"
+                "            except Exception as ef:\n"
+                "                print(f'UPLOAD:SVC_DB:failed to read /etc/services: {ef}')\n"
+                "\n"
                 "        print(f'UPLOAD:PARSED:{len(result_nodes)} results, {len(host_detail_map)} hosts, {len(svc_name_map)} svc names from XML')\n"
                 "    except Exception as e:\n"
                 "        print(f'UPLOAD:PARSE_FAILED:{e}')\n"
@@ -3091,7 +3112,7 @@ except Exception as e:
                 "        if port_num > 0:\n"
                 "            skey = (host_ip, port_num, protocol)\n"
                 "            if skey not in svc_ids:\n"
-                "                svc_name = svc_name_map.get(skey, '')\n"
+                "                svc_name = svc_name_map.get(skey, '') or os_svc_db.get((port_num, protocol), '')\n"
                 "                sbody = {'name': svc_name, 'ports': [port_num], 'protocol': protocol,\n"
                 "                         'status': 'open', 'parent': hid, 'type': 'Service'}\n"
                 "                try:\n"
@@ -3283,6 +3304,10 @@ except Exception as e:
                     await self.log(tool_name, "info", "Created Faraday workspace 'pentest'")
                 elif line.startswith("UPLOAD:PARSED"):
                     await self.log(tool_name, "info", f"Parsed scan results: {line.split(':', 2)[-1]}")
+                elif line.startswith("UPLOAD:SVC_"):
+                    await self.log(tool_name, "info", f"Service names: {line.split(':', 2)[-1]}")
+                elif line.startswith("UPLOAD:HOST_DETAIL"):
+                    await self.log(tool_name, "info", f"Host details: {line.split(':', 2)[-1]}")
                 elif line.startswith("UPLOAD:LOGIN_FAILED"):
                     await self.log(tool_name, "warn", f"Faraday login failed during upload: {line}")
                 elif line.startswith("UPLOAD:WS_CREATE_FAILED"):
