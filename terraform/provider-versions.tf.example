@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Standard Proxmox Provider Configuration — Reference File
+#
+# All Terraform root modules in this repo (cluster-create, webui-lxc,
+# build-lxc) use the same Proxmox provider configuration.  Terraform
+# requires provider blocks to live in each root module, so this file
+# serves as the canonical reference.  Copy/paste into new root modules.
+#
+# To keep versions in sync across root modules, update the version
+# constraint below and propagate to each root module's terraform block.
+# ──────────────────────────────────────────────────────────────────────────────
+
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "bpg/proxmox"
+      version = "0.82.1"
+    }
+  }
+}
+
+# ── Provider Variables (must be declared in each root module) ────────────────
+
+variable "proxmox_api_url" {
+  description = "The URL for the Proxmox API."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://", var.proxmox_api_url))
+    error_message = "proxmox_api_url must start with https://"
+  }
+}
+
+variable "proxmox_api_token" {
+  description = "The Proxmox API token."
+  type        = string
+  sensitive   = true
+}
+
+variable "proxmox_ssh_user" {
+  description = "The SSH user for the Proxmox node."
+  type        = string
+  default     = "root"
+}
+
+variable "proxmox_ssh_password" {
+  description = "The SSH password for the Proxmox node."
+  type        = string
+  sensitive   = true
+}
+
+# ── Provider Block ───────────────────────────────────────────────────────────
+
+provider "proxmox" {
+  endpoint  = var.proxmox_api_url
+  api_token = var.proxmox_api_token
+  insecure  = true
+  ssh {
+    username = var.proxmox_ssh_user
+    password = var.proxmox_ssh_password
+  }
+}
+
+# ── Node Discovery (used by most root modules) ──────────────────────────────
+
+data "proxmox_virtual_environment_nodes" "cluster_nodes" {
+}

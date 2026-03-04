@@ -1,6 +1,6 @@
 #!/bin/bash
-# Talos CleanRoom Build VM - LXC Deployment Script
-# Deploys a build VM as an LXC container on Proxmox for Docker image builds
+# Talos CleanRoom Deployment Web UI - LXC Deployment Script
+# Deploys the web UI as an LXC container on Proxmox
 #
 # Usage: ./deploy-lxc.sh
 
@@ -14,13 +14,13 @@ PROXMOX_HOST="pve01.knowledgeondemand.net"
 PROXMOX_API_URL="https://${PROXMOX_HOST}:8006"
 
 # LXC Container Settings
-LXC_VMID=201
-LXC_HOSTNAME="build-vm"
-LXC_IP="10.83.3.191/24"          # Adjust to your network
+LXC_VMID=200
+LXC_HOSTNAME="deployment-webui"
+LXC_IP="10.83.3.190/24"          # Adjust to your network
 LXC_GATEWAY="10.83.3.1"          # Adjust to your gateway
 LXC_CORES=2
-LXC_MEMORY=4096
-LXC_DISK=50
+LXC_MEMORY=2048
+LXC_DISK=20
 LXC_STORAGE="local-lvm"
 NETWORK_BRIDGE="vmbr0"
 VLAN_ID=3                        # Set to 0 for no VLAN
@@ -29,9 +29,13 @@ VLAN_ID=3                        # Set to 0 for no VLAN
 DNS_DOMAIN="knowledgeondemand.net"
 DNS_SERVERS='["8.8.8.8", "8.8.4.4"]'
 
+# Web UI Settings
+WEBUI_USER="admin"
+WEBUI_PASSWORD="admin"           # Change this!
+
 # SSH User Settings (non-root user for SSH access)
 SSH_USER="deploy"                # Non-root user for SSH access
-SSH_USER_GROUPS="sudo,docker"    # Groups for the SSH user (docker for container builds)
+SSH_USER_GROUPS="sudo"           # Groups for the SSH user
 
 # GitHub SSH Settings (for private repository access)
 GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
@@ -46,14 +50,14 @@ NC='\033[0m' # No Color
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="${SCRIPT_DIR}/../terraform/build-lxc"
+TERRAFORM_DIR="${SCRIPT_DIR}/../terraform/webui-lxc"
 
 # Source shared LXC deploy functions
 source "${SCRIPT_DIR}/../lib/lxc-deploy-common.sh"
 
 echo -e "${GREEN}"
 echo "============================================"
-echo "Talos CleanRoom Build VM"
+echo "Talos CleanRoom Deployment Web UI"
 echo "LXC Container Deployment"
 echo "============================================"
 echo -e "${NC}"
@@ -80,33 +84,31 @@ prompt_credential SSH_USER_PASSWORD "Password for deploy user '${SSH_USER}' (use
 resolve_ssh_key "" || exit 1
 
 # ===========================================
-# VALIDATE KUBECONFIG
+# VALIDATE REQUIRED SECRET FILES
 # ===========================================
 
-# Get the repo root (parent of build-vm)
+# Get the repo root (parent of webui)
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Check for kubeconfig
-KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
-if [ -z "${KUBECONFIG_FILE}" ]; then
-    DEFAULT_KUBECONFIG="${HOME}/.kube/config"
-    if [ -f "$DEFAULT_KUBECONFIG" ]; then
-        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [${DEFAULT_KUBECONFIG}]:${NC}"
-        read -r KUBECONFIG_FILE
-        KUBECONFIG_FILE="${KUBECONFIG_FILE:-$DEFAULT_KUBECONFIG}"
-    else
-        echo -e "${YELLOW}Path to kubeconfig for Talos cluster:${NC}"
-        read -r KUBECONFIG_FILE
-    fi
-fi
-
-if [ ! -f "$KUBECONFIG_FILE" ]; then
-    echo -e "${RED}Error: Kubeconfig not found at ${KUBECONFIG_FILE}${NC}"
-    echo "  The build VM needs kubectl access to create Harbor pull secrets."
-    echo "  Generate one with: talosctl kubeconfig --nodes <control-plane-ip>"
+# Check for SOPS age keys
+SOPS_KEY_FILE="${HOME}/.config/sops/age/keys.txt"
+if [ ! -f "$SOPS_KEY_FILE" ]; then
+    echo -e "${RED}Error: SOPS age keys not found at ${SOPS_KEY_FILE}${NC}"
+    echo "  These keys are required to decrypt secrets during deployment."
+    echo "  Please ensure your SOPS age keys are in place before running this script."
     exit 1
 fi
-echo -e "${GREEN}Found kubeconfig: ${KUBECONFIG_FILE}${NC}"
+echo -e "${GREEN}Found SOPS keys: ${SOPS_KEY_FILE}${NC}"
+
+# Check for Terraform credentials
+TF_CREDS_FILE="${REPO_ROOT}/terraform/cluster-create/credentials.auto.tfvars"
+if [ ! -f "$TF_CREDS_FILE" ]; then
+    echo -e "${RED}Error: Terraform credentials not found at ${TF_CREDS_FILE}${NC}"
+    echo "  This file contains Proxmox API credentials needed for VM deployment."
+    echo "  Please create this file with your Proxmox credentials."
+    exit 1
+fi
+echo -e "${GREEN}Found Terraform credentials: ${TF_CREDS_FILE}${NC}"
 
 # ===========================================
 # SSH SETUP
@@ -185,7 +187,7 @@ lxc_memory    = ${LXC_MEMORY}
 lxc_swap      = 512
 lxc_disk_size = ${LXC_DISK}
 lxc_storage   = "${LXC_STORAGE}"
-lxc_tags      = ["build", "docker", "management"]
+lxc_tags      = ["deployment", "webui", "management"]
 
 # Template
 template_storage      = "${TEMPLATE_STORAGE}"
@@ -210,6 +212,10 @@ ssh_public_keys   = []
 ssh_user          = "${SSH_USER}"
 ssh_user_password = "${SSH_USER_PASSWORD}"
 ssh_user_groups   = "${SSH_USER_GROUPS}"
+
+# Web UI
+webui_admin_username = "${WEBUI_USER}"
+webui_admin_password = "${WEBUI_PASSWORD}"
 EOF
 
 echo "  Config written to ${TERRAFORM_DIR}/terraform.tfvars"
@@ -224,12 +230,10 @@ terraform init
 terraform plan -out=.tfplan
 
 echo ""
-echo -e "${YELLOW}Deploy Build VM LXC container?${NC}"
+echo -e "${YELLOW}Deploy LXC container?${NC}"
 echo "  Host: ${PROXMOX_HOST}"
 echo "  VMID: ${LXC_VMID}"
 echo "  IP:   ${LXC_IP}"
-echo "  RAM:  ${LXC_MEMORY}MB"
-echo "  Disk: ${LXC_DISK}GB"
 read -p "Proceed? (y/n) " -n 1 -r
 echo ""
 
@@ -246,6 +250,8 @@ echo -e "${GREEN}Container deployed at ${CONTAINER_IP}${NC}"
 
 # ===========================================
 # SETUP VIA SINGLE PCT EXEC SESSION
+# All setup in one SSH session to Proxmox
+# Using the proven approach from commit 51b544b
 # ===========================================
 
 echo -e "${GREEN}[4/6] Setting up container via pct exec...${NC}"
@@ -257,7 +263,8 @@ GITHUB_SSH_KEY_CONTENT=$(cat "${GITHUB_SSH_KEY}")
 # Clear old host keys for the container IP
 ssh-keygen -R "${CONTAINER_IP}" 2>/dev/null || true
 
-# Use pct exec via Proxmox SSH — everything in ONE session
+# Use pct exec via Proxmox SSH - this bypasses container SSH authentication entirely
+# Everything runs in ONE session
 proxmox_ssh "pct exec ${LXC_VMID} -- bash -c '
 set -e
 
@@ -269,7 +276,7 @@ sed -i \"s/# en_US.UTF-8/en_US.UTF-8/\" /etc/locale.gen
 locale-gen en_US.UTF-8
 
 echo \"=== Creating non-root SSH user: ${SSH_USER} ===\"
-useradd -m -s /bin/bash -G sudo ${SSH_USER} 2>/dev/null || echo \"User exists\"
+useradd -m -s /bin/bash -G ${SSH_USER_GROUPS} ${SSH_USER} 2>/dev/null || echo \"User exists\"
 echo \"${SSH_USER}:${SSH_USER_PASSWORD}\" | chpasswd
 echo \"${SSH_USER} ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/${SSH_USER}
 chmod 440 /etc/sudoers.d/${SSH_USER}
@@ -300,7 +307,7 @@ chmod 600 \${SSH_USER_HOME}/.ssh/config
 
 chown -R ${SSH_USER}:${SSH_USER} \${SSH_USER_HOME}/.ssh
 
-# Also setup root SSH for GitHub (build scripts may run as root)
+# Also setup root SSH for GitHub (WebUI runs as root and may need to git pull)
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 cp \${SSH_USER_HOME}/.ssh/github_deploy_key /root/.ssh/
@@ -317,16 +324,17 @@ mkdir -p /opt/talos-cleanroom
 chown ${SSH_USER}:${SSH_USER} /opt/talos-cleanroom
 su - ${SSH_USER} -c \"git clone -b ${GIT_BRANCH} ${GITHUB_REPO_URL} /opt/talos-cleanroom\"
 
-# Add safe.directory for root (build scripts may run as root but repo owned by deploy user)
+# Add safe.directory for root (WebUI runs as root but repo owned by deploy user)
 git config --global --add safe.directory /opt/talos-cleanroom
 
 echo \"=== Running setup script ===\"
-cd /opt/talos-cleanroom/build-vm/scripts
+cd /opt/talos-cleanroom/webui/scripts
 chmod +x setup-lxc.sh
-./setup-lxc.sh
+./setup-lxc.sh --webui-password \"${WEBUI_PASSWORD}\"
 
-echo \"=== Adding ${SSH_USER} to docker group ===\"
-usermod -aG docker ${SSH_USER} 2>/dev/null || echo \"docker group not ready yet\"
+echo \"=== Starting web UI service ===\"
+systemctl start deployment-webui || echo \"Service may need manual start\"
+systemctl status deployment-webui --no-pager || true
 
 echo \"\"
 echo \"=== Setup Complete ===\"
@@ -337,10 +345,10 @@ echo \"Root SSH: disabled\"
 echo -e "${GREEN}[5/6] Container setup complete${NC}"
 
 # ===========================================
-# COPY SECRETS TO CONTAINER
+# COPY SECRET FILES TO CONTAINER
 # ===========================================
 
-echo -e "${GREEN}[6/6] Copying secrets to container...${NC}"
+echo -e "${GREEN}[6/6] Copying secret files to container...${NC}"
 
 # Wait for SSH to be ready on container
 echo "  Waiting for container SSH..."
@@ -352,15 +360,18 @@ for i in {1..12}; do
     sleep 5
 done
 
-# Copy kubeconfig (so kubectl can reach the Talos cluster)
-echo "  Copying kubeconfig..."
-ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "sudo mkdir -p /root/.kube"
-scp ${SSH_OPTS} "${KUBECONFIG_FILE}" ${SSH_USER}@${CONTAINER_IP}:/tmp/kubeconfig
-ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "sudo mv /tmp/kubeconfig /root/.kube/config && sudo chmod 600 /root/.kube/config"
+# Copy SOPS age keys (to both deploy user and root, since WebUI runs as root)
+echo "  Copying SOPS age keys..."
+ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "mkdir -p ~/.config/sops/age"
+scp ${SSH_OPTS} "${SOPS_KEY_FILE}" ${SSH_USER}@${CONTAINER_IP}:~/.config/sops/age/keys.txt
+# Also copy to root's home (WebUI service runs as root)
+ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "sudo mkdir -p /root/.config/sops/age && sudo cp ~/.config/sops/age/keys.txt /root/.config/sops/age/ && sudo chmod 600 /root/.config/sops/age/keys.txt"
+echo -e "${GREEN}  SOPS keys copied (deploy + root)${NC}"
 
-# Also copy to deploy user's home for non-root kubectl usage
-ssh ${SSH_OPTS} ${SSH_USER}@${CONTAINER_IP} "mkdir -p ~/.kube && sudo cp /root/.kube/config ~/.kube/config && sudo chown ${SSH_USER}:${SSH_USER} ~/.kube/config && chmod 600 ~/.kube/config"
-echo -e "${GREEN}  Kubeconfig copied (root + ${SSH_USER})${NC}"
+# Copy Terraform credentials
+echo "  Copying Terraform credentials..."
+scp ${SSH_OPTS} "${TF_CREDS_FILE}" ${SSH_USER}@${CONTAINER_IP}:/opt/talos-cleanroom/terraform/cluster-create/
+echo -e "${GREEN}  Terraform credentials copied${NC}"
 
 # ===========================================
 # DONE
@@ -368,19 +379,18 @@ echo -e "${GREEN}  Kubeconfig copied (root + ${SSH_USER})${NC}"
 
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}Build VM Setup Complete!${NC}"
+echo -e "${GREEN}Setup Complete!${NC}"
 echo -e "${GREEN}============================================${NC}"
+echo ""
+echo "Web UI: http://${CONTAINER_IP}:8000"
+echo "Login:  ${WEBUI_USER} / ${WEBUI_PASSWORD}"
 echo ""
 echo "SSH access:"
 echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
 echo ""
-echo -e "${GREEN}Secrets copied:${NC}"
-echo "  - Kubeconfig (kubectl access to Talos cluster)"
-echo ""
-echo "To build and push the LOKI-RS image to Harbor:"
-echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
-echo "  cd /opt/talos-cleanroom/apps/loki"
-echo "  ./build-and-push.sh"
+echo -e "${GREEN}Secret files have been automatically copied:${NC}"
+echo "  - SOPS age keys"
+echo "  - Terraform credentials"
 echo ""
 echo -e "${YELLOW}Recovery (if locked out):${NC}"
 echo "  ssh root@${PROXMOX_HOST} 'pct exec ${LXC_VMID} -- bash'"

@@ -89,72 +89,78 @@ This project provides automated deployment and lifecycle management of a Talos K
 Talos-CleanRoom/
 ├── README.md                           # This file
 ├── LICENSE                             # Project license
-├── DeployCluster.sh                    # CLI deployment orchestrator
-├── deployment_tui.py                   # Terminal UI for deployment
 │
-├── deployment-webui/                   # Web UI for deployment + security scanning
+├── apps/                               # ArgoCD-managed Kubernetes applications
+│   ├── argocd/                         # ArgoCD self-management + credentials
+│   │   ├── application.yaml
+│   │   ├── install.sh / uninstall.sh
+│   │   ├── values.yaml
+│   │   └── repo-credentials.sops.yaml
+│   ├── ceph-storage/                   # Ceph CSI RBD storage integration
+│   │   ├── application.yaml
+│   │   ├── ceph-csi-secret.sops.yaml
+│   │   └── storageclass.yaml
+│   ├── metallb/                        # L2 load balancer
+│   ├── cert-manager/                   # TLS certificates
+│   ├── traefik/                        # Ingress controller
+│   ├── metrics-server/                 # Kubernetes metrics
+│   ├── harbor/                         # Private container registry
+│   ├── openvas/                        # Vulnerability scanner
+│   ├── faraday/                        # Vulnerability management
+│   ├── metasploit/                     # Penetration testing
+│   ├── securecodebox/                  # Automated security scanning
+│   ├── threat-dragon/                  # Threat modeling
+│   ├── loki/                           # LOKI-RS IOC scanner image
+│   ├── network-policies/               # Zero-trust namespace isolation
+│   └── deploy-ingress-stack.sh         # Infrastructure stack deployment
+│
+├── cluster/                            # Talos Linux cluster configuration
+│   ├── talconfig.yaml                  # Talos cluster definition
+│   ├── talsecret.sops.yaml             # Encrypted secrets
+│   ├── talenv.yaml                     # Environment variables
+│   ├── apply-configs.sh                # Config application + bootstrap
+│   └── clusterconfig/                  # Generated machine configs
+│
+├── webui/                              # Web UI for deployment + security scanning
 │   ├── README.md                       # Web UI deployment guide
 │   ├── README-TECHNICAL.md             # Technical architecture docs
 │   ├── deploy-lxc.sh                   # Automated LXC deployment
 │   ├── app/                            # FastAPI application
-│   ├── templates/                      # Jinja2 HTML templates
-│   ├── static/                         # CSS, JS assets
-│   ├── scripts/                        # Container setup scripts
-│   └── terraform/                      # LXC container Terraform config
+│   │   ├── models/                     # Pydantic data models
+│   │   ├── routers/                    # API endpoints + WebSocket handlers
+│   │   └── services/                   # Business logic + shared utilities
+│   ├── templates/                      # Jinja2 HTML templates + components
+│   ├── static/                         # CSS, JS assets + shared utilities
+│   └── scripts/                        # Container setup scripts
 │
 ├── build-vm/                           # Docker image build VM (LXC)
 │   ├── README.md                       # Build VM deployment guide
 │   ├── deploy-lxc.sh                   # Automated LXC deployment
-│   ├── scripts/                        # Container setup (Docker CE, kubectl)
-│   └── terraform/                      # LXC container Terraform config
+│   └── scripts/                        # Container setup (Docker CE, kubectl)
 │
-├── ceph-storage/                       # Ceph CSI RBD storage integration
-│   ├── application.yaml                # ArgoCD Application for ceph-csi-rbd
-│   ├── ceph-csi-secret.sops.yaml       # Encrypted Ceph credentials
-│   └── storageclass.yaml               # ceph-rbd StorageClass (default)
+├── terraform/                          # All Terraform configurations
+│   ├── cluster-create/                 # Talos cluster VMs on Proxmox
+│   │   ├── main.tf, variables.tf, locals.tf
+│   │   ├── cluster.auto.tfvars
+│   │   └── credentials.auto.tfvars    # (gitignored)
+│   ├── webui-lxc/                      # WebUI LXC container
+│   ├── build-lxc/                      # Build VM LXC container
+│   └── modules/
+│       └── proxmox-lxc/               # Shared LXC container module
 │
-└── Resources/
-    └── IAC-DNS/                        # DNS/FQDN-based deployment
-        ├── DNS-MAPPING.md              # DNS to IP reference
-        ├── .sops.yaml                  # SOPS encryption config
-        ├── tfvars-to-talos-env.sh      # Terraform to Talos env conversion
-        │
-        ├── terraform/
-        │   └── talos-cluster-create/
-        │       ├── main.tf
-        │       ├── variables.tf
-        │       ├── locals.tf
-        │       ├── cluster.auto.tfvars
-        │       └── credentials.auto.tfvars   # (gitignored)
-        │
-        ├── talos/
-        │   ├── talconfig.yaml          # Talos cluster definition
-        │   ├── talsecret.sops.yaml     # Encrypted secrets
-        │   ├── talenv.yaml             # Environment variables
-        │   ├── apply-configs.sh        # Config application + bootstrap
-        │   └── clusterconfig/          # Generated machine configs
-        │
-        └── infrastructure/
-            ├── argocd/                 # ArgoCD installation + credentials
-            │   ├── install.sh / uninstall.sh
-            │   ├── values.yaml
-            │   └── repo-credentials.sops.yaml
-            │
-            └── projects/               # ArgoCD Applications
-                ├── deploy-ingress-stack.sh
-                ├── argocd/             # ArgoCD self-management
-                ├── metallb/            # L2 load balancer
-                ├── cert-manager/       # TLS certificates
-                ├── traefik/            # Ingress controller
-                ├── metrics-server/     # Kubernetes metrics
-                ├── harbor/             # Private container registry
-                ├── openvas/            # Vulnerability scanner
-                ├── faraday/            # Vulnerability management
-                ├── metasploit/         # Penetration testing
-                ├── securecodebox/      # Automated security scanning (Nmap, Nikto, etc.)
-                ├── threat-dragon/      # Threat modeling
-                ├── loki/               # LOKI-RS IOC scanner image
-                └── network-policies/   # Zero-trust namespace isolation
+├── scripts/                            # Orchestration & utility scripts
+│   ├── DeployCluster.sh               # CLI deployment orchestrator
+│   ├── deployment_tui.py              # Terminal UI for deployment
+│   ├── check_network.py              # Network validation
+│   ├── generate-secrets.sh           # SOPS secret generation
+│   └── tfvars-to-talos-env.sh        # Terraform → Talos env conversion
+│
+├── lib/                                # Shared bash utilities
+│   ├── functions.sh                   # Common functions (wait_for_deployment, etc.)
+│   └── lxc-deploy-common.sh           # Shared LXC deployment functions
+│
+└── docs/                               # Documentation
+    └── DNS-MAPPING.md                 # DNS to IP address reference
 ```
 
 ## Prerequisites
@@ -252,13 +258,13 @@ The Web UI automates the full cluster deployment (17 steps: Terraform VMs, Talos
 #### Phase 1: Deploy the WebUI LXC Container
 
 ```bash
-cd deployment-webui
+cd webui
 ./deploy-lxc.sh
 ```
 
 Follow the prompts for Proxmox credentials, SSH key, and SOPS age key. Once complete, access the UI at `http://10.83.3.190:8000`.
 
-See [deployment-webui/README.md](deployment-webui/README.md) for details.
+See [webui/README.md](webui/README.md) for details.
 
 #### Phase 2: Deploy the Cluster via WebUI
 
@@ -309,7 +315,7 @@ Follow the prompts for Proxmox credentials, SSH key, and kubeconfig path. Once d
 
 ```bash
 ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+cd /opt/talos-cleanroom/apps/loki
 HARBOR_PASSWORD="<your-harbor-password>" bash build-and-push.sh
 ```
 
@@ -347,7 +353,7 @@ kubectl get ingressroute -A
 #### Step 1: Deploy Infrastructure with Terraform
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/terraform/talos-cluster-create"
+cd "$(git rev-parse --show-toplevel)/terraform/cluster-create"
 terraform init
 terraform plan -out=".tfplan"
 terraform apply ".tfplan"
@@ -356,10 +362,10 @@ terraform apply ".tfplan"
 #### Step 2: Generate Talos Configuration
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS"
-./tfvars-to-talos-env.sh
+cd "$(git rev-parse --show-toplevel)"
+./scripts/tfvars-to-talos-env.sh
 
-cd talos
+cd cluster
 export SOPS_AGE_KEY_FILE=$HOME/.config/sops/age/keys.txt
 talhelper gensecret > talsecret.sops.yaml
 sops -e -i talsecret.sops.yaml
@@ -368,7 +374,7 @@ talhelper genconfig --env-file talenv.yaml
 
 #### Step 3: Apply Talos Configs and Bootstrap
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/talos"
+cd "$(git rev-parse --show-toplevel)/cluster"
 export TALOSCONFIG=$(pwd)/clusterconfig/talosconfig
 
 # Apply configs and bootstrap (waits 180s then bootstraps automatically)
@@ -400,18 +406,18 @@ ssh-keygen -t ed25519 -C "argocd-deploy-key" -f ~/.ssh/argocd_deploy_key -N ""
 cat ~/.ssh/argocd_deploy_key.pub
 
 # Edit credentials template with your private key
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
+cd "$(git rev-parse --show-toplevel)/apps/argocd"
 # Edit repo-credentials.yaml - paste private key from: cat ~/.ssh/argocd_deploy_key
 
 # Encrypt with SOPS
-sops --config ../../talos/.sops.yaml --encrypt repo-credentials.yaml > repo-credentials.sops.yaml
+sops --config ../../cluster/.sops.yaml --encrypt repo-credentials.yaml > repo-credentials.sops.yaml
 rm repo-credentials.yaml  # Delete unencrypted file
 ```
 
 #### Step 6: Install ArgoCD
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
+cd "$(git rev-parse --show-toplevel)/apps/argocd"
 ./install.sh
 
 # Verify ArgoCD is running
@@ -428,7 +434,7 @@ kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
 Deploys MetalLB, cert-manager, Traefik, Ceph CSI, and applies all IngressRoutes automatically.
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
+cd "$(git rev-parse --show-toplevel)/apps"
 ./deploy-ingress-stack.sh
 ```
 
@@ -451,7 +457,7 @@ kubectl create secret generic basic-auth-secret --from-literal=users='admin:<has
 #### Step 10: Enable ArgoCD Self-Management
 
 ```bash
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml
+kubectl apply -f apps/argocd/application.yaml
 ```
 
 #### Step 11: Deploy Security Tools
@@ -460,19 +466,19 @@ kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.ya
 cd "$(git rev-parse --show-toplevel)"
 
 # Vulnerability scanning
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/openvas/application.yaml
+kubectl apply -f apps/openvas/application.yaml
 
 # Vulnerability management
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/faraday/application.yaml
+kubectl apply -f apps/faraday/application.yaml
 
 # Penetration testing
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/metasploit/application.yaml
+kubectl apply -f apps/metasploit/application.yaml
 
 # Threat modeling
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/threat-dragon/application.yaml
+kubectl apply -f apps/threat-dragon/application.yaml
 
 # Container registry
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/harbor/application.yaml
+kubectl apply -f apps/harbor/application.yaml
 
 # Verify all applications are syncing
 kubectl get applications -n argocd
@@ -491,7 +497,7 @@ After the build VM is deployed and Harbor is healthy:
 
 ```bash
 ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+cd /opt/talos-cleanroom/apps/loki
 HARBOR_PASSWORD="<your-harbor-password>" bash build-and-push.sh
 ```
 
@@ -516,11 +522,11 @@ kubectl get ingressroute -A
 | Threat Dragon | https://threatdragon.knowledgeondemand.net | N/A (local storage) |
 | Metasploit | `kubectl exec -it -n metasploit deploy/metasploit -c metasploit -- ./msfconsole` | N/A (CLI) |
 
-> **Warning**: Change default passwords in production! Update ArgoCD password in `infrastructure/argocd/values.yaml` and regenerate the bcrypt hash.
+> **Warning**: Change default passwords in production! Update ArgoCD password in `apps/argocd/values.yaml` and regenerate the bcrypt hash.
 
 ## Troubleshooting
 
-See [DNS-MAPPING.md](Resources/IAC-DNS/DNS-MAPPING.md) for complete DNS to IP address mappings.
+See [DNS-MAPPING.md](docs/DNS-MAPPING.md) for complete DNS to IP address mappings.
 
 ### Common Issues
 

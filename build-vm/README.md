@@ -1,6 +1,6 @@
 # Talos CleanRoom Build VM
 
-A Debian 12 LXC container on Proxmox for building and pushing Docker images to the self-hosted Harbor registry. Follows the same Terraform + pct exec deployment pattern as the [Deployment WebUI](../deployment-webui/README.md).
+A Debian 12 LXC container on Proxmox for building and pushing Docker images to the self-hosted Harbor registry. Follows the same Terraform + pct exec deployment pattern as the [Deployment WebUI](../webui/README.md).
 
 ## Purpose
 
@@ -22,7 +22,7 @@ Once deployed, build and push the LOKI-RS image:
 
 ```bash
 ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+cd /opt/talos-cleanroom/apps/loki
 ./build-and-push.sh
 ```
 
@@ -107,7 +107,7 @@ Both are set automatically in `terraform/main.tf`. No privileged container neede
 
 ## build-and-push.sh
 
-The `build-and-push.sh` script (located at `Resources/IAC-DNS/infrastructure/projects/loki/build-and-push.sh`) handles the full bootstrap:
+The `build-and-push.sh` script (located at `apps/loki/build-and-push.sh`) handles the full bootstrap:
 
 1. Check prerequisites (docker, kubectl, curl, jq)
 2. Collect Harbor credentials (or use `HARBOR_USER` / `HARBOR_PASSWORD` env vars)
@@ -142,7 +142,7 @@ git pull
 ### Rebuilding an Image
 
 ```bash
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+cd /opt/talos-cleanroom/apps/loki
 ./build-and-push.sh v2.10.0
 ```
 
