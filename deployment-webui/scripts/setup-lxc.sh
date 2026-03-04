@@ -16,6 +16,15 @@ WEBUI_PASSWORD="admin"
 WEBUI_PORT="8000"
 APP_DIR="/opt/deployment-webui"
 
+# Tool versions - update these when upgrading
+TERRAFORM_VERSION="1.14.6"
+SOPS_VERSION="3.12.1"
+AGE_VERSION="1.3.1"
+TALOSCTL_VERSION="1.12.4"
+TALHELPER_VERSION="3.1.5"
+JQ_VERSION="1.8.1"
+KUBECTL_MINOR="v1.32"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -44,11 +53,11 @@ echo "============================================"
 echo ""
 
 # Update system
-echo "[1/10] Updating system packages..."
+echo "[1/12] Updating system packages..."
 apt-get update && apt-get upgrade -y
 
 # Install base dependencies
-echo "[2/10] Installing base dependencies..."
+echo "[2/12] Installing base dependencies..."
 apt-get install -y \
     curl \
     wget \
@@ -63,48 +72,62 @@ apt-get install -y \
     apt-transport-https \
     lsb-release
 
+# Install jq from GitHub releases (apt version is too old)
+echo "[3/12] Installing jq ${JQ_VERSION}..."
+curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-amd64" -o /usr/local/bin/jq
+chmod +x /usr/local/bin/jq
+jq --version
+
 # Install kubectl
-echo "[3/10] Installing kubectl..."
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+echo "[4/12] Installing kubectl (${KUBECTL_MINOR})..."
+curl -fsSL "https://pkgs.k8s.io/core:/stable:/${KUBECTL_MINOR}/deb/Release.key" | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBECTL_MINOR}/deb/ /" | tee /etc/apt/sources.list.d/kubernetes.list
 apt-get update
 apt-get install -y kubectl
 
 # Install Helm
-echo "[4/10] Installing Helm..."
+echo "[5/12] Installing Helm..."
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 helm version --short
 
 # Install Terraform
-echo "[5/10] Installing Terraform..."
-TERRAFORM_VERSION="1.7.0"
+echo "[6/12] Installing Terraform ${TERRAFORM_VERSION}..."
 curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
 unzip -o /tmp/terraform.zip -d /usr/local/bin/
 rm /tmp/terraform.zip
 terraform version
 
 # Install talosctl
-echo "[6/10] Installing talosctl..."
-curl -fsSL https://github.com/siderolabs/talos/releases/latest/download/talosctl-linux-amd64 -o /usr/local/bin/talosctl
+echo "[7/12] Installing talosctl v${TALOSCTL_VERSION}..."
+curl -fsSL "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-linux-amd64" -o /usr/local/bin/talosctl
 chmod +x /usr/local/bin/talosctl
 talosctl version --client
 
 # Install talhelper
-echo "[7/10] Installing talhelper..."
-curl -fsSL https://github.com/budimanjojo/talhelper/releases/latest/download/talhelper_linux_amd64.tar.gz -o /tmp/talhelper.tar.gz
+echo "[8/12] Installing talhelper v${TALHELPER_VERSION}..."
+curl -fsSL "https://github.com/budimanjojo/talhelper/releases/download/v${TALHELPER_VERSION}/talhelper_linux_amd64.tar.gz" -o /tmp/talhelper.tar.gz
 tar -xzf /tmp/talhelper.tar.gz -C /usr/local/bin/
 rm /tmp/talhelper.tar.gz
 talhelper --version
 
 # Install SOPS
-echo "[8/10] Installing SOPS..."
-SOPS_VERSION="3.8.1"
+echo "[9/12] Installing SOPS v${SOPS_VERSION}..."
 curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" -o /usr/local/bin/sops
 chmod +x /usr/local/bin/sops
 sops --version
 
+# Install age (encryption backend for SOPS)
+echo "[10/12] Installing age v${AGE_VERSION}..."
+curl -fsSL "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz" -o /tmp/age.tar.gz
+tar -xzf /tmp/age.tar.gz -C /tmp/
+mv /tmp/age/age /usr/local/bin/age
+mv /tmp/age/age-keygen /usr/local/bin/age-keygen
+chmod +x /usr/local/bin/age /usr/local/bin/age-keygen
+rm -rf /tmp/age /tmp/age.tar.gz
+age --version
+
 # Clone or setup repository
-echo "[9/10] Setting up repository..."
+echo "[11/12] Setting up repository..."
 if [ ! -d "$REPO_PATH" ]; then
     echo "Repository not found at $REPO_PATH"
     echo "You will need to clone the repository or create a bind mount."
@@ -124,7 +147,7 @@ if [ -d "$REPO_PATH/deployment-webui" ]; then
 fi
 
 # Create Python virtual environment and install dependencies
-echo "[10/10] Setting up Python environment..."
+echo "[12/12] Setting up Python environment..."
 cd "$APP_DIR"
 python3 -m venv venv
 
