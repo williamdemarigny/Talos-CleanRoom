@@ -246,14 +246,100 @@ All services resolve to the Traefik MetalLB IP (from the 10.83.3.200-250 pool).
 
 ### Option A: Web UI (Recommended)
 
-Deploy the WebUI LXC container and use the browser-based interface:
+The Web UI automates the full cluster deployment (17 steps: Terraform VMs, Talos bootstrap, ArgoCD, infrastructure stack, security tools including Harbor, and integration configuration). The LOKI-RS IOC scanner image requires an additional post-deployment build step.
+
+#### Phase 1: Deploy the WebUI LXC Container
 
 ```bash
 cd deployment-webui
 ./deploy-lxc.sh
 ```
 
-Access the UI at `http://10.83.3.190:8000` and use the dashboard to provision the cluster. See [deployment-webui/README.md](deployment-webui/README.md) for details.
+Follow the prompts for Proxmox credentials, SSH key, and SOPS age key. Once complete, access the UI at `http://10.83.3.190:8000`.
+
+See [deployment-webui/README.md](deployment-webui/README.md) for details.
+
+#### Phase 2: Deploy the Cluster via WebUI
+
+1. Log in with `admin` / `admin`
+2. Go to **Configuration** and verify Terraform/Talos settings
+3. Go to **Deployment** and click **Start Deployment**
+4. The 17-step process runs automatically:
+   - Steps 0-1: Validate git repo and dependencies
+   - Steps 2-3: Terraform creates Proxmox VMs, waits for boot
+   - Steps 4-5: Generate and apply Talos machine configs, bootstrap etcd
+   - Steps 6-7: Verify cluster health, export kubeconfig
+   - Step 8: Install ArgoCD
+   - Step 9: Deploy infrastructure stack (MetalLB, cert-manager, Traefik, Ceph CSI)
+   - Step 10: Enable ArgoCD self-management
+   - Steps 11-15: Deploy OpenVAS, Faraday, Metasploit, Threat Dragon, Harbor
+   - Step 16: Configure integrations (Faraday workspace, cross-service connectivity)
+
+#### Phase 3: Configure DNS
+
+After deployment, get the Traefik LoadBalancer IP:
+
+```bash
+kubectl get svc traefik -n traefik
+# EXTERNAL-IP will be from the MetalLB pool (10.83.3.200-250)
+```
+
+Create DNS A records pointing to that IP for all services:
+
+| FQDN | Purpose |
+|------|---------|
+| traefik.knowledgeondemand.net | Traefik Dashboard |
+| argocd.knowledgeondemand.net | ArgoCD UI |
+| harbor.knowledgeondemand.net | Harbor Container Registry |
+| openvas.knowledgeondemand.net | OpenVAS Scanner |
+| faraday.knowledgeondemand.net | Faraday Vulnerability Management |
+| threatdragon.knowledgeondemand.net | OWASP Threat Dragon |
+
+#### Phase 4: Deploy Build VM and LOKI-RS Image
+
+The build VM is required for building the LOKI-RS IOC scanner image and pushing it to Harbor.
+
+```bash
+cd build-vm
+./deploy-lxc.sh
+```
+
+Follow the prompts for Proxmox credentials, SSH key, and kubeconfig path. Once deployed, wait for Harbor to be healthy, then build and push the image:
+
+```bash
+ssh deploy@10.83.3.191
+cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+HARBOR_PASSWORD="<your-harbor-password>" bash build-and-push.sh
+```
+
+The script creates the Harbor `cleanroom` project, sets up `harbor-pull-secret` in the `loki-scanner` namespace, builds the image, and pushes it.
+
+#### Phase 5: Create Traefik Basic Auth Secret
+
+```bash
+# Generate password hash (install apache2-utils if needed)
+htpasswd -nb admin YOUR_SECURE_PASSWORD
+
+# Create the secret for Traefik dashboard authentication
+kubectl create secret generic basic-auth-secret --from-literal=users='admin:<hash>' -n traefik
+```
+
+#### Phase 6: Verify Full Deployment
+
+```bash
+# All namespaces should show pods Running
+kubectl get pods -A
+
+# All ArgoCD applications should be Synced/Healthy
+kubectl get applications -n argocd
+
+# Ingress routes should be configured
+kubectl get ingressroute -A
+```
+
+**Note:** OpenVAS feed synchronization takes 30-60 minutes on first deployment. Scans will be incomplete until feeds are fully loaded.
+
+---
 
 ### Option B: CLI Deployment
 
@@ -325,11 +411,10 @@ rm repo-credentials.yaml  # Delete unencrypted file
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/argocd"
-chmod +x install.sh && ./install.sh
+./install.sh
 
 # Verify ArgoCD is running
 kubectl get pods -n argocd
-kubectl get deployment -n argocd
 
 # Verify repository credentials (if configured)
 kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
@@ -343,13 +428,13 @@ Deploys MetalLB, cert-manager, Traefik, Ceph CSI, and applies all IngressRoutes 
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/Resources/IAC-DNS/infrastructure/projects"
-chmod +x deploy-ingress-stack.sh && ./deploy-ingress-stack.sh
+./deploy-ingress-stack.sh
 ```
 
-#### Step 8: Configure Load Balancer IP
+#### Step 8: Configure DNS
 
 ```bash
-# Get Traefik LoadBalancer IP and create DNS A records for *.knowledgeondemand.net
+# Get Traefik LoadBalancer IP
 kubectl get svc traefik -n traefik
 ```
 
@@ -358,41 +443,17 @@ Create A records for `traefik`, `argocd`, `harbor`, `openvas`, `faraday`, and `t
 #### Step 9: Create Basic Auth Secret
 
 ```bash
-# Generate password hash (install apache2-utils if needed)
 htpasswd -nb admin YOUR_SECURE_PASSWORD
-
-# Create the secret
 kubectl create secret generic basic-auth-secret --from-literal=users='admin:<hash>' -n traefik
 ```
 
-#### Step 10: Verify Deployment
-
-```bash
-# Check all infrastructure pods
-kubectl get pods -n metallb-system
-kubectl get pods -n cert-manager
-kubectl get pods -n traefik
-kubectl get pods -n argocd
-
-# Check certificates and ingress routes
-kubectl get certificates -A
-kubectl get ingressroute -A
-```
-
-#### Step 11: Enable ArgoCD Self-Management
+#### Step 10: Enable ArgoCD Self-Management
 
 ```bash
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/argocd/application.yaml
-
-# Verify ArgoCD is managing itself
-kubectl get applications -n argocd | grep argocd
 ```
 
-Once enabled, ArgoCD will auto-sync all applications when you push changes to the repository.
-
-#### Step 12: Deploy Security Tools (Manual)
-
-If not using ArgoCD auto-sync, manually deploy the security applications:
+#### Step 11: Deploy Security Tools
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -409,15 +470,8 @@ kubectl apply -f Resources/IAC-DNS/infrastructure/projects/metasploit/applicatio
 # Threat modeling
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/threat-dragon/application.yaml
 
-# Container registry with Trivy scanning
+# Container registry
 kubectl apply -f Resources/IAC-DNS/infrastructure/projects/harbor/application.yaml
-
-# Automated security scanning (SecureCodeBox)
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/securecodebox/operator-application.yaml
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/securecodebox/nmap-application.yaml
-
-# Zero-trust namespace isolation
-kubectl apply -f Resources/IAC-DNS/infrastructure/projects/network-policies/application.yaml
 
 # Verify all applications are syncing
 kubectl get applications -n argocd
@@ -425,21 +479,27 @@ kubectl get applications -n argocd
 
 **Note:** OpenVAS feed synchronization takes 30-60 minutes on first deployment.
 
-#### Step 13: Deploy Build VM (Optional)
-
-Deploy the build VM LXC container for building and pushing Docker images to Harbor:
+#### Step 12: Deploy Build VM and LOKI-RS Image
 
 ```bash
 cd build-vm
 ./deploy-lxc.sh
 ```
 
-Then build and push the LOKI-RS scanner image:
+After the build VM is deployed and Harbor is healthy:
 
 ```bash
 ssh deploy@10.83.3.191
 cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
-./build-and-push.sh
+HARBOR_PASSWORD="<your-harbor-password>" bash build-and-push.sh
+```
+
+#### Step 13: Verify Full Deployment
+
+```bash
+kubectl get pods -A
+kubectl get applications -n argocd
+kubectl get ingressroute -A
 ```
 
 ## Accessing Services
@@ -449,7 +509,7 @@ cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
 | Deployment WebUI | http://10.83.3.190:8000 | admin / admin |
 | ArgoCD | https://argocd.knowledgeondemand.net | admin / admin |
 | Traefik Dashboard | https://traefik.knowledgeondemand.net | admin / (basic auth secret) |
-| Harbor | https://harbor.knowledgeondemand.net | admin / (set at deploy) |
+| Harbor | https://harbor.knowledgeondemand.net | admin / Harbor12345 (change on first login) |
 | OpenVAS | https://openvas.knowledgeondemand.net | admin / admin |
 | Faraday | https://faraday.knowledgeondemand.net | admin / (set via k8s secret) |
 | Threat Dragon | https://threatdragon.knowledgeondemand.net | N/A (local storage) |
@@ -468,6 +528,10 @@ See [DNS-MAPPING.md](Resources/IAC-DNS/DNS-MAPPING.md) for complete DNS to IP ad
 - **Credentials**: Update `credentials.auto.tfvars` with correct Proxmox API token
 - **Storage**: Verify Ceph pool `kubernetes` exists and monitors are reachable from worker nodes
 - **OpenVAS feeds**: First sync takes 30-60 minutes; pods may restart during this time
+- **Harbor 404**: The IngressRoute must point to the `harbor` service (nginx proxy), not `harbor-core`
+- **LOKI pod Forbidden**: The `loki-scanner` namespace requires a privileged PodSecurity label: `kubectl label namespace loki-scanner pod-security.kubernetes.io/enforce=privileged`
+- **Shell scripts Permission denied**: Scripts may lack the executable bit on Linux; run with `bash ./script.sh` or `chmod +x *.sh`
+- **OpenVAS OOMKill**: ospd-openvas needs at least 4Gi memory limit; 1Gi causes OOM at ~96% scan progress
 
 ## References
 

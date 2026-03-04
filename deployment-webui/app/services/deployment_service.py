@@ -407,7 +407,8 @@ class DeploymentService:
                 (12, self._step_deploy_faraday),
                 (13, self._step_deploy_metasploit),
                 (14, self._step_deploy_threat_dragon),
-                (15, self._step_configure_integrations),
+                (15, self._step_deploy_harbor),
+                (16, self._step_configure_integrations),
             ]
 
             for step_id, step_func in steps:
@@ -1420,18 +1421,7 @@ class DeploymentService:
         return result.success
 
     async def _step_deploy_threat_dragon(self, step_id: int) -> bool:
-        """Step 14: Deploy Threat Dragon and finalize deployment.
-
-        Deploys Threat Dragon (threat modeling tool) via ArgoCD Application,
-        waits for sync, and logs the deployment summary including access
-        URLs and default credentials.
-
-        Args:
-            step_id: The deployment step identifier for logging.
-
-        Returns:
-            True if deployment completes, False otherwise.
-        """
+        """Step 14: Deploy Threat Dragon via ArgoCD Application."""
         await self.log(step_id, "info", "Deploying Threat Dragon...")
 
         app_yaml = self.projects_dir / "threat-dragon" / "application.yaml"
@@ -1440,14 +1430,28 @@ class DeploymentService:
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        # Wait for applications to sync
-        await self.log(step_id, "info", "Waiting for applications to sync...")
-        await asyncio.sleep(THREAT_DRAGON_SYNC_WAIT)
+        await self.log(step_id, "info", "Waiting for Threat Dragon to sync...")
+        await asyncio.sleep(ARGOCD_SYNC_WAIT)
+
+        return result.success
+
+    async def _step_deploy_harbor(self, step_id: int) -> bool:
+        """Step 15: Deploy Harbor container registry via ArgoCD Application."""
+        await self.log(step_id, "info", "Deploying Harbor container registry...")
+
+        app_yaml = self.projects_dir / "harbor" / "application.yaml"
+        result = await self.process_manager.run_command(
+            ["kubectl", "apply", "-f", str(app_yaml)],
+            on_output=lambda line: self.log(step_id, "info", line)
+        )
+
+        await self.log(step_id, "info", "Waiting for Harbor to sync...")
+        await asyncio.sleep(ARGOCD_SYNC_WAIT)
 
         # Log deployment summary
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "==========================================")
-        await self.log(step_id, "info", "Deployment complete!")
+        await self.log(step_id, "info", "All applications deployed!")
         await self.log(step_id, "info", "==========================================")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Credentials:")
@@ -1455,6 +1459,7 @@ class DeploymentService:
         await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
         await self.log(step_id, "info", "  - Faraday:    admin / (auto-generated, user auto-created)")
         await self.log(step_id, "info", "  - Metasploit: msf / (auto-generated)")
+        await self.log(step_id, "info", "  - Harbor:     admin / Harbor12345 (change on first login)")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Retrieve auto-generated passwords:")
         await self.log(step_id, "info", "  OpenVAS:    kubectl get secret openvas-credentials -n openvas -o jsonpath='{.data.admin-password}' | base64 -d")
@@ -1464,6 +1469,7 @@ class DeploymentService:
         await self.log(step_id, "info", "Access services at:")
         await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Traefik:       https://traefik.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Harbor:        https://harbor.knowledgeondemand.net")
         await self.log(step_id, "info", "  - OpenVAS:       https://openvas.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Faraday:       https://faraday.knowledgeondemand.net")
         await self.log(step_id, "info", "  - Threat Dragon: https://threatdragon.knowledgeondemand.net")
@@ -1472,12 +1478,13 @@ class DeploymentService:
         await self.log(step_id, "info", "  kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole")
         await self.log(step_id, "info", "")
         await self.log(step_id, "info", "Note: OpenVAS feed sync takes 30-60 minutes on first deployment.")
+        await self.log(step_id, "info", "Note: Build and push the LOKI-RS image from the build VM for IOC scanning.")
         await self.log(step_id, "info", "==========================================")
 
         return result.success
 
     async def _step_configure_integrations(self, step_id: int) -> bool:
-        """Step 15: Configure security tool integrations.
+        """Step 16: Configure security tool integrations.
 
         Creates a default Faraday workspace and verifies cross-service
         connectivity between Faraday, Metasploit, and OpenVAS.
