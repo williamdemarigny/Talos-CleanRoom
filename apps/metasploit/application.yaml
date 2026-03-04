@@ -12,7 +12,7 @@ spec:
   project: default
   source:
     repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-    targetRevision: main
+    targetRevision: refactor/restructure
     path: apps/metasploit
     directory:
       recurse: false
