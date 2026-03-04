@@ -15,7 +15,7 @@ spec:
     - match: Host(`harbor.knowledgeondemand.net`)
       kind: Rule
       services:
-        - name: harbor-core
+        - name: harbor
           port: 80
       middlewares:
         - name: secure-headers
