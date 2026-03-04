@@ -216,21 +216,12 @@ class IocScanService:
                 self._save_to_history()
                 return
 
-            # Ensure namespace exists
-            await self.process_manager.run_command_simple(
-                ["kubectl", "create", "namespace", LOKI_NAMESPACE,
-                 "--dry-run=client", "-o", "yaml"],
-                timeout=10
-            )
-            await self.process_manager.run_command_simple(
-                ["kubectl", "apply", "-f", "-"],
-                timeout=10
-            )
-            # Simpler: just try to create, ignore if exists
+            # Ensure namespace exists with privileged PodSecurity (required for FUSE mounts)
             await self.process_manager.run_command_simple(
                 ["bash", "-c",
-                 f"kubectl create namespace {LOKI_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -"],
-                timeout=10
+                 f"kubectl create namespace {LOKI_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - && "
+                 f"kubectl label namespace {LOKI_NAMESPACE} pod-security.kubernetes.io/enforce=privileged --overwrite"],
+                timeout=15
             )
 
             # Run the LOKI-RS scan pod
