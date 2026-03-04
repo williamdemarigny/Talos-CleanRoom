@@ -2900,7 +2900,6 @@ except Exception as e:
                 "        # Also get host detail elements for OS/hostname/service info\n"
                 "        host_detail_map = {}\n"
                 "        svc_name_map = {}  # (ip, port, protocol) -> service name\n"
-                "        all_detail_names = set()\n"
                 "        for helem in inner.findall('host'):\n"
                 "            ip = (helem.findtext('ip') or '').strip()\n"
                 "            if not ip:\n"
@@ -2910,7 +2909,6 @@ except Exception as e:
                 "            for d in helem.findall('detail'):\n"
                 "                dname = (d.findtext('name') or '').strip()\n"
                 "                dval = (d.findtext('value') or '').strip()\n"
-                "                all_detail_names.add(dname)\n"
                 "                if dname == 'hostname' and dval:\n"
                 "                    hostnames.append(dval)\n"
                 "                elif dname == 'best_os_txt' and dval:\n"
@@ -2928,8 +2926,6 @@ except Exception as e:
                 "                        except ValueError:\n"
                 "                            pass\n"
                 "            host_detail_map[ip] = {'os': os_txt, 'hostnames': hostnames}\n"
-                "        print(f'UPLOAD:HOST_DETAIL_NAMES:{sorted(all_detail_names)}')\n"
-                "        print(f'UPLOAD:SVC_NAMES:{len(svc_name_map)} service names from host details')\n"
                 "\n"
                 "        # Fallback: extract service names from 'Services' NVT results\n"
                 "        # NVT OID 1.3.6.1.4.1.25623.1.0.10330 detects services on ports\n"
@@ -3026,11 +3022,7 @@ except Exception as e:
                 "                                os_svc_db[(int(pp[0]), pp[1])] = sn\n"
                 "                            except ValueError:\n"
                 "                                pass\n"
-                "                # Log a few sample entries to verify data\n"
-                "                samples = [(k,v) for k,v in list(os_svc_db.items())[:5]]\n"
-                "                print(f'UPLOAD:SVC_DB:loaded {len(os_svc_db)} entries from /etc/services, samples: {samples}')\n"
-                "                # Check specific common ports\n"
-                "                print(f'UPLOAD:SVC_DB:port80={os_svc_db.get((80,\"tcp\"),\"MISSING\")} port443={os_svc_db.get((443,\"tcp\"),\"MISSING\")} port22={os_svc_db.get((22,\"tcp\"),\"MISSING\")}')\n"
+                "                print(f'UPLOAD:SVC_DB:loaded {len(os_svc_db)} entries from /etc/services')\n"
                 "            except Exception as ef:\n"
                 "                print(f'UPLOAD:SVC_DB:failed to read /etc/services: {ef}')\n"
                 "\n"
@@ -3117,12 +3109,10 @@ except Exception as e:
                 "            skey = (host_ip, port_num, protocol)\n"
                 "            if skey not in svc_ids:\n"
                 "                svc_name = svc_name_map.get(skey, '') or os_svc_db.get((port_num, protocol), '')\n"
-                "                print(f'UPLOAD:SVC_DEBUG:creating {host_ip}:{port_num}/{protocol} name=\"{svc_name}\"')\n"
                 "                sbody = {'name': svc_name, 'ports': [port_num], 'protocol': protocol,\n"
                 "                         'status': 'open', 'parent': hid, 'type': 'Service'}\n"
                 "                try:\n"
                 "                    sr = api_post(f'/_api/v3/ws/{WS}/services', sbody)\n"
-                "                    print(f'UPLOAD:SVC_DEBUG:created {host_ip}:{port_num} -> id={sr.get(\"id\")} resp={str(sr)[:200]}')\n"
                 "                    svc_ids[skey] = sr.get('id')\n"
                 "                    created_services += 1\n"
                 "                except urllib.error.HTTPError as e:\n"
@@ -3315,8 +3305,6 @@ except Exception as e:
                     await self.log(tool_name, "info", f"Parsed scan results: {line.split(':', 2)[-1]}")
                 elif line.startswith("UPLOAD:SVC_"):
                     await self.log(tool_name, "info", f"Service names: {line.split(':', 2)[-1]}")
-                elif line.startswith("UPLOAD:HOST_DETAIL"):
-                    await self.log(tool_name, "info", f"Host details: {line.split(':', 2)[-1]}")
                 elif line.startswith("UPLOAD:LOGIN_FAILED"):
                     await self.log(tool_name, "warn", f"Faraday login failed during upload: {line}")
                 elif line.startswith("UPLOAD:WS_CREATE_FAILED"):
