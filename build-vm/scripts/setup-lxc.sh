@@ -91,7 +91,7 @@ mkdir -p /root/.kube
 # Symlink build scripts from repository for convenience
 echo "[5/5] Setting up build scripts..."
 BUILD_SCRIPTS_DIR="/opt/build-scripts"
-LOKI_DIR="${REPO_PATH}/Resources/IAC-DNS/infrastructure/projects/loki"
+LOKI_DIR="${REPO_PATH}/apps/loki"
 
 mkdir -p "$BUILD_SCRIPTS_DIR"
 
