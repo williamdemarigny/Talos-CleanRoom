@@ -956,6 +956,13 @@ class DeploymentService:
         # Ensure .kube directory exists
         kubeconfig_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Remove stale kubeconfig so talosctl writes a clean file
+        # (talosctl kubeconfig merges into existing files, accumulating
+        # stale cluster/user entries from previous deployments)
+        if kubeconfig_path.exists():
+            kubeconfig_path.unlink()
+            await self.log(step_id, "info", "Removed stale kubeconfig from previous deployment")
+
         await self.log(step_id, "info", f"Retrieving kubeconfig to {kubeconfig_path}...")
         result = await self.process_manager.run_command(
             ["talosctl", "kubeconfig", f"--nodes={self.master_node}", str(kubeconfig_path)],
