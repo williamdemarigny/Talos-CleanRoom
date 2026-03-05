@@ -968,7 +968,30 @@ class DeploymentService(BaseServiceMixin):
             on_output=lambda line: self.log(step_id, "info", line)
         )
 
-        return result.success
+        if not result.success:
+            return False
+
+        # Push kubeconfig to build VM (best-effort — build VM may not exist yet)
+        build_vm_ip = "10.83.3.191"
+        build_vm_user = "deploy"
+        await self.log(step_id, "info", f"Pushing kubeconfig to build VM ({build_vm_ip})...")
+
+        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=5"
+        push_result = await self.process_manager.run_command_simple(
+            ["bash", "-c",
+             f"scp {ssh_opts} {kubeconfig_path} {build_vm_user}@{build_vm_ip}:/tmp/kubeconfig && "
+             f"ssh {ssh_opts} {build_vm_user}@{build_vm_ip} "
+             f"'mkdir -p ~/.kube && mv /tmp/kubeconfig ~/.kube/config && chmod 600 ~/.kube/config && "
+             f"sudo cp ~/.kube/config /root/.kube/config && sudo chmod 600 /root/.kube/config'"],
+            timeout=15
+        )
+
+        if push_result.success:
+            await self.log(step_id, "info", "Kubeconfig pushed to build VM successfully")
+        else:
+            await self.log(step_id, "warn", "Build VM not reachable — kubeconfig not pushed (deploy build VM later)")
+
+        return True
 
     async def _step_install_argocd(self, step_id: int) -> bool:
         """Step 8: Install ArgoCD GitOps platform.

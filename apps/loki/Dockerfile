@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sshfs \
     cifs-utils \
     ca-certificates \
-    fuse \
+    fuse3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
