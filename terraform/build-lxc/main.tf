@@ -60,8 +60,7 @@ module "lxc_container" {
   root_password   = var.lxc_root_password
   ssh_public_keys = var.ssh_public_keys
 
-  # Privileged container for Docker builds (avoids keyctl root@pam requirement)
-  unprivileged    = false
+  # Unprivileged with nesting only (keyctl requires root@pam, Docker uses fuse-overlayfs instead)
   feature_nesting = true
   feature_keyctl  = false
 }
