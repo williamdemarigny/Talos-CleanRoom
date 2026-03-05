@@ -457,6 +457,7 @@ kubectl create secret generic basic-auth-secret --from-literal=users='admin:<has
 #### Step 10: Enable ArgoCD Self-Management
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 kubectl apply -f apps/argocd/application.yaml
 ```
 

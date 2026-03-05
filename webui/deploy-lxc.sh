@@ -93,17 +93,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Check for SOPS age keys
 SOPS_KEY_FILE="${HOME}/.config/sops/age/keys.txt"
 if [ ! -f "$SOPS_KEY_FILE" ]; then
-    echo -e "${RED}Error: SOPS age keys not found at ${SOPS_KEY_FILE}${NC}"
+    echo -e "${RED}Error: SOPS age keys not found at $(display_path "$SOPS_KEY_FILE")${NC}"
     echo "  These keys are required to decrypt secrets during deployment."
     echo "  Please ensure your SOPS age keys are in place before running this script."
     exit 1
 fi
-echo -e "${GREEN}Found SOPS keys: ${SOPS_KEY_FILE}${NC}"
+echo -e "${GREEN}Found SOPS keys: $(display_path "$SOPS_KEY_FILE")${NC}"
 
 # Check for Terraform credentials
 TF_CREDS_FILE="${REPO_ROOT}/terraform/cluster-create/credentials.auto.tfvars"
 if [ ! -f "$TF_CREDS_FILE" ]; then
-    echo -e "${RED}Error: Terraform credentials not found at ${TF_CREDS_FILE}${NC}"
+    echo -e "${RED}Error: Terraform credentials not found at $(display_path "$TF_CREDS_FILE")${NC}"
     echo "  This file contains Proxmox API credentials needed for VM deployment."
     echo "  Please create this file with your Proxmox credentials."
     exit 1

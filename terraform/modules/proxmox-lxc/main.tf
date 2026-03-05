@@ -83,8 +83,9 @@ resource "proxmox_virtual_environment_container" "this" {
   pool_id = var.pool_id != "" ? var.pool_id : null
 
   # Features
+  # Only include keyctl when true — Proxmox requires root@pam for non-nesting flags
   features {
     nesting = var.feature_nesting
-    keyctl  = var.feature_keyctl
+    keyctl  = var.feature_keyctl ? true : null
   }
 }
