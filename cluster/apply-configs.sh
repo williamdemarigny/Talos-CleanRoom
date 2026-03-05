@@ -40,58 +40,28 @@ wait_for_talos_api() {
     print_info "  Waiting for Talos API on $ip:50000..."
 
     for ((i=1; i<=max_attempts; i++)); do
-        # First, check if port 50000 is even accepting connections
-        if ! timeout 5 bash -c "echo > /dev/tcp/$ip/50000" 2>/dev/null; then
-            # Log every 5th attempt with extra diagnostics
-            if (( i % 5 == 0 )); then
-                # Ping check to see if the IP is reachable at all
-                if ping -c 1 -W 2 "$ip" &>/dev/null 2>&1 || timeout 2 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null; then
-                    print_warning "    Attempt $i/$max_attempts - Host $ip reachable but port 50000 not open"
-                else
-                    print_warning "    Attempt $i/$max_attempts - Host $ip NOT reachable (no ping/TCP response)"
-                fi
-            else
-                print_info "    Attempt $i/$max_attempts - Port 50000 not open, waiting ${interval}s..."
-            fi
-
-            if [[ $i -lt $max_attempts ]]; then
-                sleep "$interval"
-                continue
-            else
-                # Last attempt failed - run diagnostics before returning
-                print_error "  Port 50000 never opened on $ip after $((max_attempts * interval)) seconds"
-                _diagnose_talos_api_failure "$ip"
-                return 1
-            fi
-        fi
-
-        # Port is open, now try talosctl commands
+        # Use talosctl directly as the readiness check — more reliable than
+        # /dev/tcp/ port probes which can fail in LXC containers
         local output
         local exit_code
 
-        # Capture output and exit code without triggering set -e
         if [[ "$use_insecure" == "true" ]]; then
             # In maintenance mode, use 'version --insecure' to check API readiness
-            # Note: talosctl 1.12+ doesn't support --insecure on disks command
-            if output=$(talosctl version --insecure -n "$ip" -e "$ip" 2>&1); then
+            if output=$(timeout 10 talosctl version --insecure -n "$ip" -e "$ip" 2>&1); then
                 exit_code=0
             else
                 exit_code=$?
             fi
         else
             # For configured nodes, use TALOSCONFIG
-            if output=$(talosctl version --nodes "$ip" --endpoints "$ip" 2>&1); then
+            if output=$(timeout 10 talosctl version --nodes "$ip" --endpoints "$ip" 2>&1); then
                 exit_code=0
             else
                 exit_code=$?
             fi
         fi
 
-        # Debug: show what we got
-        print_info "    Response (exit=$exit_code): ${output:0:100}"
-
         # API is ready if command succeeds (exit code 0)
-        # The port check above ensures we only get here if the port is open
         if [[ $exit_code -eq 0 ]]; then
             print_success "  Talos API is ready on $ip"
             return 0
@@ -103,8 +73,19 @@ wait_for_talos_api() {
             return 0
         fi
 
-        if [[ $i -lt $max_attempts ]]; then
+        # Log progress with diagnostics every 5th attempt
+        if (( i % 5 == 0 )); then
+            if ping -c 1 -W 2 "$ip" &>/dev/null 2>&1; then
+                print_warning "    Attempt $i/$max_attempts - Host $ip reachable but Talos API not responding"
+            else
+                print_warning "    Attempt $i/$max_attempts - Host $ip NOT reachable (no ping response)"
+            fi
+            print_info "    Last response (exit=$exit_code): ${output:0:150}"
+        else
             print_info "    Attempt $i/$max_attempts - Talos API not ready, waiting ${interval}s..."
+        fi
+
+        if [[ $i -lt $max_attempts ]]; then
             sleep "$interval"
         fi
     done
@@ -128,11 +109,20 @@ _diagnose_talos_api_failure() {
     fi
 
     # Check if common ports are open (indicates VM is running but Talos may not be)
+    # Use nc (netcat) if available, fall back to /dev/tcp/
     for port in 22 80 443 6443 50000; do
-        if timeout 3 bash -c "echo > /dev/tcp/$ip/$port" 2>/dev/null; then
-            print_info "  PORT $port: OPEN"
+        if command -v nc &>/dev/null; then
+            if timeout 3 nc -z "$ip" "$port" 2>/dev/null; then
+                print_info "  PORT $port: OPEN"
+            else
+                print_info "  PORT $port: closed"
+            fi
         else
-            print_info "  PORT $port: closed"
+            if timeout 3 bash -c "echo > /dev/tcp/$ip/$port" 2>/dev/null; then
+                print_info "  PORT $port: OPEN"
+            else
+                print_info "  PORT $port: closed"
+            fi
         fi
     done
 
