@@ -1311,7 +1311,11 @@ except Exception as e:
                 recovered = await self._attempt_openvas_recovery(
                     scan_id, gmp_task_id, gmp_target_id, gmp_report_id, openvas_password)
                 if recovered:
+                    result_count = recovered.count("<result ")
+                    await self.log("openvas", "info", f"Recovery returned {result_count} results — proceeding to Faraday upload")
                     return recovered
+                else:
+                    await self.log("openvas", "error", "Recovery did not return usable report data")
             return None
 
         # The GMP script writes the report to a temp file inside the container.
@@ -1569,6 +1573,247 @@ except Exception as e:
         elif line.startswith("DEBUG"):
             await self.log("openvas", "debug", line)
 
+    @staticmethod
+    def _gmp_common_functions() -> str:
+        """Return shared Python function definitions for GMP scripts.
+
+        Includes send_gmp(), get_status_info(), and reconnect_gmp().
+        All references use double-braces (runtime script vars, not f-string subs).
+        """
+        return '''
+def send_gmp(sock, xml_str, end_tag=None):
+    """Send a GMP command and receive the response."""
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "create_target_response",
+                    "create_config_response", "modify_config_response",
+                    "create_task_response", "start_task_response",
+                    "get_tasks_response", "get_reports_response",
+                    "delete_target_response", "delete_task_response",
+                    "delete_config_response", "get_port_lists_response"]
+    while True:
+        try:
+            chunk = sock.recv(131072)
+            if not chunk:
+                break
+            response += chunk
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{tag}>" in tail:
+                    return response.decode("utf-8", errors="replace")
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+def get_status_info(xml_text):
+    """Get the status code and status_text from a GMP response."""
+    try:
+        root = ET.fromstring(xml_text)
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
+    except ET.ParseError:
+        return "", ""
+
+def reconnect_gmp(old_sock, password, max_retries=3):
+    """Reconnect to GVM daemon after a connection drop."""
+    try:
+        old_sock.close()
+    except:
+        pass
+    for attempt in range(1, max_retries + 1):
+        try:
+            new_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            new_sock.settimeout(30)
+            new_sock.connect(SOCK_PATH)
+            auth_xml = f\'<authenticate><credentials><username>admin</username><password>{password}</password></credentials></authenticate>\'
+            resp = send_gmp(new_sock, auth_xml)
+            status, _ = get_status_info(resp)
+            if status == "200":
+                print(f"STATUS: Reconnected to GVM (attempt {attempt}/{max_retries})", flush=True)
+                return new_sock, True
+        except Exception as re_err:
+            print(f"STATUS: Reconnect attempt {attempt}/{max_retries} failed: {re_err}", flush=True)
+        time.sleep(5)
+    return old_sock, False
+'''
+
+    @staticmethod
+    def _gmp_poll_and_retrieve() -> str:
+        """Return the shared polling loop + report retrieval code for GMP scripts.
+
+        Expects these variables to be defined in the calling scope:
+        sock, task_id, report_id, SCAN_ID, REPORT_FORMAT, PASSWORD, stale_limit,
+        and the functions: send_gmp, reconnect_gmp.
+        """
+        return '''
+    # Poll for completion — progress-aware timeout
+    # Stale limit: if no progress change for 60 minutes, bail out
+    # Tracks overall progress, result count, AND per-host NVT progress
+    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
+    stale_count = 0
+    last_result_count = 0
+    last_progress_val = -1
+    last_host_progress_sig = ""
+    poll_count = 0
+    scan_done = False
+    while True:
+        time.sleep(10)
+        poll_count += 1
+        get_task = f\'<get_tasks task_id="{task_id}" details="1"/>\'
+        # Reconnect on socket errors (GVM may reset connections during state transitions)
+        try:
+            resp = send_gmp(sock, get_task)
+        except (ConnectionResetError, BrokenPipeError, ConnectionRefusedError, OSError) as conn_err:
+            print(f"STATUS: GVM connection lost during polling ({conn_err}), reconnecting...", flush=True)
+            sock, reconnected = reconnect_gmp(sock, PASSWORD)
+            if not reconnected:
+                raise
+            continue
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                if poll_count <= 3:
+                    progress_elem_dump = task_elem.find("progress")
+                    if progress_elem_dump is not None:
+                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
+                        if len(prog_xml) > 500:
+                            prog_xml = prog_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_PROGRESS_XML: {prog_xml}", flush=True)
+                    cr_dump = task_elem.find(".//current_report")
+                    if cr_dump is not None:
+                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
+                        if len(cr_xml) > 500:
+                            cr_xml = cr_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_REPORT_XML: {cr_xml}", flush=True)
+                    elif poll_count == 1:
+                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
+                task_status = task_elem.findtext("status", "")
+                progress_elem = task_elem.find("progress")
+                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
+                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
+                result_count = 0
+                current_report = task_elem.find(".//current_report")
+                if current_report is not None:
+                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
+                        rc = current_report.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                if result_count == 0:
+                    for rc_path in [".//result_count/full", ".//result_count"]:
+                        rc = task_elem.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                host_progress_elems = task_elem.findall(".//progress/host_progress")
+                if not host_progress_elems and progress_elem is not None:
+                    host_progress_elems = list(progress_elem)
+                active_hosts = 0
+                host_pcts = []
+                host_progress_parts = []
+                for hp in host_progress_elems:
+                    host_text = (hp.text or "").strip()
+                    if ":" in host_text:
+                        host_progress_parts.append(host_text)
+                        parts = host_text.rsplit(":", 1)
+                        try:
+                            pct = int(parts[1])
+                            if pct >= 0:
+                                host_pcts.append(pct)
+                                if 0 < pct < 100:
+                                    active_hosts += 1
+                        except (ValueError, IndexError):
+                            pass
+                avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
+                host_progress_sig = "|".join(sorted(host_progress_parts))
+                elapsed = poll_count * 10
+                elapsed_str = f"{elapsed // 3600}h {(elapsed % 3600) // 60}m {elapsed % 60}s"
+                detail = f"{task_status} ({progress}% overall"
+                if host_pcts:
+                    detail += f", {avg_host_pct}% avg host, {active_hosts} active"
+                detail += f") | {result_count} results | elapsed {elapsed_str}"
+                stale_remaining = (stale_limit - stale_count) * 10 // 60
+                detail += f" | stale timeout in {stale_remaining}m"
+                print(f"PROGRESS: {detail}", flush=True)
+                if (result_count != last_result_count
+                        or progress_int != last_progress_val
+                        or host_progress_sig != last_host_progress_sig):
+                    stale_count = 0
+                    last_result_count = result_count
+                    last_progress_val = progress_int
+                    last_host_progress_sig = host_progress_sig
+                else:
+                    stale_count += 1
+                if task_status == "Done":
+                    if not report_id:
+                        report_elem = task_elem.find(".//report")
+                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    scan_done = True
+                    break
+                elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    if progress_int >= 80 and task_status == "Stopped":
+                        print(f"STATUS: Scan stopped at {progress_int}% — attempting to retrieve partial results", flush=True)
+                        if not report_id:
+                            report_elem = task_elem.find(".//report")
+                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                        scan_done = True
+                        break
+                    print(f"SCAN:FAILED:Task ended with status {task_status}", flush=True)
+                    sys.exit(1)
+                if stale_count >= stale_limit:
+                    elapsed_total = poll_count * 10
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {elapsed_total // 3600}h {(elapsed_total % 3600) // 60}m)", flush=True)
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+    if not scan_done:
+        print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
+        sys.exit(1)
+
+    # Get report in XML format — write to temp file (too large for kubectl stdout)
+    REPORT_FILE = f"/tmp/gvm-report-{SCAN_ID}.xml"
+    if report_id:
+        print("STATUS: Retrieving scan report...", flush=True)
+        get_report = f\'<get_reports report_id="{report_id}" format_id="{REPORT_FORMAT}" details="1" filter="rows=-1 first=1"/>\'
+        sock.settimeout(600)
+        try:
+            resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        except (ConnectionResetError, BrokenPipeError, ConnectionRefusedError, OSError) as conn_err:
+            print(f"STATUS: GVM connection lost during report retrieval ({conn_err}), reconnecting...", flush=True)
+            sock, reconnected = reconnect_gmp(sock, PASSWORD)
+            if not reconnected:
+                raise
+            sock.settimeout(600)
+            resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        resp_len = len(resp)
+        print(f"STATUS: Report response received ({resp_len} bytes)", flush=True)
+        if resp_len == 0:
+            print("SCAN:FAILED:Empty response when retrieving report", flush=True)
+            sys.exit(1)
+        try:
+            root = ET.fromstring(resp)
+            report_elem = root.find(".//report")
+            if report_elem is not None:
+                report_xml = ET.tostring(report_elem, encoding="unicode")
+                with open(REPORT_FILE, "w") as f:
+                    f.write(report_xml)
+                print(f"REPORT_FILE:{REPORT_FILE}:{len(report_xml)}", flush=True)
+            else:
+                print(f"SCAN:FAILED:No <report> element found in response ({resp_len} bytes)", flush=True)
+                sys.exit(1)
+        except ET.ParseError as parse_err:
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{REPORT_FILE}:{resp_len}", flush=True)
+            print(f"STATUS: Warning - XML parse failed ({parse_err}), wrote raw response", flush=True)
+    else:
+        print("SCAN:FAILED:No report ID available", flush=True)
+        sys.exit(1)
+'''
+
     def _build_gmp_recovery_script(self, scan_id: str, task_id: str,
                                     target_id: str, report_id: str) -> str:
         """Build a GMP script that waits for a task to finish and retrieves its report.
@@ -1692,13 +1937,17 @@ try:
                 f.write(report_xml)
             print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
         else:
-            print(f"SCAN:FAILED:Recovery - no report element in response", flush=True)
-            sys.exit(1)
-    except ET.ParseError as pe:
+            # No report element but we have data — write raw response as fallback
+            print(f"STATUS: Recovery - no report element in response, writing raw ({{resp_len}} bytes)", flush=True)
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+    except Exception as pe:
+        # Catch ALL exceptions (not just ParseError) — MemoryError, ValueError, etc.
         with open(REPORT_FILE, "w") as f:
             f.write(resp)
         print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
-        print(f"STATUS: Recovery - XML parse failed ({{pe}}), wrote raw response", flush=True)
+        print(f"STATUS: Recovery - XML processing failed ({{pe}}), wrote raw response", flush=True)
 
     # Cleanup: delete task and target from GVM
     try:
@@ -1721,16 +1970,15 @@ except Exception as e:
     def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
                           profile: ScanProfile = ScanProfile.STANDARD) -> str:
         """Build a self-contained Python GMP script for OpenVAS scanning."""
-        # Map profile to preferred port list key
-        # Quick: all TCP + top 100 UDP (skips full UDP scan)
-        # Standard: all TCP only (skip slow UDP scan entirely)
-        # Thorough/Custom: all TCP + all UDP (comprehensive)
         port_list_pref = {
             ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
             ScanProfile.STANDARD: "all_tcp",
             ScanProfile.THOROUGH: "all_tcp_udp",
             ScanProfile.CUSTOM: "all_tcp_udp",
         }.get(profile, "all_tcp")
+
+        common_funcs = self._gmp_common_functions()
+        poll_and_retrieve = self._gmp_poll_and_retrieve()
 
         return f'''
 import socket, os, sys, time
@@ -1742,51 +1990,13 @@ TARGET = "{target}"
 CONFIG_ID = "{config_id}"
 SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
-# Profile-based port list preference
 PREFERRED_PORT_LIST = "{port_list_pref}"
-# Well-known port list UUIDs
 PORT_LISTS = {{
     "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
     "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
 }}
-
-def send_gmp(sock, xml_str, end_tag=None):
-    """Send a GMP command and receive the response."""
-    sock.sendall(xml_str.encode("utf-8"))
-    response = b""
-    # Determine which end tag to look for
-    if end_tag:
-        search_tags = [end_tag]
-    else:
-        search_tags = ["authenticate_response", "create_target_response",
-                    "create_task_response", "start_task_response",
-                    "get_tasks_response", "get_reports_response",
-                    "delete_target_response", "delete_task_response",
-                    "get_port_lists_response"]
-    while True:
-        try:
-            chunk = sock.recv(131072)
-            if not chunk:
-                break
-            response += chunk
-            # Only check the tail of the response for the end tag (avoids O(n^2))
-            tail = response[-256:].decode("utf-8", errors="replace")
-            for tag in search_tags:
-                if f"</{{tag}}>" in tail:
-                    return response.decode("utf-8", errors="replace")
-        except socket.timeout:
-            break
-    return response.decode("utf-8", errors="replace")
-
-def get_status_info(xml_text):
-    """Get the status code and status_text from a GMP response."""
-    try:
-        root = ET.fromstring(xml_text)
-        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
-    except ET.ParseError:
-        return "", ""
-
+''' + common_funcs + f'''
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(30)
@@ -1815,7 +2025,6 @@ try:
             port_list_id = preferred_id
             print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
         else:
-            # Fallback: try all_tcp, then first available
             fallback = PORT_LISTS.get("all_tcp", "")
             if fallback in available_pls:
                 port_list_id = fallback
@@ -1825,7 +2034,7 @@ try:
     except ET.ParseError:
         print(f"STATUS: Using default port list {{port_list_id}}", flush=True)
 
-    # Create target (with port_list_id — required by GVM 22+)
+    # Create target
     target_name = f"scan-{{SCAN_ID}}-target"
     create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>'
     resp = send_gmp(sock, create_target)
@@ -1864,7 +2073,6 @@ try:
     if status not in ("200", "202"):
         print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}", flush=True)
         sys.exit(1)
-    # Extract report ID from start response
     try:
         root = ET.fromstring(resp)
         report_elem = root.find(".//report_id")
@@ -1873,185 +2081,14 @@ try:
         report_id = ""
     print(f"STATUS: Scan started (report {{report_id}})", flush=True)
 
-    # Poll for completion — progress-aware timeout
-    # Stale limit: if no progress change for 60 minutes, bail out
-    # Tracks overall progress, result count, AND per-host NVT progress
-    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
-    stale_limit = 360  # 360 x 10s = 60 min with no progress change at any level
-    stale_count = 0
-    last_result_count = 0
-    last_progress_val = -1
-    last_host_progress_sig = ""  # track per-host changes
-    poll_count = 0
-    scan_done = False
-    while True:
-        time.sleep(10)
-        poll_count += 1
-        get_task = f'<get_tasks task_id="{{task_id}}" details="1"/>'
-        resp = send_gmp(sock, get_task)
-        try:
-            root = ET.fromstring(resp)
-            task_elem = root.find(".//task")
-            if task_elem is not None:
-                # Diagnostic dump on first few polls to understand GMP response structure
-                if poll_count <= 3:
-                    progress_elem_dump = task_elem.find("progress")
-                    if progress_elem_dump is not None:
-                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
-                        # Truncate if huge
-                        if len(prog_xml) > 500:
-                            prog_xml = prog_xml[:500] + "...(truncated)"
-                        print(f"DEBUG_PROGRESS_XML: {{prog_xml}}", flush=True)
-                    cr_dump = task_elem.find(".//current_report")
-                    if cr_dump is not None:
-                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
-                        if len(cr_xml) > 500:
-                            cr_xml = cr_xml[:500] + "...(truncated)"
-                        print(f"DEBUG_REPORT_XML: {{cr_xml}}", flush=True)
-                    elif poll_count == 1:
-                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
-                task_status = task_elem.findtext("status", "")
-                progress_elem = task_elem.find("progress")
-                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
-                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
-                # Extract intermediate result count — try multiple paths
-                result_count = 0
-                current_report = task_elem.find(".//current_report")
-                if current_report is not None:
-                    # Try several known paths for result count
-                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
-                        rc = current_report.findtext(rc_path, "")
-                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
-                            result_count = int(rc.strip())
-                            break
-                # Also check task-level result count
-                if result_count == 0:
-                    for rc_path in [".//result_count/full", ".//result_count"]:
-                        rc = task_elem.findtext(rc_path, "")
-                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
-                            result_count = int(rc.strip())
-                            break
-                # Extract per-host progress — try both direct children and nested
-                host_progress_elems = task_elem.findall(".//progress/host_progress")
-                if not host_progress_elems and progress_elem is not None:
-                    # Try direct children of progress element
-                    host_progress_elems = list(progress_elem)
-                active_hosts = 0
-                host_pcts = []
-                host_progress_parts = []
-                for hp in host_progress_elems:
-                    host_text = (hp.text or "").strip()
-                    if ":" in host_text:
-                        host_progress_parts.append(host_text)
-                        parts = host_text.rsplit(":", 1)
-                        try:
-                            pct = int(parts[1])
-                            if pct >= 0:
-                                host_pcts.append(pct)
-                                if 0 < pct < 100:
-                                    active_hosts += 1
-                        except (ValueError, IndexError):
-                            pass
-                avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
-                # Signature of all host progress — changes when any host advances
-                host_progress_sig = "|".join(sorted(host_progress_parts))
-                # Build detailed progress line
-                elapsed = poll_count * 10
-                elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
-                detail = f"{{task_status}} ({{progress}}% overall"
-                if host_pcts:
-                    detail += f", {{avg_host_pct}}% avg host, {{active_hosts}} active"
-                detail += f") | {{result_count}} results | elapsed {{elapsed_str}}"
-                stale_remaining = (stale_limit - stale_count) * 10 // 60
-                detail += f" | stale timeout in {{stale_remaining}}m"
-                print(f"PROGRESS: {{detail}}", flush=True)
-                # Check for progress change — reset stale counter if ANYTHING moved
-                # This includes overall %, result count, or any individual host progress
-                if (result_count != last_result_count
-                        or progress_int != last_progress_val
-                        or host_progress_sig != last_host_progress_sig):
-                    stale_count = 0
-                    last_result_count = result_count
-                    last_progress_val = progress_int
-                    last_host_progress_sig = host_progress_sig
-                else:
-                    stale_count += 1
-                if task_status == "Done":
-                    # Get the report ID from the task
-                    if not report_id:
-                        report_elem = task_elem.find(".//report")
-                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
-                    scan_done = True
-                    break
-                elif task_status in ("Stop Requested", "Stopped", "Error"):
-                    # If scan was nearly done, try to retrieve partial results
-                    if progress_int >= 80 and task_status == "Stopped":
-                        print(f"STATUS: Scan stopped at {{progress_int}}% — attempting to retrieve partial results", flush=True)
-                        if not report_id:
-                            report_elem = task_elem.find(".//report")
-                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
-                        scan_done = True
-                        break
-                    print(f"SCAN:FAILED:Task ended with status {{task_status}}", flush=True)
-                    sys.exit(1)
-                # Stale timeout — no progress at any level for 60 minutes
-                if stale_count >= stale_limit:
-                    elapsed_total = poll_count * 10
-                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
-                    sys.exit(1)
-        except ET.ParseError:
-            pass
-    if not scan_done:
-        print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
-        sys.exit(1)
-
-    # Get report in XML format — write to temp file (too large for kubectl stdout)
-    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
-    if report_id:
-        print("STATUS: Retrieving scan report...", flush=True)
-        get_report = f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>'
-        # Large reports need generous timeout (600s per chunk wait — gvmd may take
-        # minutes to generate XML for hundreds of results)
-        sock.settimeout(600)
-        resp = send_gmp(sock, get_report, end_tag="get_reports_response")
-        resp_len = len(resp)
-        print(f"STATUS: Report response received ({{resp_len}} bytes)", flush=True)
-        if resp_len == 0:
-            print("SCAN:FAILED:Empty response when retrieving report", flush=True)
-            sys.exit(1)
-        # Extract report XML and write to file instead of stdout
-        # GMP response: <get_reports_response> → <report format_id=...> → <report id=...>
-        # We extract the OUTER <report> (contains the inner with results).
-        # The upload script parses this directly (not via faraday-plugins).
-        try:
-            root = ET.fromstring(resp)
-            report_elem = root.find(".//report")
-            if report_elem is not None:
-                report_xml = ET.tostring(report_elem, encoding="unicode")
-                with open(REPORT_FILE, "w") as f:
-                    f.write(report_xml)
-                print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
-            else:
-                print(f"SCAN:FAILED:No <report> element found in response ({{resp_len}} bytes)", flush=True)
-                sys.exit(1)
-        except ET.ParseError as parse_err:
-            # Try writing raw response as fallback
-            with open(REPORT_FILE, "w") as f:
-                f.write(resp)
-            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
-            print(f"STATUS: Warning - XML parse failed ({{parse_err}}), wrote raw response", flush=True)
-    else:
-        print("SCAN:FAILED:No report ID available", flush=True)
-        sys.exit(1)
-
-    # NOTE: Do NOT delete task/target here. The report file must be transferred
-    # out of the container first (done by _run_openvas_scan via base64). Cleanup
-    # happens after successful transfer to avoid data loss.
+    stale_limit = 360  # 360 x 10s = 60 min with no progress change
+''' + poll_and_retrieve + '''
+    # NOTE: Do NOT delete task/target here — report must be transferred first.
     sock.close()
     print("STATUS: OpenVAS scan complete", flush=True)
 
 except Exception as e:
-    print(f"SCAN:FAILED:{{e}}", flush=True)
+    print(f"SCAN:FAILED:{e}", flush=True)
     sys.exit(1)
 '''
 
@@ -2076,6 +2113,9 @@ except Exception as e:
             ScanProfile.CUSTOM: "all_tcp_udp",
         }.get(profile, "all_tcp")
 
+        common_funcs = self._gmp_common_functions()
+        poll_and_retrieve = self._gmp_poll_and_retrieve()
+
         return f'''
 import socket, os, sys, time
 import xml.etree.ElementTree as ET
@@ -2094,42 +2134,7 @@ PORT_LISTS = {{
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
     "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
 }}
-
-def send_gmp(sock, xml_str, end_tag=None):
-    """Send a GMP command and receive the response."""
-    sock.sendall(xml_str.encode("utf-8"))
-    response = b""
-    if end_tag:
-        search_tags = [end_tag]
-    else:
-        search_tags = ["authenticate_response", "create_target_response",
-                    "create_config_response", "modify_config_response",
-                    "create_task_response", "start_task_response",
-                    "get_tasks_response", "get_reports_response",
-                    "delete_target_response", "delete_task_response",
-                    "delete_config_response", "get_port_lists_response"]
-    while True:
-        try:
-            chunk = sock.recv(131072)
-            if not chunk:
-                break
-            response += chunk
-            # Only check the tail of the response for the end tag (avoids O(n^2))
-            tail = response[-256:].decode("utf-8", errors="replace")
-            for tag in search_tags:
-                if f"</{{tag}}>" in tail:
-                    return response.decode("utf-8", errors="replace")
-        except socket.timeout:
-            break
-    return response.decode("utf-8", errors="replace")
-
-def get_status_info(xml_text):
-    try:
-        root = ET.fromstring(xml_text)
-        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
-    except ET.ParseError:
-        return "", ""
-
+''' + common_funcs + f'''
 custom_config_id = None
 
 try:
@@ -2239,169 +2244,8 @@ try:
         report_id = ""
     print(f"STATUS: Scan started (report {{report_id}})", flush=True)
 
-    # Poll for completion — progress-aware timeout
-    # Stale limit: if no progress change for 60 minutes, bail out
-    # Tracks overall progress, result count, AND per-host NVT progress
-    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
     stale_limit = 360  # 360 x 10s = 60 min with no progress change at any level
-    stale_count = 0
-    last_result_count = 0
-    last_progress_val = -1
-    last_host_progress_sig = ""  # track per-host changes
-    poll_count = 0
-    scan_done = False
-    while True:
-        time.sleep(10)
-        poll_count += 1
-        get_task = f\'<get_tasks task_id="{{task_id}}" details="1"/>\'
-        resp = send_gmp(sock, get_task)
-        try:
-            root = ET.fromstring(resp)
-            task_elem = root.find(".//task")
-            if task_elem is not None:
-                # Diagnostic dump on first few polls to understand GMP response structure
-                if poll_count <= 3:
-                    progress_elem_dump = task_elem.find("progress")
-                    if progress_elem_dump is not None:
-                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
-                        if len(prog_xml) > 500:
-                            prog_xml = prog_xml[:500] + "...(truncated)"
-                        print(f"DEBUG_PROGRESS_XML: {{prog_xml}}", flush=True)
-                    cr_dump = task_elem.find(".//current_report")
-                    if cr_dump is not None:
-                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
-                        if len(cr_xml) > 500:
-                            cr_xml = cr_xml[:500] + "...(truncated)"
-                        print(f"DEBUG_REPORT_XML: {{cr_xml}}", flush=True)
-                    elif poll_count == 1:
-                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
-                task_status = task_elem.findtext("status", "")
-                progress_elem = task_elem.find("progress")
-                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
-                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
-                # Extract intermediate result count — try multiple paths
-                result_count = 0
-                current_report = task_elem.find(".//current_report")
-                if current_report is not None:
-                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
-                        rc = current_report.findtext(rc_path, "")
-                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
-                            result_count = int(rc.strip())
-                            break
-                if result_count == 0:
-                    for rc_path in [".//result_count/full", ".//result_count"]:
-                        rc = task_elem.findtext(rc_path, "")
-                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
-                            result_count = int(rc.strip())
-                            break
-                # Extract per-host progress — try both nested and direct children
-                host_progress_elems = task_elem.findall(".//progress/host_progress")
-                if not host_progress_elems and progress_elem is not None:
-                    host_progress_elems = list(progress_elem)
-                active_hosts = 0
-                host_pcts = []
-                host_progress_parts = []
-                for hp in host_progress_elems:
-                    host_text = (hp.text or "").strip()
-                    if ":" in host_text:
-                        host_progress_parts.append(host_text)
-                        parts = host_text.rsplit(":", 1)
-                        try:
-                            pct = int(parts[1])
-                            if pct >= 0:
-                                host_pcts.append(pct)
-                                if 0 < pct < 100:
-                                    active_hosts += 1
-                        except (ValueError, IndexError):
-                            pass
-                avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
-                # Signature of all host progress — changes when any host advances
-                host_progress_sig = "|".join(sorted(host_progress_parts))
-                # Build detailed progress line
-                elapsed = poll_count * 10
-                elapsed_str = f"{{elapsed // 3600}}h {{(elapsed % 3600) // 60}}m {{elapsed % 60}}s"
-                detail = f"{{task_status}} ({{progress}}% overall"
-                if host_pcts:
-                    detail += f", {{avg_host_pct}}% avg host, {{active_hosts}} active"
-                detail += f") | {{result_count}} results | elapsed {{elapsed_str}}"
-                stale_remaining = (stale_limit - stale_count) * 10 // 60
-                detail += f" | stale timeout in {{stale_remaining}}m"
-                print(f"PROGRESS: {{detail}}", flush=True)
-                # Check for progress change — reset stale counter if ANYTHING moved
-                # This includes overall %, result count, or any individual host progress
-                if (result_count != last_result_count
-                        or progress_int != last_progress_val
-                        or host_progress_sig != last_host_progress_sig):
-                    stale_count = 0
-                    last_result_count = result_count
-                    last_progress_val = progress_int
-                    last_host_progress_sig = host_progress_sig
-                else:
-                    stale_count += 1
-                if task_status == "Done":
-                    if not report_id:
-                        report_elem = task_elem.find(".//report")
-                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
-                    scan_done = True
-                    break
-                elif task_status in ("Stop Requested", "Stopped", "Error"):
-                    # If scan was nearly done, try to retrieve partial results
-                    if progress_int >= 80 and task_status == "Stopped":
-                        print(f"STATUS: Scan stopped at {{progress_int}}% — attempting to retrieve partial results", flush=True)
-                        if not report_id:
-                            report_elem = task_elem.find(".//report")
-                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
-                        scan_done = True
-                        break
-                    print(f"SCAN:FAILED:Task ended with status {{task_status}}", flush=True)
-                    sys.exit(1)
-                # Stale timeout — no progress at any level for 60 minutes
-                if stale_count >= stale_limit:
-                    elapsed_total = poll_count * 10
-                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {{elapsed_total // 3600}}h {{(elapsed_total % 3600) // 60}}m)", flush=True)
-                    sys.exit(1)
-        except ET.ParseError:
-            pass
-    if not scan_done:
-        print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
-        sys.exit(1)
-
-    # Get report in XML format — write to temp file (too large for kubectl stdout)
-    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}.xml"
-    if report_id:
-        print("STATUS: Retrieving scan report...", flush=True)
-        get_report = f\'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>\'
-        # Large reports need generous timeout (600s per chunk wait — gvmd may take
-        # minutes to generate XML for hundreds of results)
-        sock.settimeout(600)
-        resp = send_gmp(sock, get_report, end_tag="get_reports_response")
-        resp_len = len(resp)
-        print(f"STATUS: Report response received ({{resp_len}} bytes)", flush=True)
-        if resp_len == 0:
-            print("SCAN:FAILED:Empty response when retrieving report", flush=True)
-            sys.exit(1)
-        # Extract report XML (outer <report> — same structure as standard script)
-        try:
-            root = ET.fromstring(resp)
-            report_elem = root.find(".//report")
-            if report_elem is not None:
-                report_xml = ET.tostring(report_elem, encoding="unicode")
-                with open(REPORT_FILE, "w") as f:
-                    f.write(report_xml)
-                print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
-            else:
-                print(f"SCAN:FAILED:No <report> element found in response ({{resp_len}} bytes)", flush=True)
-                sys.exit(1)
-        except ET.ParseError as parse_err:
-            # Try writing raw response as fallback
-            with open(REPORT_FILE, "w") as f:
-                f.write(resp)
-            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
-            print(f"STATUS: Warning - XML parse failed ({{parse_err}}), wrote raw response", flush=True)
-    else:
-        print("SCAN:FAILED:No report ID available", flush=True)
-        sys.exit(1)
-
+''' + poll_and_retrieve + '''
     # NOTE: Do NOT delete task/target/config here. The report file must be transferred
     # out of the container first (done by _run_openvas_scan via base64). Cleanup
     # happens after successful transfer to avoid data loss.
@@ -2409,11 +2253,11 @@ try:
     print("STATUS: OpenVAS scan complete", flush=True)
 
 except Exception as e:
-    print(f"SCAN:FAILED:{{e}}", flush=True)
+    print(f"SCAN:FAILED:{e}", flush=True)
     # Try to clean up custom config on failure
     try:
         if custom_config_id:
-            send_gmp(sock, f\'<delete_config config_id="{{custom_config_id}}" ultimate="1"/>\')
+            send_gmp(sock, f'<delete_config config_id="{custom_config_id}" ultimate="1"/>')
     except:
         pass
     sys.exit(1)
