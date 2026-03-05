@@ -60,9 +60,10 @@ module "lxc_container" {
   root_password   = var.lxc_root_password
   ssh_public_keys = var.ssh_public_keys
 
-  # Features — nesting + keyctl required for Docker in unprivileged LXC
+  # Privileged container for Docker builds (avoids keyctl root@pam requirement)
+  unprivileged    = false
   feature_nesting = true
-  feature_keyctl  = true
+  feature_keyctl  = false
 }
 
 # State migration: the resource was previously defined inline as

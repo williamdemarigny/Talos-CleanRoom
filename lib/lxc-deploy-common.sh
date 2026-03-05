@@ -22,6 +22,23 @@
 readonly _TALOS_LXC_DEPLOY_COMMON_LOADED=1
 
 #######################################
+# Convert a path to Windows-style for display when running in Git Bash/MSYS.
+# On Linux/macOS, returns the path unchanged.
+#
+# Arguments:
+#   $1 - path to convert
+# Returns:
+#   Windows-style path (e.g. C:\Users\...) or original path
+#######################################
+display_path() {
+    if command -v cygpath &>/dev/null; then
+        cygpath -w "$1"
+    else
+        echo "$1"
+    fi
+}
+
+#######################################
 # Prompt user for a credential, storing the result in the named variable.
 # If the variable is already set (non-empty), the prompt is skipped.
 #
@@ -101,7 +118,7 @@ resolve_ssh_key() {
 
     # Prompt user
     if [ -n "$default_path" ]; then
-        echo -e "${YELLOW}Path to GitHub SSH private key [${default_path}]:${NC}"
+        echo -e "${YELLOW}Path to GitHub SSH private key [$(display_path "$default_path")]:${NC}"
         read -r GITHUB_SSH_KEY
         GITHUB_SSH_KEY="${GITHUB_SSH_KEY:-$default_path}"
     else

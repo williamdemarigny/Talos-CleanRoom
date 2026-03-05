@@ -91,7 +91,7 @@ KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
 if [ -z "${KUBECONFIG_FILE}" ]; then
     DEFAULT_KUBECONFIG="${HOME}/.kube/config"
     if [ -f "$DEFAULT_KUBECONFIG" ]; then
-        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [${DEFAULT_KUBECONFIG}]:${NC}"
+        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [$(display_path "$DEFAULT_KUBECONFIG")]:${NC}"
         read -r KUBECONFIG_FILE
         KUBECONFIG_FILE="${KUBECONFIG_FILE:-$DEFAULT_KUBECONFIG}"
     else
@@ -101,12 +101,12 @@ if [ -z "${KUBECONFIG_FILE}" ]; then
 fi
 
 if [ ! -f "$KUBECONFIG_FILE" ]; then
-    echo -e "${RED}Error: Kubeconfig not found at ${KUBECONFIG_FILE}${NC}"
+    echo -e "${RED}Error: Kubeconfig not found at $(display_path "${KUBECONFIG_FILE}")${NC}"
     echo "  The build VM needs kubectl access to create Harbor pull secrets."
     echo "  Generate one with: talosctl kubeconfig --nodes <control-plane-ip>"
     exit 1
 fi
-echo -e "${GREEN}Found kubeconfig: ${KUBECONFIG_FILE}${NC}"
+echo -e "${GREEN}Found kubeconfig: $(display_path "${KUBECONFIG_FILE}")${NC}"
 
 # ===========================================
 # SSH SETUP
