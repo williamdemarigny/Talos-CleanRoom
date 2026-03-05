@@ -14,7 +14,7 @@ ARG LOKI_VERSION=v2.10.0
 RUN curl -L -o /tmp/loki.tar.gz \
     "https://github.com/Neo23x0/Loki-RS/releases/download/${LOKI_VERSION}/loki-linux-x86_64-${LOKI_VERSION}.tar.gz" && \
     mkdir -p /opt/loki && \
-    tar xzf /tmp/loki.tar.gz -C /opt/loki --strip-components=1 && \
+    tar xzf /tmp/loki.tar.gz -C /opt/loki && \
     rm /tmp/loki.tar.gz && \
     chmod +x /opt/loki/loki /opt/loki/loki-util && \
     apt-get purge -y curl && apt-get autoremove -y && \
