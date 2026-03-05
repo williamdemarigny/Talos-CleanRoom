@@ -68,7 +68,7 @@ echo "[2/13] Deploying Metrics Server..."
 kubectl apply -f "${SCRIPT_DIR}/metrics-server/application.yaml"
 
 echo "Waiting for Metrics Server to be ready..."
-wait_for_deployment metrics-server kube-system 300
+wait_for_deployment metrics-server kube-system 300s
 
 echo "✓ Metrics Server deployed"
 echo ""
@@ -78,7 +78,7 @@ echo "[3/13] Deploying MetalLB..."
 kubectl apply -f "${SCRIPT_DIR}/metallb/application.yaml"
 
 echo "Waiting for MetalLB to be ready..."
-wait_for_deployment metallb-controller metallb-system 300
+wait_for_deployment metallb-controller metallb-system 300s
 
 echo "✓ MetalLB deployed"
 echo ""
@@ -94,10 +94,10 @@ echo "[5/13] Deploying cert-manager..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/application.yaml"
 
 echo "Waiting for cert-manager to be ready..."
-wait_for_deployment cert-manager cert-manager 300
+wait_for_deployment cert-manager cert-manager 300s
 
 # Wait for webhook to be ready (required before creating issuers)
-wait_for_deployment cert-manager-webhook cert-manager 300
+wait_for_deployment cert-manager-webhook cert-manager 300s
 
 echo "✓ cert-manager deployed"
 echo ""
@@ -126,7 +126,7 @@ echo "[8/13] Deploying Traefik..."
 kubectl apply -f "${SCRIPT_DIR}/traefik/application.yaml"
 
 echo "Waiting for Traefik to be ready..."
-wait_for_deployment traefik traefik 300
+wait_for_deployment traefik traefik 300s
 
 echo "✓ Traefik deployed"
 echo ""
