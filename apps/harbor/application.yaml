@@ -114,6 +114,15 @@ spec:
       directory:
         recurse: false
         exclude: 'application.yaml'
+  ignoreDifferences:
+    # StatefulSet VolumeClaimTemplates are immutable after creation — Helm rendered
+    # defaults may differ from API-server-enriched live state
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates/0/apiVersion
+        - /spec/volumeClaimTemplates/0/kind
+        - /spec/persistentVolumeClaimRetentionPolicy
   destination:
     server: https://kubernetes.default.svc
     namespace: harbor
