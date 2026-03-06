@@ -90,6 +90,10 @@ spec:
               limits:
                 cpu: 500m
                 memory: 512Mi
+          # Recreate strategy for deployments with RWO PVCs (jobservice, registry)
+          # Prevents deadlock where new pod on different node can't attach the volume
+          updateStrategy:
+            type: Recreate
           registry:
             resources:
               requests:
@@ -123,6 +127,18 @@ spec:
         - /spec/volumeClaimTemplates/0/apiVersion
         - /spec/volumeClaimTemplates/0/kind
         - /spec/persistentVolumeClaimRetentionPolicy
+    # Harbor Helm chart auto-generates secrets on each render, producing different
+    # checksum annotations every time. Ignore these to prevent perpetual OutOfSync.
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - .spec.template.metadata.annotations["checksum/secret"]
+        - .spec.template.metadata.annotations["checksum/secret-core"]
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - .spec.template.metadata.annotations["checksum/secret"]
+        - .spec.template.metadata.annotations["checksum/secret-core"]
   destination:
     server: https://kubernetes.default.svc
     namespace: harbor
@@ -132,7 +148,6 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      - ServerSideApply=true
     retry:
       limit: 5
       backoff:
