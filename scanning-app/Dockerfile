@@ -13,13 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install shared library first (separate layer for caching)
+# Install shared library and Python dependencies together
+# (single pip call ensures consistent dependency resolution)
 COPY lib/talos-common /tmp/talos-common
-RUN pip install --no-cache-dir --prefix=/install /tmp/talos-common
-
-# Install Python dependencies
 COPY scanning-app/requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install /tmp/talos-common -r requirements.txt
 
 # Production image
 FROM python:3.11-slim
