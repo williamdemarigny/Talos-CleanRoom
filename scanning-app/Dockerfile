@@ -48,6 +48,7 @@ COPY scanning-app/templates/ ./templates/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # Expose port
 EXPOSE 8000
