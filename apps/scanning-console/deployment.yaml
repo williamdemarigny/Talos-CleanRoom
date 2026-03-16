@@ -44,6 +44,11 @@ spec:
             secretKeyRef:
               name: scanning-console-credentials
               key: database-url
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -113,6 +118,9 @@ spec:
           initialDelaySeconds: 30
           periodSeconds: 30
           failureThreshold: 5
+      volumes:
+      - name: tmp
+        emptyDir: {}
 # =============================================================================
 # SECRETS - Managed externally via SOPS encryption
 # =============================================================================
