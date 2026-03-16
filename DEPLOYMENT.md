@@ -11,23 +11,24 @@ Complete deployment instructions for standing up the full Talos CleanRoom platfo
 1. [Prerequisites](#1-prerequisites)
 2. [Workstation Setup](#2-workstation-setup)
 3. [Generate Secrets](#3-generate-secrets)
-4. [Create Kubernetes VMs (Terraform)](#4-create-kubernetes-vms-terraform)
-5. [Bootstrap Talos Kubernetes Cluster](#5-bootstrap-talos-kubernetes-cluster)
-6. [Install ArgoCD](#6-install-argocd)
-7. [Deploy Infrastructure Stack](#7-deploy-infrastructure-stack)
-8. [Configure DNS](#8-configure-dns)
-9. [Apply Application Secrets](#9-apply-application-secrets)
-10. [Deploy Security Tools](#10-deploy-security-tools)
-11. [Apply Network Policies](#11-apply-network-policies)
-12. [Deploy Build VM](#12-deploy-build-vm)
-13. [Build and Push Container Images](#13-build-and-push-container-images)
-14. [Deploy CleanRoom Database](#14-deploy-cleanroom-database)
-15. [Deploy Scanning Console](#15-deploy-scanning-console)
-16. [Deploy Unified Portal](#16-deploy-unified-portal)
-17. [Deploy Deployment Console (WebUI)](#17-deploy-deployment-console-webui)
-18. [Post-Deployment Verification](#18-post-deployment-verification)
-19. [Change Default Credentials](#19-change-default-credentials)
-20. [Troubleshooting](#20-troubleshooting)
+4. [Commit and Push to Git](#4-commit-and-push-to-git)
+5. [Deploy Deployment Console (WebUI)](#5-deploy-deployment-console-webui)
+6. [Deploy Build VM](#6-deploy-build-vm)
+7. [Create Kubernetes VMs (Terraform)](#7-create-kubernetes-vms-terraform)
+8. [Bootstrap Talos Kubernetes Cluster](#8-bootstrap-talos-kubernetes-cluster)
+9. [Install ArgoCD](#9-install-argocd)
+10. [Deploy Infrastructure Stack](#10-deploy-infrastructure-stack)
+11. [Configure DNS](#11-configure-dns)
+12. [Apply Application Secrets](#12-apply-application-secrets)
+13. [Deploy Security Tools](#13-deploy-security-tools)
+14. [Build and Push Container Images](#14-build-and-push-container-images)
+15. [Deploy CleanRoom Database](#15-deploy-cleanroom-database)
+16. [Deploy Scanning Console](#16-deploy-scanning-console)
+17. [Deploy Unified Portal](#17-deploy-unified-portal)
+18. [Apply Network Policies](#18-apply-network-policies)
+19. [Post-Deployment Verification](#19-post-deployment-verification)
+20. [Change Default Credentials](#20-change-default-credentials)
+21. [Troubleshooting](#21-troubleshooting)
 
 ---
 
@@ -120,23 +121,130 @@ This creates encrypted secret files for:
 - **CleanRoom DB** — PostgreSQL password
 - **Scanning Console** — secret key, database URL, admin hash (shares SECRET_KEY with Portal for SSO)
 - **Portal** — secret key, admin hash (reuses Scanning Console values for SSO)
+- **Portal Credential Vault** — aggregated credentials for all services (displayed in Portal UI)
 - **Threat Dragon** — encryption key, JWT signing + refresh keys
 
 Use `--dry-run` to preview without writing files.
 
 ---
 
+## 4. Commit and Push to Git
+
+The SOPS-encrypted secrets must be in the git remote before ArgoCD can decrypt and apply them. Commit and push now:
+
+```bash
+git add apps/*/secrets.sops.yaml apps/portal/credential-vault.sops.yaml apps/traefik/basic-auth-secret.sops.yaml apps/argocd/secrets.sops.yaml cluster/talsecret.sops.yaml
+git commit -m "Generate secrets for fresh deployment"
+git push
+```
+
+> **Important:** ArgoCD uses KSOPS to decrypt `.sops.yaml` files from the git repo. If secrets are not pushed, ArgoCD apps will fail with missing secret errors.
+
+---
+
+## 5. Deploy Deployment Console (WebUI)
+
+The Deployment Console runs in a Proxmox LXC container and provides a web UI for cluster lifecycle management. It has **no Kubernetes dependency** — it creates the K8s cluster, so it must be deployed first.
+
+```bash
+cd webui
+chmod +x deploy-lxc.sh
+./deploy-lxc.sh
+```
+
+The script prompts for:
+- Proxmox API token
+- Proxmox SSH password
+- LXC root password
+- `deploy` user password
+- GitHub SSH key path
+- WebUI admin password (default: `admin`)
+
+| Setting | Value |
+|---------|-------|
+| VMID | 200 |
+| IP | 10.83.3.190 |
+| Cores / RAM / Disk | 2 / 2 GB / 20 GB |
+| Port | 8000 |
+| Installed | Python 3.11, terraform, kubectl, helm, talosctl, talhelper, sops |
+
+After deployment:
+
+```bash
+# Verify the service is running
+ssh deploy@10.83.3.190
+sudo systemctl status deployment-webui
+```
+
+Access at `http://10.83.3.190:8000` (login: `admin` / `admin`).
+
+---
+
+## 6. Deploy Build VM
+
+The Build VM is a Proxmox LXC container with Docker CE for building and pushing container images. Like the WebUI, it has **no Kubernetes dependency** and can be deployed in parallel.
+
+```bash
+cd build-vm
+chmod +x deploy-lxc.sh
+./deploy-lxc.sh
+```
+
+The script prompts for:
+- Proxmox API token
+- Proxmox SSH password
+- LXC root password
+- `deploy` user password (for SSH access)
+- GitHub SSH key path (auto-detects common locations)
+- Kubeconfig path (for creating Harbor pull secrets in K8s)
+
+| Setting | Value |
+|---------|-------|
+| VMID | 201 |
+| IP | 10.83.3.191 |
+| Cores / RAM / Disk | 2 / 4 GB / 50 GB |
+| Installed | Docker CE, kubectl, curl, jq, git |
+
+After deployment, verify:
+
+```bash
+ssh deploy@10.83.3.191
+docker info    # should show Docker engine running
+```
+
+> **Note:** The Build VM's kubeconfig will be configured once the K8s cluster is bootstrapped. You'll copy it over before building images in step 14.
+
+---
+
 ## Automated vs Manual Deployment
 
-Steps 1–3 (prerequisites, clone, secrets) must be done manually. After that, you have two paths:
+Steps 1–6 (prerequisites, clone, secrets, commit, WebUI, Build VM) must be done manually. After that, you have two paths for deploying the Kubernetes cluster:
 
-### Option A: Automated (Recommended)
+### Option A: WebUI (Recommended)
+
+Open `http://10.83.3.190:8000`, login, and click **Deploy**. The WebUI orchestrates a 17-step deployment:
+
+| Steps | What |
+|-------|------|
+| 0–1 | Validate git repo + check dependencies |
+| 2–3 | Terraform VMs on Proxmox + wait for boot |
+| 4–5 | Generate + apply Talos machine configs |
+| 6–7 | Verify cluster health + retrieve kubeconfig |
+| 8 | Install ArgoCD |
+| 9 | Infrastructure stack (MetalLB, cert-manager, Traefik, Ceph CSI) |
+| 10 | ArgoCD self-management |
+| 11–15 | Security tools (OpenVAS, Faraday, Metasploit, Threat Dragon, Harbor) |
+| 16 | Configure integrations |
+
+After the WebUI completes, continue with **step 11 (DNS)** then follow steps 12–20 manually.
+
+### Option B: CLI Script
 
 ```bash
 ./scripts/DeployCluster.sh
 ```
 
-`DeployCluster.sh` automates **steps 4–12** in a single run:
+`DeployCluster.sh` automates **steps 7–13 and 15–17** in a single run:
 
 | Step | What |
 |------|------|
@@ -161,17 +269,19 @@ Steps 1–3 (prerequisites, clone, secrets) must be done manually. After that, y
 | `--skip-talos` | Skip Talos config + bootstrap (cluster already running) |
 | `--from-step N` | Resume from step N (1–12) |
 
-After the script completes, continue with **step 8 (DNS)** then jump to **step 12 (Build VM)** and follow steps 12–17 manually. Steps 4–7, 9–11, and 14–16 are already done.
+> **Note:** Script step 12 deploys the Scanning Console and Portal ArgoCD applications. Their pods will be in `ImagePullBackOff` until you build and push images in step 14. They auto-recover once images exist.
 
-### Option B: Manual
+After the script completes, continue with **step 11 (DNS)** then **step 14 (Build Images)**. Steps 7–10, 12–13, and 15–18 are already done.
 
-Follow every step below sequentially. The manual steps are useful for understanding what happens at each stage, debugging, or customizing individual components.
+### Option C: Manual
+
+Follow every step below sequentially. Useful for understanding each stage, debugging, or customizing.
 
 ---
 
-## 4. Create Kubernetes VMs (Terraform)
+## 7. Create Kubernetes VMs (Terraform)
 
-> *Skip if using `DeployCluster.sh` — covered by script steps 1–3.*
+> *Skip if using WebUI or `DeployCluster.sh`.*
 
 ### Configure Credentials
 
@@ -212,9 +322,9 @@ This creates 4 VMs on Proxmox booting from the Talos ISO. VMs will be in mainten
 
 ---
 
-## 5. Bootstrap Talos Kubernetes Cluster
+## 8. Bootstrap Talos Kubernetes Cluster
 
-> *Skip if using `DeployCluster.sh` — covered by script steps 1–5.*
+> *Skip if using WebUI or `DeployCluster.sh`.*
 
 ### Generate Talos Machine Configs
 
@@ -262,13 +372,11 @@ kubectl get nodes
 
 Expected output: 1 control-plane + 3 worker nodes in `Ready` state.
 
-> **Automated path:** `scripts/DeployCluster.sh` automates steps 4–12. See [Automated vs Manual Deployment](#automated-vs-manual-deployment) above.
-
 ---
 
-## 6. Install ArgoCD
+## 9. Install ArgoCD
 
-> *Skip if using `DeployCluster.sh` — covered by script step 6.*
+> *Skip if using WebUI or `DeployCluster.sh`.*
 
 ```bash
 # Create namespace
@@ -285,13 +393,13 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 echo  # newline
 ```
 
-ArgoCD is now running but not yet accessible via ingress — that comes after Traefik is deployed in step 7.
+ArgoCD is now running but not yet accessible via ingress — that comes after Traefik is deployed in step 10.
 
 ---
 
-## 7. Deploy Infrastructure Stack
+## 10. Deploy Infrastructure Stack
 
-> *Skip if using `DeployCluster.sh` — covered by script steps 7–8.*
+> *Skip if using WebUI or `DeployCluster.sh`.*
 
 This deploys the core infrastructure in dependency order:
 
@@ -328,7 +436,7 @@ kubectl get pods -n cert-manager
 
 ---
 
-## 8. Configure DNS
+## 11. Configure DNS
 
 Create DNS A records pointing to the Traefik LoadBalancer IP. Get the IP:
 
@@ -355,11 +463,11 @@ See [docs/DNS-MAPPING.md](docs/DNS-MAPPING.md) for the complete IP and DNS refer
 
 ---
 
-## 9. Apply Application Secrets
+## 12. Apply Application Secrets
 
 > *Skip if using `DeployCluster.sh` — covered by script step 9.*
 
-Secrets were generated in Step 3 but not yet applied to the cluster. Decrypt and apply them now (before deploying the apps that reference them):
+Secrets were generated in Step 3 and pushed in Step 4. Decrypt and apply them now (before deploying the apps that reference them):
 
 ```bash
 # Apply ALL application secrets at once
@@ -371,6 +479,10 @@ sops -d apps/faraday/secrets.sops.yaml       | kubectl apply -f -
 sops -d apps/metasploit/secrets.sops.yaml    | kubectl apply -f -
 sops -d apps/traefik/basic-auth-secret.sops.yaml | kubectl apply -f -
 sops -d apps/threat-dragon/secrets.sops.yaml | kubectl apply -f -
+sops -d apps/scanning-console/secrets.sops.yaml | kubectl apply -f -
+sops -d apps/portal/secrets.sops.yaml        | kubectl apply -f -
+sops -d apps/portal/credential-vault.sops.yaml | kubectl apply -f -
+sops -d apps/cleanroom-db/secrets.sops.yaml  | kubectl apply -f -
 ```
 
 Use `--dry-run` to preview: `./scripts/apply-secrets.sh --dry-run`
@@ -380,9 +492,9 @@ Use `--app <name>` to target one app: `./scripts/apply-secrets.sh --app metasplo
 
 ---
 
-## 10. Deploy Security Tools
+## 13. Deploy Security Tools
 
-> *Skip if using `DeployCluster.sh` — covered by script step 10.*
+> *Skip if using WebUI or `DeployCluster.sh`.*
 
 Apply each ArgoCD Application. They auto-sync and self-heal.
 
@@ -430,65 +542,22 @@ done
 
 ---
 
-## 11. Apply Network Policies
+## 14. Build and Push Container Images
 
-> *Skip if using `DeployCluster.sh` — covered by script step 11.*
+> **Prerequisite:** Harbor must be running (step 13) and the Build VM must be deployed (step 6).
 
-Apply zero-trust network policies (default-deny per namespace with explicit allow rules):
-
-```bash
-kubectl apply -f apps/network-policies/
-```
-
-This creates policies for: faraday, openvas, threat-dragon, metasploit, argocd, scanning-console, portal, cleanroom-db.
-
-See [apps/network-policies/README.md](apps/network-policies/README.md) for the full policy matrix.
-
-> **Tip:** If a service stops working after applying policies, temporarily remove the policy for that namespace to confirm it's the cause: `kubectl delete networkpolicy -n <namespace> --all`
-
----
-
-## 12. Deploy Build VM
-
-The Build VM is a Proxmox LXC container with Docker CE for building and pushing container images.
+Copy the kubeconfig to the Build VM (needed for creating Harbor pull secrets):
 
 ```bash
-cd build-vm
-chmod +x deploy-lxc.sh
-./deploy-lxc.sh
+scp ~/.kube/config deploy@10.83.3.191:~/.kube/config
 ```
 
-The script prompts for:
-- Proxmox API token
-- Proxmox SSH password
-- LXC root password
-- `deploy` user password (for SSH access)
-- GitHub SSH key path (auto-detects common locations)
-- Kubeconfig path (for creating Harbor pull secrets in K8s)
-
-| Setting | Value |
-|---------|-------|
-| VMID | 201 |
-| IP | 10.83.3.191 |
-| Cores / RAM / Disk | 2 / 4 GB / 50 GB |
-| Installed | Docker CE, kubectl, curl, jq, git |
-
-After deployment, verify:
-
-```bash
-ssh deploy@10.83.3.191
-docker info    # should show Docker engine running
-```
-
----
-
-## 13. Build and Push Container Images
-
-SSH into the Build VM and build all three container images:
+SSH into the Build VM and build all container images:
 
 ```bash
 ssh deploy@10.83.3.191
 cd /opt/talos-cleanroom
+git pull    # ensure latest code
 ```
 
 ### LOKI-RS IOC Scanner
@@ -548,7 +617,7 @@ done
 
 ---
 
-## 14. Deploy CleanRoom Database
+## 15. Deploy CleanRoom Database
 
 > *Skip if using `DeployCluster.sh` — covered by script step 12.*
 
@@ -577,9 +646,11 @@ The database includes:
 
 ---
 
-## 15. Deploy Scanning Console
+## 16. Deploy Scanning Console
 
 > *Skip if using `DeployCluster.sh` — covered by script step 12.*
+>
+> **Prerequisite:** Images must be built and pushed (step 14) and CleanRoom DB must be running (step 15).
 
 The Scanning Console provides vulnerability scanning (Nmap, OpenVAS, Metasploit, LOKI-RS IOC) with PostgreSQL persistence:
 
@@ -599,9 +670,11 @@ Verify at `https://scan.knowledgeondemand.net`.
 
 ---
 
-## 16. Deploy Unified Portal
+## 17. Deploy Unified Portal
 
 > *Skip if using `DeployCluster.sh` — covered by script step 12.*
+>
+> **Prerequisite:** Images must be built and pushed (step 14).
 
 The Portal is the landing page providing SSO across all three applications:
 
@@ -619,59 +692,39 @@ Verify at `https://cleanroom.knowledgeondemand.net`.
 
 ---
 
-## 17. Deploy Deployment Console (WebUI)
+## 18. Apply Network Policies
 
-The Deployment Console runs in a Proxmox LXC container and provides a web UI for cluster lifecycle management:
+> *Skip if using `DeployCluster.sh` — covered by script step 11.*
 
-```bash
-cd webui
-chmod +x deploy-lxc.sh
-./deploy-lxc.sh
-```
-
-The script prompts for:
-- Proxmox API token
-- Proxmox SSH password
-- LXC root password
-- `deploy` user password
-- GitHub SSH key path
-- WebUI admin password (default: `admin`)
-
-| Setting | Value |
-|---------|-------|
-| VMID | 200 |
-| IP | 10.83.3.190 |
-| Cores / RAM / Disk | 2 / 2 GB / 20 GB |
-| Port | 8000 |
-| Installed | Python 3.11, terraform, kubectl, helm, talosctl, talhelper, sops |
-
-After deployment:
+Apply zero-trust network policies (default-deny per namespace with explicit allow rules):
 
 ```bash
-# Verify the service is running
-ssh deploy@10.83.3.190
-sudo systemctl status deployment-webui
+kubectl apply -f apps/network-policies/
 ```
 
-Access at `http://10.83.3.190:8000` (login: `admin` / `admin`).
+This creates policies for: faraday, openvas, threat-dragon, metasploit, argocd, scanning-console, portal, cleanroom-db.
+
+See [apps/network-policies/README.md](apps/network-policies/README.md) for the full policy matrix.
+
+> **Tip:** Network policies are applied last so you can verify all services are working before locking down traffic. If a service stops working after applying policies, temporarily remove the policy for that namespace to confirm it's the cause: `kubectl delete networkpolicy -n <namespace> --all`
 
 ---
 
-## 18. Post-Deployment Verification
+## 19. Post-Deployment Verification
 
 ### Service Access Points
 
 | Service | URL | Default Credentials |
 |---------|-----|-------------------|
-| ArgoCD | `https://argocd.knowledgeondemand.net` | admin / (see step 6) |
+| Deployment Console | `http://10.83.3.190:8000` | admin / admin |
+| Portal | `https://cleanroom.knowledgeondemand.net` | admin / admin |
+| Scanning Console | `https://scan.knowledgeondemand.net` | admin / admin |
+| ArgoCD | `https://argocd.knowledgeondemand.net` | admin / (see step 9) |
 | Harbor | `https://harbor.knowledgeondemand.net` | admin / Harbor12345 |
 | OpenVAS | `https://openvas.knowledgeondemand.net` | admin / admin |
 | Faraday | `https://faraday.knowledgeondemand.net` | admin / (k8s secret) |
 | Threat Dragon | `https://threatdragon.knowledgeondemand.net` | — (no auth) |
 | Traefik Dashboard | `https://traefik.knowledgeondemand.net` | admin / (generated) |
-| Scanning Console | `https://scan.knowledgeondemand.net` | admin / admin |
-| Portal | `https://cleanroom.knowledgeondemand.net` | admin / admin |
-| Deployment Console | `http://10.83.3.190:8000` | admin / admin |
 
 ### Verification Checklist
 
@@ -714,7 +767,7 @@ curl -sk https://cleanroom.knowledgeondemand.net/api/system/health
 
 ---
 
-## 19. Change Default Credentials
+## 20. Change Default Credentials
 
 **Do this before any production use.**
 
@@ -737,7 +790,7 @@ python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes
 
 ---
 
-## 20. Troubleshooting
+## 21. Troubleshooting
 
 ### Terraform cannot connect to Proxmox
 
@@ -866,26 +919,29 @@ HEALTH:.status.health.status
 Proxmox Cluster (online)
     │
     ├─ [3]  generate-secrets.sh          → SOPS-encrypted K8s secrets
+    ├─ [4]  git commit + push            → Secrets available for ArgoCD KSOPS
     │
-    │  ┌─── DeployCluster.sh automates steps 4–11, 14–16 ───┐
-    │  │                                                      │
-    ├─ [4]  terraform apply              → 4 Talos VMs        │
-    ├─ [5]  talhelper + apply-configs.sh → K8s bootstrapped   │
-    ├─ [6]  ArgoCD install               → GitOps controller  │
-    ├─ [7]  deploy-ingress-stack.sh      → MetalLB, certs,    │
-    │  │                                    Traefik, Ceph CSI  │
-    ├─ [9]  apply-secrets.sh             → App secrets to K8s  │
-    ├─ [10] Security tool ArgoCD apps    → Harbor, OpenVAS,    │
-    │  │                                    Faraday, etc.      │
-    ├─ [11] Network policies             → Zero-trust          │
-    ├─ [14] CleanRoom DB                 → PostgreSQL 17       │
-    ├─ [15] Scanning Console             → Scanning web app    │
-    ├─ [16] Portal                       → SSO landing page    │
-    │  │                                                      │
-    │  └──────────────────────────────────────────────────────┘
+    │  ┌─── Proxmox LXC Containers (no K8s dependency) ───┐
+    ├─ [5]  WebUI deploy-lxc.sh          → Deployment Console (10.83.3.190)
+    ├─ [6]  Build VM deploy-lxc.sh       → Docker build env (10.83.3.191)
+    │  └───────────────────────────────────────────────────┘
     │
-    ├─ [8]  DNS records                  → *.knowledgeondemand.net (manual)
-    ├─ [12] Build VM LXC                 → Docker build environment (manual)
-    ├─ [13] Image builds                 → LOKI-RS, scanning-console, portal (manual)
-    └─ [17] Deployment Console LXC       → Cluster lifecycle web UI (manual)
+    │  ┌─── WebUI or DeployCluster.sh automates steps 7–13 ───┐
+    │  │                                                        │
+    ├─ [7]  terraform apply              → 4 Talos VMs          │
+    ├─ [8]  talhelper + apply-configs.sh → K8s bootstrapped     │
+    ├─ [9]  ArgoCD install               → GitOps controller    │
+    ├─ [10] deploy-ingress-stack.sh      → MetalLB, certs,      │
+    │  │                                    Traefik, Ceph CSI    │
+    │  └────────────────────────────────────────────────────────┘
+    │
+    ├─ [11] DNS records                  → *.knowledgeondemand.net (manual)
+    ├─ [12] apply-secrets.sh             → App secrets to K8s
+    ├─ [13] Security tool ArgoCD apps    → Harbor, OpenVAS, Faraday, etc.
+    ├─ [14] Image builds on Build VM     → LOKI-RS, scanning-console, portal
+    ├─ [15] CleanRoom DB                 → PostgreSQL 17
+    ├─ [16] Scanning Console             → Scanning web app
+    ├─ [17] Portal                       → SSO landing page
+    ├─ [18] Network policies             → Zero-trust (applied last)
+    └─ [19] Verification                 → End-to-end checks
 ```
