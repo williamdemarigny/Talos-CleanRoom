@@ -25,7 +25,7 @@ class BaseAppSettings(BaseSettings):
     secret_key: str = "change-me-in-production"
     admin_username: str = "admin"
     admin_password_hash: str = (
-        "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4xL4FXvQsZI5EjBi"
+        "$2b$12$Fosg.8JShshDJrpDuu2/T.9gzo05L2RJ.n1n5rQM35a7AN2NK555e"
     )  # Default: admin
     access_token_expire_hours: int = 8
 
