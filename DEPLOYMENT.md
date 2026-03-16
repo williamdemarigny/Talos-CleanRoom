@@ -541,7 +541,8 @@ for ns in scanning-console portal; do
         --namespace="$ns" \
         --docker-server=harbor.knowledgeondemand.net \
         --docker-username=admin \
-        --docker-password=Harbor12345
+        --docker-password=Harbor12345 \
+        2>/dev/null || echo "  harbor-pull-secret already exists in $ns"
 done
 ```
 
