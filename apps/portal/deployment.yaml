@@ -23,6 +23,8 @@ spec:
         app.kubernetes.io/component: server
         app.kubernetes.io/part-of: security-platform
     spec:
+      imagePullSecrets:
+      - name: harbor-pull-secret
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
