@@ -130,7 +130,17 @@ apply_secret() {
         return 0
     fi
 
-    if sops -d "$filepath" | kubectl apply -f - 2>/dev/null; then
+    # Ensure target namespace(s) exist before applying
+    local namespaces
+    namespaces=$(grep -E '^\s+namespace:' "$filepath" | awk '{print $2}' | sort -u)
+    for ns in $namespaces; do
+        if ! kubectl get namespace "$ns" &>/dev/null; then
+            print_info "  Creating namespace: ${ns}"
+            kubectl create namespace "$ns" 2>/dev/null || true
+        fi
+    done
+
+    if sops -d "$filepath" | kubectl apply -f -; then
         print_success "  Applied: ${app_dir}/${secret_file}"
     else
         print_error "  Failed to apply: ${app_dir}/${secret_file}"

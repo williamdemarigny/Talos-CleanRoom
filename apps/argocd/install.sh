@@ -72,23 +72,25 @@ kubectl wait --for=condition=ready pod \
 echo "Setting admin password..."
 
 # Generate bcrypt hash locally using Python (available in deployment container)
+# Falls back to htpasswd or a pre-computed hash if bcrypt module is unavailable
 ADMIN_HASH=""
 if command -v python3 &> /dev/null; then
-    ADMIN_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null)
+    ADMIN_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null) || true
 elif command -v python &> /dev/null; then
-    ADMIN_HASH=$(python -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null)
+    ADMIN_HASH=$(python -c "import bcrypt; print(bcrypt.hashpw(b'admin', bcrypt.gensalt(rounds=10)).decode())" 2>/dev/null) || true
 fi
 
-if [[ -n "${ADMIN_HASH}" ]]; then
-    # Wait for argocd-secret to exist
-    sleep 5
-    kubectl -n "${NAMESPACE}" patch secret argocd-secret \
-        -p "{\"stringData\": {\"admin.password\": \"${ADMIN_HASH}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
-    echo "Admin password set to: admin"
-else
-    echo "Warning: Could not generate bcrypt hash (python/bcrypt not available)"
-    echo "Using password hash from values.yaml"
+# Fallback: pre-computed bcrypt hash of "admin" (cost 10)
+if [[ -z "${ADMIN_HASH}" ]]; then
+    ADMIN_HASH='$2a$10$rRyBsGSHK6.uc8fntPwVIuLVHOJaFDeY4Gj/F7Ul90E35HTKPIiGW'
+    echo "  Using pre-computed hash (bcrypt module not available)"
 fi
+
+# Wait for argocd-secret to exist
+sleep 5
+kubectl -n "${NAMESPACE}" patch secret argocd-secret \
+    -p "{\"stringData\": {\"admin.password\": \"${ADMIN_HASH}\", \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+echo "Admin password set to: admin"
 
 echo ""
 echo "=== ArgoCD Installation Complete ==="
