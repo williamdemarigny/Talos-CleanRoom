@@ -33,13 +33,11 @@ spec:
           - |
             set -e
             echo "Setting up PostgreSQL data directory..."
-            if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
-              echo "Initializing PostgreSQL data directory..."
-              chown -R postgres:postgres /var/lib/postgresql/data
-              chmod 700 /var/lib/postgresql/data
-            else
-              echo "PostgreSQL data directory already initialized."
-            fi
+            # Ensure the PGDATA subdirectory exists with correct ownership
+            mkdir -p /var/lib/postgresql/data/pgdata
+            chown -R postgres:postgres /var/lib/postgresql/data
+            chmod 700 /var/lib/postgresql/data/pgdata
+            echo "PostgreSQL data directory ready."
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data

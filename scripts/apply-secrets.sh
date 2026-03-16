@@ -175,12 +175,12 @@ main() {
         print_info "Processing ${app_dir}..."
         if apply_secret "$app_dir" "$secret_file"; then
             if [[ -f "${APPS_DIR}/${app_dir}/${secret_file}" ]]; then
-                ((applied++))
+                applied=$((applied + 1))
             else
-                ((skipped++))
+                skipped=$((skipped + 1))
             fi
         else
-            ((failed++))
+            failed=$((failed + 1))
         fi
     done
 
