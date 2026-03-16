@@ -32,9 +32,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app):
         super().__init__(app)
-        self._buckets: dict[str, _Bucket] = defaultdict(
-            lambda: _Bucket(tokens=0)
-        )
+        self._buckets: dict[str, _Bucket] = {}
 
     def _get_key(self, request: Request, key_type: str) -> str:
         if key_type == "user":
@@ -61,11 +59,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _check_rate(self, key: str, max_tokens: float, refill_rate: float) -> bool:
         """Return True if request is allowed, False if rate-limited."""
         now = time.monotonic()
+        if key not in self._buckets:
+            self._buckets[key] = _Bucket(tokens=max_tokens, last_refill=now)
+
         bucket = self._buckets[key]
-        # Initialize new buckets at max capacity
-        if bucket.tokens == 0 and bucket.last_refill == 0:
-            bucket.tokens = max_tokens
-            bucket.last_refill = now
 
         # Refill tokens
         elapsed = now - bucket.last_refill
