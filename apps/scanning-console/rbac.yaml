@@ -1,0 +1,234 @@
+# Scanning Console - RBAC (Least-Privilege Model)
+# =============================================================================
+# Namespaced Roles: pods, pods/log, pods/exec, secrets in tool namespaces
+# ClusterRole: namespaces (get/list/create/patch), nodes (list)
+#
+# Explicitly EXCLUDED namespaces: argocd, traefik, cert-manager,
+#   metallb-system, ceph-csi, kube-system, harbor
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# ClusterRole: cluster-wide read access for namespaces and nodes
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scanning-console-cluster
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "create", "patch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scanning-console-cluster
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scanning-console-cluster
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: openvas
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-tool-access
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-tool-access
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-tool-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: faraday
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-tool-access
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-tool-access
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-tool-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: metasploit
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-tool-access
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-tool-access
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-tool-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: loki-scanner
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-tool-access
+  namespace: loki-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-tool-access
+  namespace: loki-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-tool-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: nmap-scanner
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-tool-access
+  namespace: nmap-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-tool-access
+  namespace: nmap-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-tool-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console

@@ -25,7 +25,7 @@
 ### LXC Containers
 | Name | VMID | IP Address | Purpose |
 |------|------|------------|---------|
-| deployment-webui | 200 | 10.83.3.190 | Deployment Web UI + security scanning |
+| deployment-webui | 200 | 10.83.3.190 | Deployment Console (cluster lifecycle) |
 | build-vm | 201 | 10.83.3.191 | Docker image builds for Harbor |
 
 ### Kubernetes Services (via Traefik LoadBalancer)
@@ -41,6 +41,8 @@ Create DNS A records for each FQDN below pointing to the Traefik external IP.
 | openvas.knowledgeondemand.net | OpenVAS Vulnerability Scanner |
 | faraday.knowledgeondemand.net | Faraday Vulnerability Management |
 | threatdragon.knowledgeondemand.net | OWASP Threat Dragon |
+| scan.knowledgeondemand.net | Scanning Console (vulnerability scanning & reporting) |
+| cleanroom.knowledgeondemand.net | Unified Portal (landing page & cross-app auth) |
 
 ### CLI-Only Services (no DNS record needed)
 
@@ -48,7 +50,7 @@ Create DNS A records for each FQDN below pointing to the Traefik external IP.
 |---------|--------|
 | Metasploit | `kubectl exec -it -n metasploit deploy/metasploit -c metasploit -- ./msfconsole` |
 | SecureCodeBox | Create `Scan` CRDs; results parsed by operator |
-| LOKI-RS IOC Scanner | Triggered from Deployment WebUI IOC Scan tab |
+| LOKI-RS IOC Scanner | Triggered from Scanning Console IOC Scan tab |
 
 ## Prerequisites for DNS-based Deployment
 

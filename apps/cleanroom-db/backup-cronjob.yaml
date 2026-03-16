@@ -1,0 +1,80 @@
+# CleanRoom Database - Automated Backup CronJob
+# Runs daily at 02:00 UTC, pg_dump | gzip, 14-day retention
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanroom-db-backup
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cleanroom-db
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: pg-backup
+            image: postgres:17-alpine
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -e
+                TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                BACKUP_FILE="/backups/cleanroom_${TIMESTAMP}.sql.gz"
+
+                echo "Starting backup: ${BACKUP_FILE}"
+                PGPASSFILE=/secrets/.pgpass pg_dump \
+                  -h cleanroom-db.cleanroom-db.svc.cluster.local \
+                  -U cleanroom \
+                  -d cleanroom \
+                  --no-password \
+                  | gzip > "${BACKUP_FILE}"
+
+                echo "Backup complete: $(du -h ${BACKUP_FILE} | cut -f1)"
+
+                # Remove backups older than 14 days
+                echo "Pruning backups older than 14 days..."
+                find /backups -name "cleanroom_*.sql.gz" -mtime +14 -delete
+                echo "Remaining backups:"
+                ls -lh /backups/cleanroom_*.sql.gz 2>/dev/null || echo "  (none)"
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cleanroom-db-credentials
+                  key: postgres-password
+            volumeMounts:
+            - name: backup-data
+              mountPath: /backups
+            - name: pgpass
+              mountPath: /secrets
+              readOnly: true
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: backup-data
+            persistentVolumeClaim:
+              claimName: cleanroom-db-backup
+          - name: pgpass
+            secret:
+              secretName: cleanroom-db-credentials
+              items:
+              - key: postgres-password
+                path: .pgpass
+                mode: 0600

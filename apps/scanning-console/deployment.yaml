@@ -1,0 +1,122 @@
+# Scanning Console - Deployment
+# FastAPI application for security scanning orchestration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scanning-console
+  namespace: scanning-console
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: security-console
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scanning-console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scanning-console
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: security-platform
+    spec:
+      serviceAccountName: scanning-console
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # ============================================================
+      # INIT CONTAINERS
+      # ============================================================
+      initContainers:
+      - name: db-migrate
+        image: harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: database-url
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      # ============================================================
+      # MAIN CONTAINERS
+      # ============================================================
+      containers:
+      - name: scanning-console
+        image: harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: secret-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: database-url
+        - name: ADMIN_PASSWORD_HASH
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: admin-password-hash
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        startupProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+# =============================================================================
+# SECRETS - Managed externally via SOPS encryption
+# =============================================================================
+# Required secrets:
+#   - scanning-console-credentials:
+#       secret-key: Application SECRET_KEY (for JWT/HMAC derivation)
+#       database-url: postgresql+asyncpg://cleanroom:<pw>@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom
+#       admin-password-hash: bcrypt hash of admin password
+# =============================================================================

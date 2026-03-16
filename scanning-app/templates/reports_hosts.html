@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Hosts - Talos CleanRoom Scanning Console{% endblock %}
+
+{% block content %}
+<div x-data="reportsHosts()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Discovered Hosts</h1>
+            <p class="text-gray-400">All hosts discovered across scans</p>
+        </div>
+        <a href="/reports" class="text-cyan-400 hover:text-cyan-300 text-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-800 rounded-lg p-4 mb-6 flex gap-4 items-end">
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Scan ID</label>
+            <input type="text" x-model="filterScanId" placeholder="Filter by scan..."
+                   class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+        </div>
+        <button @click="fetchHosts()" class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700 text-sm">
+            Apply
+        </button>
+    </div>
+
+    <!-- Hosts Table -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700">
+                        <th class="text-left pb-3">IP</th>
+                        <th class="text-left pb-3">OS</th>
+                        <th class="text-left pb-3">Hostnames</th>
+                        <th class="text-left pb-3">Services</th>
+                        <th class="text-left pb-3">Scan</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="host in hosts" :key="host.id">
+                        <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                            <td class="py-3 text-white font-mono" x-text="host.ip"></td>
+                            <td class="py-3 text-gray-400" x-text="host.os || '-'"></td>
+                            <td class="py-3 text-gray-400" x-text="(host.hostnames || []).join(', ') || '-'"></td>
+                            <td class="py-3 text-gray-400" x-text="host.services_count"></td>
+                            <td class="py-3">
+                                <a :href="'/reports/scan/' + host.scan_id"
+                                   class="text-cyan-400 hover:text-cyan-300 font-mono text-xs" x-text="host.scan_id"></a>
+                            </td>
+                        </tr>
+                    </template>
+                    <tr x-show="hosts.length === 0">
+                        <td colspan="5" class="py-6 text-center text-gray-500">No hosts found.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <!-- Pagination -->
+        <div class="flex justify-between items-center mt-4" x-show="hosts.length > 0">
+            <button @click="prevPage()" :disabled="offset === 0"
+                    class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm disabled:opacity-50">Previous</button>
+            <span class="text-sm text-gray-400">Showing <span x-text="offset + 1"></span> - <span x-text="offset + hosts.length"></span></span>
+            <button @click="nextPage()" :disabled="hosts.length < pageSize"
+                    class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm disabled:opacity-50">Next</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/reports.js"></script>
+{% endblock %}

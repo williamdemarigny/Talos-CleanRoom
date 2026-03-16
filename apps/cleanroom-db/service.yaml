@@ -1,0 +1,18 @@
+# CleanRoom Database - Service (ClusterIP, internal only)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cleanroom-db
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: database
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: cleanroom-db
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres

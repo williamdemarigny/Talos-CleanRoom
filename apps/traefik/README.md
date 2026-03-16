@@ -114,6 +114,8 @@ harbor.knowledgeondemand.net       -> <TRAEFIK_LB_IP>
 openvas.knowledgeondemand.net      -> <TRAEFIK_LB_IP>
 faraday.knowledgeondemand.net      -> <TRAEFIK_LB_IP>
 threatdragon.knowledgeondemand.net -> <TRAEFIK_LB_IP>
+scan.knowledgeondemand.net         -> <TRAEFIK_LB_IP>
+cleanroom.knowledgeondemand.net    -> <TRAEFIK_LB_IP>
 ```
 
 Get the LoadBalancer IP:

@@ -5,7 +5,9 @@
 
 ## What This Project Is
 
-A complete Infrastructure-as-Code platform for deploying a Talos Kubernetes cluster on Proxmox, with an integrated security toolchain (OpenVAS, Metasploit, Faraday, LOKI-RS IOC scanner) and a web-based deployment/scanning UI. Everything is GitOps-managed via ArgoCD.
+A complete Infrastructure-as-Code platform for deploying a Talos Kubernetes cluster on Proxmox, with an integrated security toolchain (OpenVAS, Metasploit, Faraday, LOKI-RS IOC scanner). The platform is split into three web applications: a **Deployment Console** (cluster lifecycle, runs in LXC), a **Scanning Console** (vulnerability/IOC scanning with PostgreSQL persistence, runs in K8s), and a **Unified Portal** (landing page with cross-app SSO, runs in K8s). Everything is GitOps-managed via ArgoCD.
+
+> **Deployment guide:** See `DEPLOYMENT.md` for end-to-end deployment instructions.
 
 **Current branch:** `refactor/restructure`
 **Git remote:** `git@github.com:williamdemarigny/Talos-CleanRoom.git`
@@ -22,9 +24,12 @@ Proxmox Cluster (4 nodes: pve01-04, 10.83.2.20-23)
   │     ├── Workers: worker-01..03 (VMIDs 3001-3003, 10.83.3.15-17)
   │     ├── Pod CIDR: 10.14.0.0/16, Service CIDR: 10.15.0.0/16
   │     ├── Storage: Ceph RBD (Proxmox-managed, 4 monitors)
-  │     └── MetalLB IP Pool: 10.83.3.200-250 (L2 mode)
+  │     ├── MetalLB IP Pool: 10.83.3.200-250 (L2 mode)
+  │     ├── Scanning Console (scan.knowledgeondemand.net) — K8s Deployment
+  │     ├── Portal (cleanroom.knowledgeondemand.net) — K8s Deployment
+  │     └── CleanRoom DB — PostgreSQL 17 StatefulSet
   │
-  ├── LXC: deployment-webui (VMID 200, 10.83.3.190) — FastAPI WebUI
+  ├── LXC: deployment-webui (VMID 200, 10.83.3.190) — Deployment Console
   └── LXC: build-vm (VMID 201, 10.83.3.191) — Docker image builds
 ```
 
@@ -38,47 +43,97 @@ Proxmox Cluster (4 nodes: pve01-04, 10.83.2.20-23)
 
 ```
 Talos-CleanRoom/
-├── webui/                    # FastAPI Deployment + Scanning WebUI (runs in LXC)
+├── webui/                    # Deployment Console — cluster lifecycle only (runs in LXC)
 │   ├── app/
 │   │   ├── main.py           # FastAPI app — mounts routers, static, templates, page routes
 │   │   ├── auth.py           # JWT (HS256, 8hr) + bcrypt, HttpOnly cookies + Bearer header
 │   │   ├── config.py         # Pydantic BaseSettings, @lru_cache singleton
-│   │   ├── models/           # Pydantic models
+│   │   ├── models/
 │   │   │   ├── common.py     # BaseStatus enum, BaseLogEntry
 │   │   │   ├── deployment.py # DeploymentState, DeploymentStep, StepStatus, DEPLOYMENT_STEPS[]
-│   │   │   ├── scan.py       # ScanState, ScanTool, ScanProfile, ScanToolState, ScanRequest
-│   │   │   ├── ioc_scan.py   # IocScanState, MountType, IocFinding, IocScanRequest
 │   │   │   └── config.py     # NodeConfig, NetworkConfig, TerraformConfig
 │   │   ├── routers/
-│   │   │   ├── auth.py       # POST /api/auth/login, /logout, GET /me
+│   │   │   ├── auth.py       # POST /api/auth/login, /logout, GET /me, POST /redeem-code
 │   │   │   ├── deployment.py # POST start/abort, GET status/logs/kubeconfig/credentials, POST cleanup
 │   │   │   ├── config.py     # GET/PUT terraform, GET talos/env, talos/config, all, validate
-│   │   │   ├── scan.py       # POST start/abort, GET status/history/modules/openvas-*/logs, WS ws
-│   │   │   ├── ioc_scan.py   # POST start/abort, GET status/history/logs, WS ws
 │   │   │   ├── websocket.py  # WS /ws/deployment (deployment real-time updates)
 │   │   │   └── ws_manager.py # ConnectionManager (Set[WebSocket] + broadcast), create_message()
 │   │   └── services/
 │   │       ├── deployment_service.py  # 17-step cluster orchestrator (~1660 lines)
-│   │       ├── scan_service.py        # Nmap/OpenVAS/Metasploit scanning (~3100 lines)
-│   │       ├── ioc_scan_service.py    # LOKI-RS IOC scanning via temp K8s pods (~550 lines)
-│   │       ├── faraday_client.py      # Faraday REST API integration (~430 lines)
 │   │       ├── config_service.py      # Terraform/Talos config file management
 │   │       ├── kubectl_utils.py       # KubernetesHelper wrapper (~380 lines)
 │   │       ├── process_manager.py     # Async subprocess execution + cancellation
 │   │       └── base_service.py        # Shared mixin (logging, connectivity, poll_until)
-│   ├── templates/            # Jinja2 (base, login, dashboard, deployment, config, scan, ioc_scan, logs)
+│   ├── templates/            # Jinja2 (base, login, dashboard, deployment, config, logs)
 │   ├── static/
 │   │   ├── js/app.js         # authFetch(), getToken(), logout(), formatDuration/Timestamp()
 │   │   ├── js/utils.js       # Additional formatting helpers
-│   │   ├── js/websocket-base.js  # WebSocketBase class (WS + REST polling, see below)
+│   │   ├── js/websocket-base.js  # WebSocketBase class (WS + REST polling)
 │   │   ├── js/websocket.js   # Deployment-specific WS handler
 │   │   ├── js/deployment.js  # deploymentMonitor() Alpine component
-│   │   ├── js/scan.js        # scanManager() Alpine component
-│   │   ├── js/ioc_scan.js    # iocScanManager() Alpine component
 │   │   └── css/custom.css    # Dark theme Tailwind overrides
 │   ├── deploy-lxc.sh         # LXC container provisioning
 │   ├── Dockerfile            # Python 3.11 + terraform + talosctl + kubectl + helm + sops
 │   └── requirements.txt
+│
+├── scanning-app/             # Scanning Console — vulnerability/IOC scanning (runs in K8s)
+│   ├── app/
+│   │   ├── main.py           # FastAPI app — scan, IOC, reports, export routers
+│   │   ├── config.py         # Inherits from talos_common ConfigBase
+│   │   ├── models/
+│   │   │   ├── scan.py       # ScanState, ScanTool, ScanProfile, ScanToolState, ScanRequest
+│   │   │   └── ioc_scan.py   # IocScanState, MountType, IocFinding, IocScanRequest
+│   │   ├── routers/
+│   │   │   ├── scan.py       # POST start/abort, GET status/history/modules/openvas-*/logs, WS ws
+│   │   │   ├── ioc_scan.py   # POST start/abort, GET status/history/logs, WS ws
+│   │   │   ├── reports.py    # GET reports, scan detail, hosts, vulns, audit, compare
+│   │   │   └── export.py     # GET CSV/JSON/PDF export, compliance reports
+│   │   ├── services/
+│   │   │   ├── scan_service.py        # Nmap/OpenVAS/Metasploit scanning (~3100 lines)
+│   │   │   ├── ioc_scan_service.py    # LOKI-RS IOC scanning via temp K8s pods (~550 lines)
+│   │   │   ├── faraday_client.py      # Faraday REST API integration (~430 lines)
+│   │   │   ├── result_store.py        # PostgreSQL persistence for scan results
+│   │   │   └── audit.py               # Audit logging
+│   │   ├── db/
+│   │   │   ├── engine.py     # SQLAlchemy async engine + session factory
+│   │   │   ├── models.py     # ORM: Scan, Host, Vulnerability, IocFinding, FaradaySyncLog, AuditLog
+│   │   │   └── repository.py # Data access layer
+│   │   └── middleware/
+│   │       ├── security.py   # SecurityHeadersMiddleware
+│   │       └── rate_limit.py # RateLimitMiddleware
+│   ├── alembic/              # Database migrations
+│   │   └── versions/001_initial_schema.py
+│   ├── templates/            # Jinja2 (scan, ioc_scan, reports suite)
+│   ├── static/               # JS (scan, ioc_scan, reports) + CSS
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── portal/                   # Unified Portal — landing page + cross-app SSO (runs in K8s)
+│   ├── app/
+│   │   ├── main.py           # FastAPI app — auth + portal routers
+│   │   ├── config.py         # Inherits from talos_common ConfigBase
+│   │   └── routers/
+│   │       └── portal.py     # App links, status, navigation
+│   ├── templates/            # Jinja2 (login, landing)
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── lib/                      # Shared utilities
+│   ├── talos-common/         # Shared pip package (talos_common) used by all 3 apps
+│   │   └── talos_common/
+│   │       ├── auth.py       # JWT decode, get_current_user_optional
+│   │       ├── config_base.py # Pydantic BaseSettings mixin + key derivation
+│   │       ├── models/common.py # Shared Pydantic models
+│   │       ├── routers/
+│   │       │   ├── auth.py       # Shared login/logout/me endpoints
+│   │       │   ├── exchange.py   # Cross-domain one-time code exchange
+│   │       │   └── ws_manager.py # Shared WebSocket ConnectionManager
+│   │       └── services/
+│   │           ├── base_service.py    # Logging, kubectl, poll_until
+│   │           ├── kubectl_utils.py   # KubernetesHelper wrapper
+│   │           └── process_manager.py # Async subprocess execution
+│   ├── functions.sh          # Logging, wait_for_deployment/daemonset, retry_command
+│   └── lxc-deploy-common.sh  # SSH key resolution, Windows path conversion
 │
 ├── apps/                     # ArgoCD-managed K8s applications
 │   ├── argocd/               # Self-managing (Helm 9.4.3, HA 2x replicas)
@@ -94,6 +149,9 @@ Talos-CleanRoom/
 │   ├── threat-dragon/        # OWASP threat modeling
 │   ├── securecodebox/        # Automated scanning framework (5.5.0)
 │   ├── loki/                 # LOKI-RS IOC scanner image + build-and-push.sh
+│   ├── scanning-console/     # K8s manifests for Scanning Console (Deployment, Service, RBAC, IngressRoute)
+│   ├── portal/               # K8s manifests for Portal (Deployment, Service, IngressRoute)
+│   ├── cleanroom-db/         # PostgreSQL 17 StatefulSet + backup CronJob + PVCs
 │   ├── network-policies/     # Zero-trust: default-deny per namespace
 │   └── deploy-ingress-stack.sh  # 13-step infra deployment orchestrator
 │
@@ -115,93 +173,97 @@ Talos-CleanRoom/
 │   ├── generate-secrets.sh   # SOPS/Age secret generation
 │   └── tfvars-to-talos-env.sh # Terraform → talenv.yaml conversion
 │
-├── lib/                      # Shared bash utilities
-│   ├── functions.sh          # Logging, wait_for_deployment/daemonset, retry_command
-│   └── lxc-deploy-common.sh  # SSH key resolution, Windows path conversion
-│
 ├── build-vm/                 # Docker image build LXC (VMID 201)
 │   ├── deploy-lxc.sh
 │   └── scripts/setup-lxc.sh  # Docker CE + kubectl install
 │
+├── DEPLOYMENT.md             # End-to-end deployment guide (16 steps)
 └── docs/
     ├── DNS-MAPPING.md
-    └── vuln-management-plan.md  # Next-phase plan (app split into 3 services)
+    └── vuln-management-plan.md  # Architecture plan (implemented, Phases 1-8 complete)
 ```
 
 ---
 
-## WebUI Application — Deep Dive
+## Application Architecture (3-App Split)
 
-### Tech Stack
+All three apps share `lib/talos-common/` (pip package `talos_common`) for auth, config, WebSocket management, and kubectl utilities.
+
+### Shared Tech Stack
 - **Backend:** FastAPI 0.109 + Uvicorn (async)
 - **Frontend:** Jinja2 + Alpine.js 3.x + Tailwind CSS 3.x (CDN)
-- **Auth:** JWT HS256 (8hr expiry) in HttpOnly cookie `access_token` + `Authorization: Bearer` header
+- **Auth:** JWT HS256 (8hr expiry) in HttpOnly cookie + Bearer header, cross-app SSO via opaque one-time codes
 - **Real-time:** WebSocket per feature + REST polling fallback via `WebSocketBase`
-- **State:** Fernet-encrypted JSON files at `/app/data/` (no database)
-- **Default credentials:** admin / admin (bcrypt hash in `config.py`)
+- **Key derivation:** Single `SECRET_KEY` → derived `jwt_signing_key`, `code_exchange_key`, `fernet_key`
+- **Default credentials:** admin / admin (all three apps)
 
-### Application Wiring (main.py)
+### Deployment Console (webui/) — Cluster Lifecycle
+
+Runs in LXC container (VMID 200, 10.83.3.190:8000). State: Fernet-encrypted JSON files (no database).
 
 ```python
-# Router mounts — these define ALL API prefixes
-app.include_router(auth.router,       prefix="/api/auth")
+# Router mounts (webui/app/main.py)
+app.include_router(auth.router,       prefix="/api/auth")       # login/logout/me/redeem-code
+app.include_router(exchange_router,   prefix="/api/auth")       # cross-domain code exchange
 app.include_router(deployment.router, prefix="/api/deployment")
 app.include_router(config.router,     prefix="/api/config")
-app.include_router(scan.router,       prefix="/api/scan")
-app.include_router(ioc_scan.router,   prefix="/api/ioc-scan")
-app.include_router(websocket.router)  # mounts WS at /ws/deployment directly
+app.include_router(websocket.router)  # WS /ws/deployment
 
-# Page routes — each checks get_current_user_optional(), redirects to /login if None
-GET /           → dashboard.html   (page="dashboard")
-GET /login      → login.html
-GET /config     → config.html      (page="config")
-GET /deployment → deployment.html   (page="deployment")
-GET /scan       → scan.html        (page="scan")
-GET /ioc-scan   → ioc_scan.html    (page="ioc_scan")
-GET /logs       → logs.html        (page="logs")
-
-# System endpoints (no auth required)
-GET /api/system/health        → {"status": "healthy"}
-GET /api/system/dependencies  → checks shutil.which() for each tool
+# Pages: /, /login, /config, /deployment, /logs
+# System: GET /api/system/health, /api/system/dependencies
 ```
 
-### Service Singleton Pattern
+### Scanning Console (scanning-app/) — Vulnerability & IOC Scanning
 
-All three services use the same pattern:
+Runs in K8s (namespace `scanning-console`, image from Harbor). Uses PostgreSQL via `cleanroom-db`.
 
 ```python
-# Module-level singleton
-_scan_service: Optional[ScanService] = None
+# Router mounts (scanning-app/app/main.py)
+app.include_router(auth_router,       prefix="/api/auth")       # shared from talos_common
+app.include_router(exchange_router,   prefix="/api/auth")       # cross-domain code exchange
+app.include_router(scan.router,       prefix="/api/scan")
+app.include_router(ioc_scan.router,   prefix="/api/ioc-scan")
+app.include_router(reports.router,    prefix="/api/reports")
+app.include_router(export.router,     prefix="/api/export")
 
-def get_scan_service() -> ScanService:
-    global _scan_service
-    if _scan_service is None:
-        _scan_service = ScanService()
-    return _scan_service
-
-# Injected into routers as FastAPI dependency
-@router.post("/start")
-async def start_scan(request: ScanRequest, service: ScanService = Depends(get_scan_service)):
+# Pages: /scan, /ioc-scan, /reports, /login
+# Database: SQLAlchemy async + Alembic migrations (init container)
+# Middleware: SecurityHeadersMiddleware, RateLimitMiddleware
+# CORS: allows portal + deployment console origins
 ```
 
-### Service Inheritance
+**Database schema** (scanning-app/app/db/models.py): Scan, Host, Vulnerability, IocFinding, FaradaySyncLog, AuditLog
+
+### Portal (portal/) — Landing Page + SSO
+
+Runs in K8s (namespace `portal`, image from Harbor). Minimal app — auth + navigation links.
+
+```python
+# Router mounts (portal/app/main.py)
+app.include_router(auth_router,       prefix="/api/auth")       # shared from talos_common
+app.include_router(portal.router,     prefix="/api/portal")     # app links, status
+
+# Pages: / (landing), /login
+```
+
+### Cross-Domain Auth Flow
+
+Portal generates HMAC-signed one-time codes → target app redeems via `POST /api/auth/redeem-code` → mints local JWT. No JWT in URL, single-use, per-user rate limited. See `lib/talos-common/talos_common/routers/exchange.py`.
+
+### Service Inheritance (shared via talos_common)
 
 ```
-BaseServiceMixin              # Shared: _log_with_callback(), check_cluster_connectivity(),
-    │                         #   poll_until(), @property k8s -> KubernetesHelper
-    ├── DeploymentService     # @dataclass, ProcessManager, credentials dict, _save/_load_state()
-    ├── ScanService           # @dataclass, ProcessManager, scan_history list
-    └── IocScanService        # @dataclass, ProcessManager, scan_history list
+talos_common.services.BaseServiceMixin   # _log_with_callback(), check_cluster_connectivity(),
+    │                                    #   poll_until(), @property k8s -> KubernetesHelper
+    │
+    ├── webui: DeploymentService         # 17-step cluster orchestrator, Fernet state
+    ├── scanning-app: ScanService        # Nmap/OpenVAS/Metasploit, PostgreSQL persistence
+    └── scanning-app: IocScanService     # LOKI-RS IOC scanning, PostgreSQL persistence
 ```
-
-Each service uses:
-- `ProcessManager` for async subprocess calls (run_command with output streaming, cancellation)
-- `KubernetesHelper` for kubectl operations (exec, pods, secrets, logs, namespaces)
-- Callbacks (`log_callback`, `step_callback`/`tool_callback`/`status_callback`) for real-time broadcasting
 
 ### WebSocket Protocol
 
-**Server → Client message format** (all features):
+**Server → Client message format** (all apps):
 ```json
 {
   "type": "<message_type>",
@@ -210,58 +272,48 @@ Each service uses:
 }
 ```
 
-**Message types by feature:**
+**Message types by app:**
 
-| Feature | Type | Data Fields |
-|---------|------|------------|
-| Deployment | `initial_state` | id, status, current_step, steps[], logs[] |
-| Deployment | `log` | step_id, level, message, timestamp |
-| Deployment | `step_update` | step_id, name, description, status, started_at, completed_at, error_message |
-| Deployment | `started` | {} |
-| Deployment | `aborted` | {} |
-| Scan | `scan_log` | tool, level, message, timestamp |
-| Scan | `scan_tool_update` | tool, status, started_at, completed_at, error_message, findings_count, uploaded_to_faraday |
-| IOC Scan | `ioc_log` | level, message, timestamp |
-| IOC Scan | `ioc_status_update` | (full IocScanState dict) |
+| App | Type | Data Fields |
+|-----|------|------------|
+| Deployment Console | `initial_state` | id, status, current_step, steps[], logs[] |
+| Deployment Console | `log` | step_id, level, message, timestamp |
+| Deployment Console | `step_update` | step_id, name, description, status, started_at, completed_at, error_message |
+| Deployment Console | `started` / `aborted` | {} |
+| Scanning Console | `scan_log` | tool, level, message, timestamp |
+| Scanning Console | `scan_tool_update` | tool, status, started_at, completed_at, error_message, findings_count, uploaded_to_faraday |
+| Scanning Console | `ioc_log` | level, message, timestamp |
+| Scanning Console | `ioc_status_update` | (full IocScanState dict) |
 
-**Client → Server commands:** `{ "type": "ping" }` (all), `{ "type": "start" }` / `{ "type": "abort" }` (deployment WS only)
+**Client → Server:** `{ "type": "ping" }` (all), `{ "type": "start" }` / `{ "type": "abort" }` (deployment WS only)
 
 **Auth:** Via `?token=<jwt>` query param or `access_token` cookie. Rejected with close code `4001`.
 
 ### Frontend Component Pattern (Alpine.js + WebSocketBase)
 
-Each page component follows this pattern:
+Each page component follows this pattern (example from scanning-app):
 
 ```javascript
-function scanManager() {
+function deploymentMonitor() {
     return {
-        // State fields
         status: 'idle', logs: [], ws: null, wsConnected: false, autoScroll: true,
-
-        // Shared WebSocket/polling helper
         _wsBase: null,
-
         init() {
             this._wsBase = new WebSocketBase(
-                '/api/scan/ws',      // WebSocket path
-                '/api/scan/status',  // REST status poll URL
-                '/api/scan/logs',    // REST logs poll URL (uses ?offset=N for pagination)
+                '/ws/deployment',              // WebSocket path
+                '/api/deployment/status',      // REST status poll URL
+                '/api/deployment/logs',        // REST logs poll URL (?offset=N)
                 { pollInterval: 3000, pingInterval: 15000 }
             );
             this._wsBase.bind(this);
             this._wsBase.connectWebSocket();
         },
-
-        // REQUIRED by WebSocketBase:
-        onWsMessage(message) { /* handle message.type dispatch */ },
-        onPollStatus(data)   { /* update component state from REST poll */ },
-        onPollComplete()     { /* called when polling detects run finished */ },
-        // $refs.logContainer  (DOM element for auto-scroll target)
+        // REQUIRED: onWsMessage(msg), onPollStatus(data), onPollComplete()
     };
 }
 ```
 
-**WebSocketBase** handles: WS connect/reconnect (auto-reconnect on non-normal close), heartbeat pings, REST polling fallback, log deduplication, buffer management (2000 max, trim to 1500), auto-scroll.
+**WebSocketBase** handles: WS connect/reconnect, heartbeat pings, REST polling fallback, log deduplication, buffer management (2000 max, trim to 1500), auto-scroll.
 
 ### Deployment Service — Steps & Timing
 
@@ -284,7 +336,9 @@ async def _run_deployment(self):
         if not success: break
 ```
 
-### Scan Service — Tools & Profiles
+### Scan Service — Tools & Profiles (scanning-app)
+
+Located in `scanning-app/app/services/scan_service.py`. Results persisted to PostgreSQL via `result_store.py`.
 
 **Timeouts (seconds):**
 | Profile | Nmap | OpenVAS | Metasploit |
@@ -299,37 +353,53 @@ async def _run_deployment(self):
 
 **Metasploit modules:** 11 for Standard (EternalBlue, Conficker, BlueKeep, Heartbleed, Log4Shell, Shellshock, HTTP.sys, SMB/SSH/HTTP/FTP version), 39 for Thorough (adds share/user enum, RDP, HTTP brute-force, DB scanners, etc.)
 
-**Tool execution:** Each tool runs via `kubectl exec` or `kubectl run` against pods in K8s namespaces. Results are XML parsed locally, then uploaded to Faraday via individual REST calls.
+**Tool execution:** Each tool runs via `kubectl exec` or `kubectl run` against pods in K8s namespaces. Results are XML parsed locally, persisted to PostgreSQL, then uploaded to Faraday via individual REST calls.
 
-### IOC Scan Service — LOKI-RS
+### IOC Scan Service — LOKI-RS (scanning-app)
+
+Located in `scanning-app/app/services/ioc_scan_service.py`.
 
 1. Creates privileged pod in `loki-scanner` namespace (needs FUSE for SSHFS/CIFS)
 2. Image: `harbor.knowledgeondemand.net/cleanroom/loki-rs-scanner:v2.10.0`
 3. Mounts target via SSH or SMB, runs `loki -f /scan --no-procs --jsonl`
 4. Parses JSONL output into `IocFinding[]` with severity: alert (≥80), warning (≥60), notice (<60)
-5. Uploads to Faraday as host + vulns
+5. Persists findings to PostgreSQL + uploads to Faraday as host + vulns
 
 ---
 
-## Settings (config.py)
+## Settings
+
+All three apps inherit from `talos_common.ConfigBase` which provides shared fields (`secret_key`, `admin_username`, `admin_password_hash`, `access_token_expire_hours`). Key derivation happens in ConfigBase: `jwt_signing_key`, `code_exchange_key`, `fernet_key` are derived from the single `SECRET_KEY`.
+
+### Deployment Console (webui/app/config.py)
 
 ```python
-class Settings(BaseSettings):
+class Settings(ConfigBase):
     app_name: str = "Talos CleanRoom Deployment"
-    debug: bool = False
-    admin_username: str = "admin"
-    admin_password_hash: str = "..."    # bcrypt hash of "admin"
-    secret_key: str = "change-this..."  # JWT signing + Fernet state encryption
-    access_token_expire_hours: int = 8
-    repo_root: Path = Path("/repo")     # Git repo mount point in container
+    repo_root: Path = Path("/repo")
     master_node: str = "talos-CleanRoom-master-01.knowledgeondemand.net"
-    health_check_retries: int = 30
-    health_check_interval: int = 10
     node_ips: list[str] = ["10.83.3.10", "10.83.3.15", "10.83.3.16", "10.83.3.17"]
     dependencies: list[str] = ["terraform", "talhelper", "talosctl", "sops", "jq", "curl", "kubectl", "helm", "git"]
-    class Config:
-        env_file = ".env"
 ```
+
+### Scanning Console (scanning-app/app/config.py)
+
+```python
+class Settings(ConfigBase):
+    app_name: str = "Talos CleanRoom Scanning Console"
+    database_url: str = "postgresql+asyncpg://cleanroom:password@cleanroom-db.cleanroom-db.svc:5432/cleanroom"
+```
+
+### Portal (portal/app/config.py)
+
+```python
+class Settings(ConfigBase):
+    app_name: str = "Talos CleanRoom Portal"
+    deployment_console_url: str = "https://10.83.3.190:8000"
+    scanning_console_url: str = "https://scan.knowledgeondemand.net"
+```
+
+**Critical:** All three apps must share the same `SECRET_KEY` for cross-domain SSO to work.
 
 ---
 
@@ -339,7 +409,7 @@ class Settings(BaseSettings):
 - -2: metrics-server, MetalLB
 - -1: cert-manager
 - 0: Traefik (fixed LB IP 10.83.3.200), Ceph CSI
-- 1: OpenVAS, Faraday, Harbor, Metasploit, Threat Dragon
+- 1: OpenVAS, Faraday, Harbor, Metasploit, Threat Dragon, CleanRoom DB, Scanning Console, Portal
 
 All apps: `automated: { prune: true, selfHeal: true }`, ServerSideApply.
 Secrets: SOPS-encrypted with Age, decrypted by ArgoCD KSOPS plugin.
@@ -351,7 +421,7 @@ Secrets: SOPS-encrypted with Age, decrypted by ArgoCD KSOPS plugin.
 ### Ceph Storage
 - 4 monitors at 10.83.2.20-23:6789
 - Cluster ID: `1db975af-133e-43b1-9c6f-8e26269115f1`
-- StorageClass: `ceph-rbd` (RWO, VirtIO block), used by OpenVAS (10 PVCs), Harbor (69Gi total), Faraday
+- StorageClass: `ceph-rbd` (RWO, VirtIO block), used by OpenVAS (10 PVCs), Harbor (69Gi total), Faraday, CleanRoom DB
 
 ### Talos Linux
 - talconfig.yaml uses `${VAR}` placeholders substituted from talenv.yaml
@@ -360,9 +430,12 @@ Secrets: SOPS-encrypted with Age, decrypted by ArgoCD KSOPS plugin.
 - All nodes install to `/dev/vda`, DHCP on eth0
 
 ### Network Policies (Zero-Trust)
-- Default deny all ingress+egress per namespace (faraday, threat-dragon, openvas, argocd)
+- Default deny all ingress+egress per namespace (faraday, threat-dragon, openvas, argocd, scanning-console, portal, cleanroom-db)
 - Metasploit: deny ingress only (egress unrestricted for pentesting)
 - OpenVAS: egress DNS + HTTPS + rsync (feed sync)
+- Scanning Console: egress to cleanroom-db, openvas, faraday, metasploit, loki-scanner, nmap-scanner, K8s API, DNS
+- CleanRoom DB: ingress from scanning-console only, egress DNS only
+- Portal: egress DNS only
 - Traefik: allowed ingress source for all service namespaces
 
 ---
@@ -387,7 +460,9 @@ Secrets: SOPS-encrypted with Age, decrypted by ArgoCD KSOPS plugin.
 
 | Service | Username | Password | Notes |
 |---------|----------|----------|-------|
-| WebUI | admin | admin | JWT auth, configurable via .env |
+| Deployment Console | admin | admin | JWT auth, configurable via .env |
+| Scanning Console | admin | admin | K8s secret `scanning-console-credentials` |
+| Portal | admin | admin | K8s secret `portal-credentials` |
 | ArgoCD | admin | admin | bcrypt hash in values.yaml |
 | Harbor | admin | Harbor12345 | Change on first login |
 | OpenVAS | admin | admin | K8s secret `openvas-credentials` |
@@ -395,29 +470,17 @@ Secrets: SOPS-encrypted with Age, decrypted by ArgoCD KSOPS plugin.
 
 ---
 
-## Planned Next Phase: App Split
+## App Split — Design Decisions
 
-See `docs/vuln-management-plan.md`. The monolithic WebUI splits into 3 apps:
+The 3-app split is **implemented** (Phases 1-8 complete on `refactor/restructure`). See `docs/vuln-management-plan.md` for the full architecture plan and appendices.
 
-1. **Deployment Console** (stays in LXC) — cluster lifecycle only, scan code removed
-2. **Scanning Console** (new, in K8s) — scanning + PostgreSQL persistence + reports/export/remediation tracking
-3. **Unified Portal** (new, in K8s) — landing page with shared JWT auth across all 3 apps
-
-**New infrastructure:** `lib/talos-common/` shared pip package, `apps/scanning-console/`, `apps/portal/`, `apps/cleanroom-db/` (PostgreSQL)
-
-**Migration:** Phases 1-4 additive (old WebUI untouched), Phases 5-8 cutover. Both old and new coexist during transition.
-
-**Key design decisions in appendices:**
-- **Appendix A:** Opaque one-time code exchange for cross-domain auth (no JWT in URL, single-use, per-user rate limited)
-- **Appendix B:** Alembic migrations via hardened init container (non-root, read-only FS)
-- **Appendix C:** Daily PostgreSQL backup CronJob with 14-day retention (PGPASSFILE, not PGPASSWORD)
-- **Appendix D:** Faraday sync retry queue with exponential backoff
-- **Appendix E:** PostgreSQL health probes (`pg_isready`)
-- **Appendix F:** Build VM soft-failure pattern (Harbor auth check, skip if images exist)
-- **Appendix G:** Portal stays FastAPI (needs JWT signing), kept minimal
-- **Appendix H:** In-memory rate limiting accepted risk, Redis upgrade path documented
-- **Appendix I:** Cryptographic key separation — derived keys for JWT/HMAC/Fernet from single SECRET_KEY
-- **Appendix J:** Security checklist cross-referencing all 12 identified concerns and resolutions
+**Key design decisions:**
+- **Cross-domain auth:** Opaque one-time HMAC-signed code exchange (no JWT in URL, single-use, per-user rate limited) — Appendix A
+- **Database migrations:** Alembic via hardened init container (non-root, read-only FS) — Appendix B
+- **Backups:** Daily pg_dump CronJob with 14-day retention, PGPASSFILE (not PGPASSWORD) — Appendix C
+- **Faraday sync:** Retry queue with exponential backoff — Appendix D
+- **Key separation:** Derived keys for JWT/HMAC/Fernet from single SECRET_KEY — Appendix I
+- **Security:** 12-concern checklist with resolutions — Appendix J
 
 ---
 
@@ -425,8 +488,10 @@ See `docs/vuln-management-plan.md`. The monolithic WebUI splits into 3 apps:
 
 - Shell scripts source `lib/functions.sh` for logging/wait helpers
 - LXC deploys source `lib/lxc-deploy-common.sh` for SSH key resolution
+- All three FastAPI apps import shared auth/services from `lib/talos-common/` (`talos_common` package)
 - Each ArgoCD app has `application.yaml` + manifests or Helm values
 - Secrets always SOPS-encrypted with Age
 - Harbor images: `harbor.knowledgeondemand.net/cleanroom/<name>:<version>`
 - Build scripts follow `apps/loki/build-and-push.sh` pattern
 - Scan XML report format UUID: `a994b278-1f62-11e1-96ac-406186ea4fc5`
+- End-to-end deployment: see `DEPLOYMENT.md` at repo root

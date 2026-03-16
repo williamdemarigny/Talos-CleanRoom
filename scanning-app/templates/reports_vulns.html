@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Vulnerabilities - Talos CleanRoom Scanning Console{% endblock %}
+
+{% block content %}
+<div x-data="reportsVulns()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Vulnerabilities</h1>
+            <p class="text-gray-400">All discovered vulnerabilities with remediation tracking</p>
+        </div>
+        <div class="flex gap-2">
+            <a href="/api/export/vulns/csv" class="px-3 py-2 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600">Export CSV</a>
+            <a href="/api/export/vulns/json" class="px-3 py-2 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600">Export JSON</a>
+            <a href="/reports" class="text-cyan-400 hover:text-cyan-300 text-sm px-3 py-2">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-gray-800 rounded-lg p-4 mb-6 flex flex-wrap gap-4 items-end">
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Severity</label>
+            <select x-model="filterSeverity" class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="">All</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+                <option value="info">Info</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Remediation</label>
+            <select x-model="filterRemediation" class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="">All</option>
+                <option value="open">Open</option>
+                <option value="in_progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+                <option value="accepted">Accepted</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Scan ID</label>
+            <input type="text" x-model="filterScanId" placeholder="Filter by scan..."
+                   class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+        </div>
+        <button @click="fetchVulns()" class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700 text-sm">Apply</button>
+    </div>
+
+    <!-- Bulk Actions -->
+    <div class="bg-gray-800 rounded-lg p-4 mb-4 flex items-center gap-4" x-show="selectedVulns.length > 0">
+        <span class="text-sm text-gray-400"><span class="text-white font-bold" x-text="selectedVulns.length"></span> selected</span>
+        <select x-model="bulkStatus" class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-1 text-sm">
+            <option value="">Set status...</option>
+            <option value="in_progress">In Progress</option>
+            <option value="resolved">Resolved</option>
+            <option value="accepted">Accepted</option>
+            <option value="open">Open</option>
+        </select>
+        <button @click="bulkUpdate()" :disabled="!bulkStatus"
+                class="px-3 py-1 bg-cyan-600 text-white rounded text-sm disabled:opacity-50">Update</button>
+    </div>
+
+    <!-- Vulns Table -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700">
+                        <th class="text-left pb-3 w-8"><input type="checkbox" @change="toggleAll($event)" class="accent-cyan-500"></th>
+                        <th class="text-left pb-3">Name</th>
+                        <th class="text-left pb-3">Severity</th>
+                        <th class="text-left pb-3">CVE</th>
+                        <th class="text-left pb-3">Tool</th>
+                        <th class="text-left pb-3">Status</th>
+                        <th class="text-left pb-3">Scan</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="v in vulns" :key="v.id">
+                        <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                            <td class="py-3"><input type="checkbox" :value="v.id" x-model="selectedVulns" class="accent-cyan-500"></td>
+                            <td class="py-3 text-white" x-text="v.name"></td>
+                            <td class="py-3">
+                                <span class="px-2 py-1 rounded text-xs"
+                                      :class="{
+                                          'bg-red-600 text-white': v.severity === 'critical',
+                                          'bg-orange-600 text-white': v.severity === 'high',
+                                          'bg-yellow-600 text-white': v.severity === 'medium',
+                                          'bg-blue-600 text-white': v.severity === 'low',
+                                          'bg-gray-600 text-white': v.severity === 'info'
+                                      }"
+                                      x-text="v.severity"></span>
+                            </td>
+                            <td class="py-3 text-gray-400 font-mono text-xs" x-text="v.external_id || '-'"></td>
+                            <td class="py-3 text-gray-400 capitalize" x-text="v.tool_source || '-'"></td>
+                            <td class="py-3">
+                                <span class="px-2 py-1 rounded text-xs"
+                                      :class="{
+                                          'bg-red-600/30 text-red-300': v.remediation_status === 'open',
+                                          'bg-yellow-600/30 text-yellow-300': v.remediation_status === 'in_progress',
+                                          'bg-green-600/30 text-green-300': v.remediation_status === 'resolved',
+                                          'bg-blue-600/30 text-blue-300': v.remediation_status === 'accepted'
+                                      }"
+                                      x-text="v.remediation_status"></span>
+                            </td>
+                            <td class="py-3">
+                                <a :href="'/reports/scan/' + v.scan_id"
+                                   class="text-cyan-400 hover:text-cyan-300 font-mono text-xs" x-text="v.scan_id"></a>
+                            </td>
+                        </tr>
+                    </template>
+                    <tr x-show="vulns.length === 0">
+                        <td colspan="7" class="py-6 text-center text-gray-500">No vulnerabilities found.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <!-- Pagination -->
+        <div class="flex justify-between items-center mt-4" x-show="vulns.length > 0">
+            <button @click="prevPage()" :disabled="offset === 0"
+                    class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm disabled:opacity-50">Previous</button>
+            <span class="text-sm text-gray-400">Showing <span x-text="offset + 1"></span> - <span x-text="offset + vulns.length"></span></span>
+            <button @click="nextPage()" :disabled="vulns.length < pageSize"
+                    class="px-3 py-1 bg-gray-700 text-gray-300 rounded text-sm disabled:opacity-50">Next</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/reports.js"></script>
+{% endblock %}

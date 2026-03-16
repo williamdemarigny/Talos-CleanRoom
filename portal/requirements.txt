@@ -1,0 +1,13 @@
+# NOTE: talos-common is installed separately (see Dockerfile)
+# from lib/talos-common/ before this requirements file is processed.
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.6
+pydantic==2.5.3
+pydantic-settings==2.1.0
+jinja2==3.1.3
+aiofiles==23.2.1
+cryptography>=41.0.0

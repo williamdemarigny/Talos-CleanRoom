@@ -1,0 +1,42 @@
+# CleanRoom Database Network Policy
+# =============================================================================
+# PostgreSQL database that only needs:
+# - Ingress from scanning-console namespace (port 5432)
+# - Egress to DNS (name resolution)
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cleanroom-db-traffic
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cleanroom-db
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from scanning-console namespace (database access)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scanning-console
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

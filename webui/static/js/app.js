@@ -1,5 +1,35 @@
 // Main application JavaScript
 
+// Auto-redeem one-time code from Portal cross-domain auth
+(async function autoRedeemCode() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (!code) return;
+
+    try {
+        const response = await fetch('/api/auth/redeem-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            localStorage.setItem('access_token', data.access_token);
+            // Strip code from URL without reload
+            params.delete('code');
+            const cleanUrl = params.toString()
+                ? `${window.location.pathname}?${params}`
+                : window.location.pathname;
+            history.replaceState(null, '', cleanUrl);
+        } else {
+            window.location.href = '/login';
+        }
+    } catch (e) {
+        console.error('Code redemption error:', e);
+    }
+})();
+
 // Logout function
 async function logout() {
     try {
