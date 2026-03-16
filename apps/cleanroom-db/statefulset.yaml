@@ -22,6 +22,8 @@ spec:
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: security-platform
     spec:
+      securityContext:
+        fsGroup: 70          # postgres GID in alpine — Kubernetes chowns volumes to this GID
       # ============================================================
       # INIT CONTAINERS
       # ============================================================
@@ -58,9 +60,9 @@ spec:
       - name: postgres
         image: postgres:17-alpine
         securityContext:
+          runAsUser: 70
+          runAsGroup: 70
           allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
         env:
         - name: POSTGRES_USER
           value: "cleanroom"
