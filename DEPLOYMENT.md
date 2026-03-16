@@ -126,7 +126,52 @@ Use `--dry-run` to preview without writing files.
 
 ---
 
+## Automated vs Manual Deployment
+
+Steps 1–3 (prerequisites, clone, secrets) must be done manually. After that, you have two paths:
+
+### Option A: Automated (Recommended)
+
+```bash
+./scripts/DeployCluster.sh
+```
+
+`DeployCluster.sh` automates **steps 4–12** in a single run:
+
+| Step | What |
+|------|------|
+| 1 | Terraform VMs on Proxmox |
+| 2 | Talos config generation + encryption |
+| 3 | Apply configs + bootstrap cluster |
+| 4 | Cluster health verification |
+| 5 | kubeconfig retrieval |
+| 6 | ArgoCD installation |
+| 7 | Infrastructure stack (MetalLB, cert-manager, Traefik, Ceph CSI) |
+| 8 | ArgoCD self-management |
+| 9 | Apply application secrets |
+| 10 | Security tools (Harbor, OpenVAS, Faraday, Metasploit, Threat Dragon) |
+| 11 | Network policies |
+| 12 | CleanRoom DB + Scanning Console + Portal |
+
+**CLI options:**
+
+| Flag | Effect |
+|------|--------|
+| `--skip-terraform` | Skip VM provisioning (VMs already exist) |
+| `--skip-talos` | Skip Talos config + bootstrap (cluster already running) |
+| `--from-step N` | Resume from step N (1–12) |
+
+After the script completes, continue with **step 8 (DNS)** then jump to **step 12 (Build VM)** and follow steps 12–17 manually. Steps 4–7, 9–11, and 14–16 are already done.
+
+### Option B: Manual
+
+Follow every step below sequentially. The manual steps are useful for understanding what happens at each stage, debugging, or customizing individual components.
+
+---
+
 ## 4. Create Kubernetes VMs (Terraform)
+
+> *Skip if using `DeployCluster.sh` — covered by script steps 1–3.*
 
 ### Configure Credentials
 
@@ -168,6 +213,8 @@ This creates 4 VMs on Proxmox booting from the Talos ISO. VMs will be in mainten
 ---
 
 ## 5. Bootstrap Talos Kubernetes Cluster
+
+> *Skip if using `DeployCluster.sh` — covered by script steps 1–5.*
 
 ### Generate Talos Machine Configs
 
@@ -215,11 +262,13 @@ kubectl get nodes
 
 Expected output: 1 control-plane + 3 worker nodes in `Ready` state.
 
-> **Alternative:** `scripts/DeployCluster.sh` automates steps 4–9 as a single CLI workflow.
+> **Automated path:** `scripts/DeployCluster.sh` automates steps 4–12. See [Automated vs Manual Deployment](#automated-vs-manual-deployment) above.
 
 ---
 
 ## 6. Install ArgoCD
+
+> *Skip if using `DeployCluster.sh` — covered by script step 6.*
 
 ```bash
 # Create namespace
@@ -241,6 +290,8 @@ ArgoCD is now running but not yet accessible via ingress — that comes after Tr
 ---
 
 ## 7. Deploy Infrastructure Stack
+
+> *Skip if using `DeployCluster.sh` — covered by script steps 7–8.*
 
 This deploys the core infrastructure in dependency order:
 
@@ -305,6 +356,8 @@ See [docs/DNS-MAPPING.md](docs/DNS-MAPPING.md) for the complete IP and DNS refer
 
 ## 9. Apply Application Secrets
 
+> *Skip if using `DeployCluster.sh` — covered by script step 9.*
+
 Secrets were generated in Step 3 but not yet applied to the cluster. Decrypt and apply them now (before deploying the apps that reference them):
 
 ```bash
@@ -327,6 +380,8 @@ Use `--app <name>` to target one app: `./scripts/apply-secrets.sh --app metasplo
 ---
 
 ## 10. Deploy Security Tools
+
+> *Skip if using `DeployCluster.sh` — covered by script step 10.*
 
 Apply each ArgoCD Application. They auto-sync and self-heal.
 
@@ -375,6 +430,8 @@ done
 ---
 
 ## 11. Apply Network Policies
+
+> *Skip if using `DeployCluster.sh` — covered by script step 11.*
 
 Apply zero-trust network policies (default-deny per namespace with explicit allow rules):
 
@@ -473,6 +530,8 @@ Expected: `cleanroom/loki-rs-scanner`, `cleanroom/scanning-console`, `cleanroom/
 
 ## 14. Deploy CleanRoom Database
 
+> *Skip if using `DeployCluster.sh` — covered by script step 12.*
+
 PostgreSQL 17 backing the Scanning Console:
 
 ```bash
@@ -500,6 +559,8 @@ The database includes:
 
 ## 15. Deploy Scanning Console
 
+> *Skip if using `DeployCluster.sh` — covered by script step 12.*
+
 The Scanning Console provides vulnerability scanning (Nmap, OpenVAS, Metasploit, LOKI-RS IOC) with PostgreSQL persistence:
 
 ```bash
@@ -519,6 +580,8 @@ Verify at `https://scan.knowledgeondemand.net`.
 ---
 
 ## 16. Deploy Unified Portal
+
+> *Skip if using `DeployCluster.sh` — covered by script step 12.*
 
 The Portal is the landing page providing SSO across all three applications:
 
@@ -776,24 +839,27 @@ HEALTH:.status.health.status
 ```
 Proxmox Cluster (online)
     │
-    ├─ [3] generate-secrets.sh          → SOPS-encrypted K8s secrets
-    ├─ [4] terraform apply              → 4 Talos VMs on Proxmox
-    ├─ [5] talhelper + apply-configs.sh → Kubernetes cluster bootstrapped
+    ├─ [3]  generate-secrets.sh          → SOPS-encrypted K8s secrets
     │
-    ├─ [6] ArgoCD install               → GitOps controller
-    ├─ [7] deploy-ingress-stack.sh      → MetalLB, cert-manager, Traefik, Ceph CSI
-    ├─ [8] DNS records                  → *.knowledgeondemand.net → Traefik LB IP
+    │  ┌─── DeployCluster.sh automates steps 4–11, 14–16 ───┐
+    │  │                                                      │
+    ├─ [4]  terraform apply              → 4 Talos VMs        │
+    ├─ [5]  talhelper + apply-configs.sh → K8s bootstrapped   │
+    ├─ [6]  ArgoCD install               → GitOps controller  │
+    ├─ [7]  deploy-ingress-stack.sh      → MetalLB, certs,    │
+    │  │                                    Traefik, Ceph CSI  │
+    ├─ [9]  apply-secrets.sh             → App secrets to K8s  │
+    ├─ [10] Security tool ArgoCD apps    → Harbor, OpenVAS,    │
+    │  │                                    Faraday, etc.      │
+    ├─ [11] Network policies             → Zero-trust          │
+    ├─ [14] CleanRoom DB                 → PostgreSQL 17       │
+    ├─ [15] Scanning Console             → Scanning web app    │
+    ├─ [16] Portal                       → SSO landing page    │
+    │  │                                                      │
+    │  └──────────────────────────────────────────────────────┘
     │
-    ├─ [9] apply-secrets.sh             → Decrypt + apply all app secrets to K8s
-    ├─ [10] Security tool ArgoCD apps   → Harbor, OpenVAS, Faraday, Metasploit, Threat Dragon
-    ├─ [11] Network policies            → Zero-trust namespace isolation
-    │
-    ├─ [12] Build VM LXC               → Docker build environment
-    ├─ [13] Image builds                → LOKI-RS, scanning-console, portal → Harbor
-    │
-    ├─ [14] CleanRoom DB               → PostgreSQL 17 StatefulSet
-    ├─ [15] Scanning Console            → Vulnerability scanning web app
-    ├─ [16] Portal                      → Unified landing page + SSO
-    │
-    └─ [17] Deployment Console LXC      → Cluster lifecycle web UI
+    ├─ [8]  DNS records                  → *.knowledgeondemand.net (manual)
+    ├─ [12] Build VM LXC                 → Docker build environment (manual)
+    ├─ [13] Image builds                 → LOKI-RS, scanning-console, portal (manual)
+    └─ [17] Deployment Console LXC       → Cluster lifecycle web UI (manual)
 ```
