@@ -1,16 +1,16 @@
-# Talos CleanRoom Deployment Web UI
+# Talos CleanRoom Deployment Console
 
-A standalone web application for deploying and monitoring Talos Kubernetes clusters, with integrated security scanning capabilities. This web UI provides a graphical interface for cluster provisioning, vulnerability scanning, and IOC detection.
+A standalone web application for deploying and monitoring Talos Kubernetes clusters. This console provides a graphical interface for cluster provisioning and lifecycle management.
+
+> **Note:** Security scanning (Nmap, OpenVAS, Metasploit, LOKI-RS) has moved to the [Scanning Console](../scanning-app/), which runs in-cluster as a K8s deployment. See `docs/vuln-management-plan.md` for details.
 
 ## Features
 
 - **User Authentication**: JWT-based authentication with configurable credentials
 - **Configuration Editor**: View and manage cluster configuration (Terraform and Talos)
 - **Real-time Deployment Monitoring**: WebSocket-based live updates during deployment
-- **Security Scanning**: Multi-tool scanning with Nmap, OpenVAS, and Metasploit
-- **IOC Scanning**: LOKI-RS-based Indicator of Compromise detection on remote filesystems
-- **Faraday Integration**: Scan results automatically uploaded to Faraday for centralized management
-- **Log Streaming**: Real-time log output from deployment steps and scan progress
+- **Cross-Domain Auth**: One-time code exchange for SSO with Scanning Console and Portal
+- **Log Streaming**: Real-time log output from deployment steps
 - **Dependency Checking**: Verify all required tools are installed before deployment
 
 ## Deployment Options
@@ -169,37 +169,28 @@ webui/
 │   ├── models/
 │   │   ├── config.py                # Configuration data models
 │   │   ├── deployment.py            # Deployment state models
-│   │   ├── scan.py                  # Security scan models
-│   │   └── ioc_scan.py              # IOC scan models
+│   │   └── common.py                # Shared base models
 │   ├── services/
 │   │   ├── deployment_service.py    # Deployment orchestration
 │   │   ├── config_service.py        # Configuration management
-│   │   ├── scan_service.py          # Multi-tool security scanning
-│   │   ├── ioc_scan_service.py      # LOKI-RS IOC scanning
 │   │   └── process_manager.py       # Subprocess execution
 │   └── routers/
 │       ├── auth.py                  # Authentication endpoints
 │       ├── config.py                # Configuration endpoints
 │       ├── deployment.py            # Deployment endpoints
-│       ├── scan.py                  # Security scan endpoints + WebSocket
-│       ├── ioc_scan.py              # IOC scan endpoints + WebSocket
 │       └── websocket.py             # Deployment WebSocket
 ├── static/
 │   ├── css/custom.css               # Tailwind custom utilities
 │   └── js/
 │       ├── app.js                   # Shared utilities (auth, fetch, formatting)
 │       ├── deployment.js            # Deployment monitor component
-│       ├── scan.js                  # Security scan manager component
-│       ├── ioc_scan.js              # IOC scan manager component
 │       └── websocket.js             # WebSocket connection manager
 ├── templates/
-│   ├── base.html                    # Layout with nav (Dashboard, Config, Deploy, Scan, IOC Scan, Logs)
+│   ├── base.html                    # Layout with nav (Dashboard, Config, Deploy, Logs)
 │   ├── login.html                   # Authentication form
 │   ├── dashboard.html               # Status overview
 │   ├── config.html                  # Terraform/Talos config editor
 │   ├── deployment.html              # Deployment progress monitor
-│   ├── scan.html                    # Security scanner (Nmap, OpenVAS, Metasploit)
-│   ├── ioc_scan.html                # IOC scanner (LOKI-RS via SSH/SMB mounts)
 │   └── logs.html                    # Paginated log viewer
 ├── terraform/                       # LXC container Terraform config
 ├── scripts/
@@ -235,24 +226,8 @@ webui/
 - `GET /api/deployment/credentials` - Get service credentials
 - `POST /api/deployment/cleanup` - Run terraform destroy
 
-### Security Scanning
-- `POST /api/scan/start` - Start Nmap/OpenVAS/Metasploit scan
-- `POST /api/scan/abort` - Abort running scan
-- `GET /api/scan/status` - Get scan status with per-tool states
-- `GET /api/scan/history` - Get past scan results
-- `GET /api/scan/modules` - Get available Metasploit modules
-- `GET /api/scan/openvas-configs` - Get OpenVAS scan configurations
-- `GET /api/scan/openvas-families` - Get OpenVAS NVT families
-- `GET /api/scan/logs` - Get scan logs (filterable by tool)
-- `WS /api/scan/ws` - WebSocket for real-time scan updates
-
-### IOC Scanning
-- `POST /api/ioc-scan/start` - Start LOKI-RS IOC scan
-- `POST /api/ioc-scan/abort` - Abort running IOC scan
-- `GET /api/ioc-scan/status` - Get IOC scan status + findings
-- `GET /api/ioc-scan/history` - Get past IOC scan results
-- `GET /api/ioc-scan/logs` - Get IOC scan logs
-- `WS /api/ioc-scan/ws` - WebSocket for real-time IOC scan updates
+### Cross-Domain Auth
+- `POST /api/auth/redeem-code` - Redeem one-time auth code (from Portal SSO)
 
 ### System
 - `GET /api/system/health` - Health check
@@ -268,33 +243,7 @@ webui/
 | Dashboard | `/` | Status overview, dependency checks, quick actions |
 | Configuration | `/config` | Terraform/Talos config viewer and editor |
 | Deployment | `/deployment` | Real-time deployment progress with step tracker |
-| Security Scan | `/scan` | Multi-tool scanner (Nmap, OpenVAS, Metasploit) |
-| IOC Scan | `/ioc-scan` | LOKI-RS IOC detection on remote filesystems (SSH/SMB) |
 | Logs | `/logs` | Paginated deployment log viewer |
-
-## Security Scanning
-
-### Scan Tab
-
-Run vulnerability scans against targets using multiple tools simultaneously:
-
-- **Nmap**: Network discovery and port scanning (quick/standard/thorough profiles)
-- **OpenVAS**: Comprehensive vulnerability assessment (runs in the cluster's OpenVAS pod)
-- **Metasploit**: Exploit verification with ~39 vulnerability modules (EternalBlue, BlueKeep, Heartbleed, Log4Shell, etc.)
-
-Scan profiles control the depth: Quick (top 100 ports), Standard (-sV -sC), Thorough (all ports with -A).
-
-Results are automatically uploaded to Faraday for centralized vulnerability management.
-
-### IOC Scan Tab
-
-Scan remote filesystems for Indicators of Compromise using LOKI-RS:
-
-- **Mount types**: SSH (sshfs) or SMB (cifs) remote filesystem mounting
-- **Detection**: YARA rules, hash IOCs, filename patterns, C2 back-connect detection
-- **Execution**: Runs as an ephemeral Kubernetes pod in the `loki-scanner` namespace
-- **Image**: `harbor.knowledgeondemand.net/cleanroom/loki-rs-scanner:v2.10.0` (self-hosted)
-- **Results**: Findings displayed with severity (alert/warning/notice) and uploaded to Faraday
 
 ## Deployment Steps
 
@@ -352,10 +301,6 @@ The web UI orchestrates a 16-step cluster deployment:
   ```bash
   python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('your-password'))"
   ```
-
-**IOC scan fails with ImagePullBackOff**
-- Ensure Harbor is deployed and the LOKI-RS image has been pushed
-- Verify `harbor-pull-secret` exists in the `loki-scanner` namespace
 
 ### Viewing Logs
 

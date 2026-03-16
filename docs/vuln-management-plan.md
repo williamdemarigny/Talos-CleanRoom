@@ -1,5 +1,7 @@
 # Plan: Split WebUI into Deployment Console + K8s Scanning Console
 
+> **Status: Implemented** (Phases 1–8 complete on `refactor/restructure` branch)
+
 ## Context
 
 The monolithic WebUI (LXC container) currently handles both cluster deployment AND security scanning. This plan splits it into three independent applications:

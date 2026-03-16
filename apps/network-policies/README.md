@@ -11,13 +11,16 @@ NetworkPolicies implement zero-trust networking principles by:
 
 ## Policy Overview
 
-| Namespace     | Default Policy | Ingress Allowed From | Egress Allowed To |
-|---------------|---------------|---------------------|-------------------|
-| faraday       | deny-all      | traefik             | postgres (local), metasploit |
-| openvas       | deny-all      | traefik             | internet (feed sync), DNS |
-| threat-dragon | deny-all      | traefik             | DNS only |
-| metasploit    | deny-all      | faraday             | any (pentesting requirement) |
-| argocd        | deny-all      | traefik             | git repos, k8s API, DNS |
+| Namespace          | Default Policy | Ingress Allowed From       | Egress Allowed To |
+|--------------------|---------------|---------------------------|-------------------|
+| faraday            | deny-all      | traefik                   | postgres (local), metasploit |
+| openvas            | deny-all      | traefik                   | internet (feed sync), DNS |
+| threat-dragon      | deny-all      | traefik                   | DNS only |
+| metasploit         | deny-all      | faraday                   | any (pentesting requirement) |
+| argocd             | deny-all      | traefik                   | git repos, k8s API, DNS |
+| scanning-console   | deny-all      | traefik                   | cleanroom-db, openvas, faraday, metasploit, loki-scanner, nmap-scanner, K8s API, DNS |
+| portal             | deny-all      | traefik                   | DNS only |
+| cleanroom-db       | deny-all      | scanning-console          | DNS only |
 
 ## Deployment
 

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Scan {{ scan_id }} - Talos CleanRoom Scanning Console{% endblock %}
+
+{% block content %}
+<div x-data="reportsScanDetail('{{ scan_id }}')" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Scan Detail: <span class="font-mono text-cyan-400">{{ scan_id }}</span></h1>
+            <p class="text-gray-400" x-text="scan ? scan.scan_type + ' scan against ' + scan.target : 'Loading...'"></p>
+        </div>
+        <div class="flex gap-2">
+            <a :href="'/api/export/scan/' + scanId + '/json'" class="px-3 py-2 bg-gray-700 text-gray-300 rounded text-sm hover:bg-gray-600">Export JSON</a>
+            <a href="/reports" class="text-cyan-400 hover:text-cyan-300 text-sm px-3 py-2">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <template x-if="scan">
+        <div>
+            <!-- Scan Info -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-6">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-400">Type</span>
+                        <div class="text-white capitalize mt-1" x-text="scan.scan_type"></div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">Profile</span>
+                        <div class="text-white capitalize mt-1" x-text="scan.profile || scan.mount_type || '-'"></div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">Status</span>
+                        <div class="mt-1">
+                            <span class="px-2 py-1 rounded text-xs"
+                                  :class="{
+                                      'bg-green-600 text-white': scan.status === 'completed',
+                                      'bg-red-600 text-white': scan.status === 'failed',
+                                      'bg-yellow-600 text-white': scan.status === 'running',
+                                      'bg-gray-600 text-white': true
+                                  }"
+                                  x-text="scan.status"></span>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">Started</span>
+                        <div class="text-white mt-1" x-text="scan.started_at ? new Date(scan.started_at).toLocaleString() : '-'"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hosts -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-6" x-show="scan.hosts && scan.hosts.length > 0">
+                <h2 class="text-lg font-medium text-white mb-4">
+                    Hosts (<span x-text="scan.hosts.length"></span>)
+                </h2>
+                <div class="space-y-3">
+                    <template x-for="host in scan.hosts" :key="host.id">
+                        <div class="bg-gray-700/50 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-white font-mono" x-text="host.ip"></span>
+                                <span class="text-sm text-gray-400" x-text="host.os || ''"></span>
+                            </div>
+                            <!-- Services -->
+                            <div x-show="host.services.length > 0" class="mb-2">
+                                <span class="text-xs text-gray-500">Services:</span>
+                                <div class="flex flex-wrap gap-1 mt-1">
+                                    <template x-for="svc in host.services" :key="svc.id">
+                                        <span class="px-2 py-0.5 bg-gray-600 rounded text-xs text-gray-300"
+                                              x-text="svc.port + '/' + svc.protocol + (svc.name ? ' (' + svc.name + ')' : '')"></span>
+                                    </template>
+                                </div>
+                            </div>
+                            <!-- Vulns -->
+                            <div x-show="host.vulnerabilities.length > 0">
+                                <span class="text-xs text-gray-500">Vulnerabilities:</span>
+                                <div class="space-y-1 mt-1">
+                                    <template x-for="v in host.vulnerabilities" :key="v.id">
+                                        <div class="flex items-center gap-2 text-xs">
+                                            <span class="px-1.5 py-0.5 rounded"
+                                                  :class="{
+                                                      'bg-red-600 text-white': v.severity === 'critical',
+                                                      'bg-orange-600 text-white': v.severity === 'high',
+                                                      'bg-yellow-600 text-white': v.severity === 'medium',
+                                                      'bg-blue-600 text-white': v.severity === 'low',
+                                                      'bg-gray-600 text-white': v.severity === 'info'
+                                                  }"
+                                                  x-text="v.severity"></span>
+                                            <span class="text-gray-300" x-text="v.name"></span>
+                                            <span class="text-gray-500 font-mono" x-text="v.external_id || ''"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- IOC Findings -->
+            <div class="bg-gray-800 rounded-lg p-6 mb-6" x-show="scan.ioc_findings && scan.ioc_findings.length > 0">
+                <h2 class="text-lg font-medium text-white mb-4">
+                    IOC Findings (<span x-text="scan.ioc_findings.length"></span>)
+                </h2>
+                <div class="space-y-2">
+                    <template x-for="f in scan.ioc_findings" :key="f.id">
+                        <div class="bg-gray-700/50 rounded-lg p-3 flex items-start justify-between">
+                            <div>
+                                <span class="px-2 py-0.5 rounded text-xs mr-2"
+                                      :class="{
+                                          'bg-red-600 text-white': f.severity === 'alert',
+                                          'bg-yellow-600 text-white': f.severity === 'warning',
+                                          'bg-cyan-600 text-white': f.severity === 'notice'
+                                      }"
+                                      x-text="f.severity"></span>
+                                <span class="text-white text-sm" x-text="f.rule_name || 'IOC Match'"></span>
+                                <div class="text-xs text-gray-400 mt-1" x-text="f.file_path"></div>
+                            </div>
+                            <span class="text-sm text-gray-500" x-text="'Score: ' + f.score"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Error -->
+            <div class="bg-red-900/30 border border-red-600 rounded-lg p-6" x-show="scan.error_message">
+                <h2 class="text-lg font-medium text-red-300 mb-2">Error</h2>
+                <p class="text-red-200" x-text="scan.error_message"></p>
+            </div>
+        </div>
+    </template>
+
+    <div x-show="!scan" class="text-center text-gray-500 py-12">Loading scan details...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/reports_detail.js"></script>
+{% endblock %}

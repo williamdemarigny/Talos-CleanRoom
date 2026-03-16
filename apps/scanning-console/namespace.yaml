@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scanning-console
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: security-console
+    # Pod Security Standards: baseline (web application, no special privileges)
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

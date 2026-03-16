@@ -1,0 +1,35 @@
+# CleanRoom Database - Persistent Volume Claims
+---
+# Main database storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cleanroom-db-data
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: ceph-rbd
+---
+# Backup storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cleanroom-db-backup
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: ceph-rbd

@@ -1,0 +1,6 @@
+/* Custom styles for Talos CleanRoom Portal */
+
+/* Smooth hover transitions */
+.hover\:bg-gray-750:hover {
+    background-color: rgb(42, 48, 60);
+}

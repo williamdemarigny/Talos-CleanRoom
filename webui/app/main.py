@@ -6,9 +6,15 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
 from pathlib import Path
 
+import talos_common
 from app.config import get_settings, Settings
-from app.routers import auth, deployment, config, websocket, scan, ioc_scan
+from app.routers import auth, deployment, config, websocket
+from talos_common.routers.exchange import router as exchange_router
 from app.auth import get_current_user_optional
+
+# Initialize talos_common with our settings getter so shared modules
+# (auth dependencies, routers) can resolve settings via Depends().
+talos_common.init(get_settings)
 
 # Application root directory
 APP_DIR = Path(__file__).parent
@@ -29,10 +35,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(exchange_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(deployment.router, prefix="/api/deployment", tags=["Deployment"])
 app.include_router(config.router, prefix="/api/config", tags=["Configuration"])
-app.include_router(scan.router, prefix="/api/scan", tags=["Scan"])
-app.include_router(ioc_scan.router, prefix="/api/ioc-scan", tags=["IOC Scan"])
 app.include_router(websocket.router, tags=["WebSocket"])
 
 
@@ -75,30 +80,6 @@ async def deployment_page(request: Request, user: dict = Depends(get_current_use
         "request": request,
         "user": user,
         "page": "deployment"
-    })
-
-
-@app.get("/scan")
-async def scan_page(request: Request, user: dict = Depends(get_current_user_optional)):
-    """Render the security scanner page."""
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse("scan.html", {
-        "request": request,
-        "user": user,
-        "page": "scan"
-    })
-
-
-@app.get("/ioc-scan")
-async def ioc_scan_page(request: Request, user: dict = Depends(get_current_user_optional)):
-    """Render the IOC scanner page."""
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse("ioc_scan.html", {
-        "request": request,
-        "user": user,
-        "page": "ioc_scan"
     })
 
 

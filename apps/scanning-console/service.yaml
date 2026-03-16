@@ -1,0 +1,17 @@
+# Scanning Console - Service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scanning-console
+  namespace: scanning-console
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: security-console
+spec:
+  selector:
+    app.kubernetes.io/name: scanning-console
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http

@@ -1,22 +1,21 @@
-"""Application configuration using Pydantic settings."""
+"""Application configuration using Pydantic settings.
+
+Inherits shared auth/crypto fields from ``BaseAppSettings`` and adds
+deployment-specific fields (repo_root, master_node, node_ips, etc.).
+"""
 
 from pathlib import Path
-from pydantic_settings import BaseSettings
 from functools import lru_cache
 
+from talos_common.config_base import BaseAppSettings
 
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+
+class Settings(BaseAppSettings):
+    """Deployment Console settings loaded from environment variables."""
 
     # Application
     app_name: str = "Talos CleanRoom Deployment"
     debug: bool = False
-
-    # Authentication
-    admin_username: str = "admin"
-    admin_password_hash: str = "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4xL4FXvQsZI5EjBi"  # Default: admin
-    secret_key: str = "change-this-in-production-use-openssl-rand-hex-32"
-    access_token_expire_hours: int = 8
 
     # Repository
     repo_root: Path = Path("/repo")

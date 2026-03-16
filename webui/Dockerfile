@@ -1,5 +1,8 @@
 # Talos CleanRoom Deployment Web UI
 # Multi-stage build for smaller image
+#
+# Build context must be the REPO ROOT (not webui/):
+#   docker build -f webui/Dockerfile -t deployment-webui .
 
 FROM python:3.11-slim as builder
 
@@ -10,8 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Install shared library first (separate layer for caching)
+COPY lib/talos-common /tmp/talos-common
+RUN pip install --no-cache-dir --user /tmp/talos-common
+
 # Install Python dependencies
-COPY requirements.txt .
+COPY webui/requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Production image
@@ -64,9 +71,9 @@ COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
 # Copy application files
-COPY app/ ./app/
-COPY static/ ./static/
-COPY templates/ ./templates/
+COPY webui/app/ ./app/
+COPY webui/static/ ./static/
+COPY webui/templates/ ./templates/
 
 # Create mount point for repository
 VOLUME ["/repo"]

@@ -1,3 +1,5 @@
+# NOTE: talos-common is installed separately (see setup-lxc.sh / Dockerfile)
+# from lib/talos-common/ before this requirements file is processed.
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 python-jose[cryptography]==3.3.0

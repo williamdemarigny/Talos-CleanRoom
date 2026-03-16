@@ -1,10 +1,12 @@
-# Technical Architecture: LXC WebUI
+# Technical Architecture: LXC Deployment Console
 
-This document provides technical details on how the LXC container delivers the Talos CleanRoom deployment WebUI. For setup and usage instructions, see [README.md](README.md).
+This document provides technical details on how the LXC container delivers the Talos CleanRoom Deployment Console. For setup and usage instructions, see [README.md](README.md).
+
+> **Note:** Security scanning has moved to the [Scanning Console](../scanning-app/) (runs in K8s). This document covers deployment/cluster-lifecycle only.
 
 ## Overview
 
-The WebUI runs as a FastAPI application inside a Debian 12 LXC container on Proxmox. The container is provisioned via Terraform and configured with a systemd service that exposes the application on port 8000.
+The Deployment Console runs as a FastAPI application inside a Debian 12 LXC container on Proxmox. The container is provisioned via Terraform and configured with a systemd service that exposes the application on port 8000.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -124,20 +126,15 @@ app/
 ├── models/
 │   ├── config.py           # TerraformConfig, TalosEnvConfig, validation models
 │   ├── deployment.py       # DeploymentState, DeploymentStep, LogEntry
-│   ├── scan.py             # ScanRequest, ScanToolState, ScanProfile, ScanTool
-│   └── ioc_scan.py         # IocScanRequest, IocFinding, MountType, IocSeverity
+│   └── common.py           # Shared base models (BaseStatus, BaseLogEntry)
 ├── routers/
-│   ├── auth.py             # POST /api/auth/login, logout, me
+│   ├── auth.py             # POST /api/auth/login, logout, me, redeem-code
 │   ├── config.py           # GET/PUT /api/config/*
 │   ├── deployment.py       # POST /api/deployment/start, abort, cleanup
-│   ├── scan.py             # POST /api/scan/start, abort + WS /api/scan/ws
-│   ├── ioc_scan.py         # POST /api/ioc-scan/start, abort + WS /api/ioc-scan/ws
 │   └── websocket.py        # WS /ws/deployment
 └── services/
     ├── config_service.py       # Terraform/Talos config parsing & validation
     ├── deployment_service.py   # 16-step deployment orchestration
-    ├── scan_service.py         # Multi-tool security scanning (Nmap/OpenVAS/MSF)
-    ├── ioc_scan_service.py     # LOKI-RS IOC scanning via K8s pods
     └── process_manager.py      # Async subprocess execution with streaming
 ```
 
@@ -170,15 +167,13 @@ Browser updates UI in real-time
 
 ### WebSocket Connections
 
-Three WebSocket endpoints serve real-time updates:
+One WebSocket endpoint serves real-time deployment updates:
 
 | Endpoint | Manager | Purpose |
 |----------|---------|---------|
 | `WS /ws/deployment` | `ConnectionManager` | Deployment log streaming + step updates |
-| `WS /api/scan/ws` | `ScanConnectionManager` | Security scan progress + per-tool states |
-| `WS /api/ioc-scan/ws` | `IocScanConnectionManager` | IOC scan progress + findings |
 
-All use a connection manager pattern with broadcast to all connected clients:
+Uses a connection manager pattern with broadcast to all connected clients:
 
 ```python
 class ConnectionManager:
@@ -212,57 +207,16 @@ The `DeploymentService` manages 16 sequential steps:
 
 Each step executes via `ProcessManager`, which streams stdout/stderr to connected WebSocket clients. State is persisted to disk with Fernet encryption (survives webapp restarts).
 
-### Security Scanning Architecture
-
-```
-Browser (scan.html)
-     ↓
-POST /api/scan/start { target, tools: [nmap, openvas, metasploit], profile }
-     ↓
-ScanService._run_scan()
-     ├── _run_nmap()      → kubectl run nmap pod → parse XML → upload to Faraday
-     ├── _run_openvas()   → kubectl exec in openvas pod → create task → poll → XML → Faraday
-     └── _run_metasploit() → kubectl exec in msf pod → run modules → parse output → Faraday
-     ↓
-Results broadcast via WS /api/scan/ws
-```
-
-### IOC Scanning Architecture
-
-```
-Browser (ioc_scan.html)
-     ↓
-POST /api/ioc-scan/start { target, mount_type: ssh|smb, credentials }
-     ↓
-IocScanService._run_scan()
-     ↓
-kubectl run loki-scan-<id>
-  → Container: harbor.knowledgeondemand.net/cleanroom/loki-rs-scanner:v2.10.0
-  → Privileged pod (FUSE mount required)
-  → Mounts remote FS via sshfs or mount.cifs
-  → Runs LOKI-RS with JSONL output
-     ↓
-kubectl logs loki-scan-<id>
-     ↓
-Parse JSONL → IocFinding[] (severity scored: alert ≥80, warning ≥60, notice <60)
-     ↓
-Upload to Faraday (host + vulns via REST API)
-     ↓
-Results broadcast via WS /api/ioc-scan/ws
-```
-
 ## Frontend Architecture
 
 ### Templates (Jinja2)
 
 | Template | Purpose |
 |----------|---------|
-| `base.html` | Layout, nav (Dashboard/Config/Deploy/Scan/IOC Scan/Logs), CDN imports |
+| `base.html` | Layout, nav (Dashboard/Config/Deploy/Logs), CDN imports |
 | `dashboard.html` | Status overview, dependency checks, quick actions |
 | `config.html` | Terraform/Talos config editor with tabs |
 | `deployment.html` | Live deployment progress with step tracker |
-| `scan.html` | Multi-tool security scanner (Nmap, OpenVAS, Metasploit) |
-| `ioc_scan.html` | LOKI-RS IOC scanner with SSH/SMB mount config |
 | `logs.html` | Paginated log viewer with step filtering |
 | `login.html` | Authentication form |
 
@@ -272,8 +226,6 @@ Results broadcast via WS /api/ioc-scan/ws
 |------|-----------|---------|
 | `app.js` | (shared) | Auth utilities, fetch wrappers, formatting |
 | `deployment.js` | `deploymentMonitor` | Deployment progress, WebSocket + REST polling |
-| `scan.js` | `scanManager` | Tool selection, profiles, scan lifecycle |
-| `ioc_scan.js` | `iocScanManager` | Mount config, credentials, findings display |
 | `websocket.js` | `DeploymentWebSocket` | WebSocket connection with auto-reconnect |
 
 ### Styling
@@ -295,10 +247,6 @@ Tailwind CSS via CDN with custom utilities in `static/css/custom.css`.
 |------|---------|
 | `app/main.py` | FastAPI initialization + page routes |
 | `app/services/deployment_service.py` | 16-step deployment orchestration |
-| `app/services/scan_service.py` | Multi-tool security scanning |
-| `app/services/ioc_scan_service.py` | LOKI-RS IOC scanning via K8s pods |
-| `app/routers/scan.py` | Scan REST API + WebSocket |
-| `app/routers/ioc_scan.py` | IOC scan REST API + WebSocket |
 | `scripts/setup-lxc.sh` | Container setup script |
 | `terraform/main.tf` | LXC resource definition |
 | `deploy-lxc.sh` | Automated deployment script |

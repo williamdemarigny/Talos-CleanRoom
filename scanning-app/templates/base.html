@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Talos CleanRoom Scanning Console{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/@alpinejs/collapse@3.14.9/dist/cdn.min.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/css/custom.css">
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    {% if user %}
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <span class="text-xl font-bold text-cyan-400">Talos CleanRoom</span>
+                        <span class="text-sm text-gray-500 ml-2">Scanning Console</span>
+                    </div>
+                    <div class="ml-10 flex items-baseline space-x-4">
+                        <a href="/scan" class="{% if page == 'scan' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                            Scan
+                        </a>
+                        <a href="/ioc-scan" class="{% if page == 'ioc_scan' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                            IOC Scan
+                        </a>
+                        <a href="/reports" class="{% if page == 'reports' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %} px-3 py-2 rounded-md text-sm font-medium">
+                            Reports
+                        </a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <span class="text-gray-400 mr-4">{{ user.username }}</span>
+                    <button onclick="logout()" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/websocket-base.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

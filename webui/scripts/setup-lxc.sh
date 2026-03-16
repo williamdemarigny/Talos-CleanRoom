@@ -156,6 +156,12 @@ source venv/bin/activate
 
 pip install --upgrade pip
 
+# Install shared library from repo (must be before requirements.txt)
+if [ -d "$REPO_PATH/lib/talos-common" ]; then
+    echo "Installing talos-common shared library..."
+    pip install -e "$REPO_PATH/lib/talos-common"
+fi
+
 if [ -f "requirements.txt" ]; then
     pip install -r requirements.txt
 else

@@ -6,6 +6,7 @@ A Debian 12 LXC container on Proxmox for building and pushing Docker images to t
 
 The build VM provides a Docker-capable environment for:
 - Building the LOKI-RS IOC scanner container image
+- Building the Scanning Console and Portal container images
 - Pushing images to Harbor (`harbor.knowledgeondemand.net`)
 - Creating Harbor projects and Kubernetes pull secrets via the `build-and-push.sh` script
 
@@ -18,12 +19,24 @@ cd build-vm
 
 Follow the prompts to enter Proxmox credentials, SSH key path, and kubeconfig path. The script handles everything: LXC creation, Docker CE installation, kubectl setup, repo clone, and secret copying.
 
-Once deployed, build and push the LOKI-RS image:
+Once deployed, build and push images:
 
 ```bash
 ssh deploy@10.83.3.191
+
+# LOKI-RS IOC scanner
 cd /opt/talos-cleanroom/apps/loki
 ./build-and-push.sh
+
+# Scanning Console
+cd /opt/talos-cleanroom/scanning-app
+docker build -t harbor.knowledgeondemand.net/cleanroom/scanning-console:latest .
+docker push harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+
+# Portal
+cd /opt/talos-cleanroom/portal
+docker build -t harbor.knowledgeondemand.net/cleanroom/portal:latest .
+docker push harbor.knowledgeondemand.net/cleanroom/portal:latest
 ```
 
 ## Container Specifications
