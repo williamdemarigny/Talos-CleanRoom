@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install shared library first (separate layer for caching)
 COPY lib/talos-common /tmp/talos-common
-RUN pip install --no-cache-dir --user /tmp/talos-common
+RUN pip install --no-cache-dir --prefix=/install /tmp/talos-common
 
 # Install Python dependencies
 COPY portal/requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # Production image
 FROM python:3.11-slim
@@ -32,9 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+# Copy Python packages from builder (to system paths, accessible by non-root user)
+COPY --from=builder /install /usr/local
 
 # Copy application files
 COPY portal/app/ ./app/
