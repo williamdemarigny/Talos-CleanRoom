@@ -399,6 +399,17 @@ if should_run_step 12; then
     done
     echo ""
 
+    # Create Harbor pull secrets for namespaces that pull from private registry
+    print_info "Creating Harbor pull secrets..."
+    for ns in scanning-console portal loki-scanner; do
+        kubectl create secret docker-registry harbor-pull-secret \
+            --namespace="$ns" \
+            --docker-server=harbor.knowledgeondemand.net \
+            --docker-username=admin \
+            --docker-password=Harbor12345 \
+            2>/dev/null || print_info "  harbor-pull-secret already exists in $ns"
+    done
+
     # Scanning Console
     print_info "Deploying Scanning Console..."
     kubectl apply -f apps/scanning-console/application.yaml || print_warning "Failed to deploy Scanning Console"
