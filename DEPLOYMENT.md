@@ -297,6 +297,7 @@ This deploys the core infrastructure in dependency order:
 
 ```bash
 cd apps
+chmod +x deploy-ingress-stack.sh
 ./deploy-ingress-stack.sh
 ```
 
@@ -453,6 +454,7 @@ The Build VM is a Proxmox LXC container with Docker CE for building and pushing 
 
 ```bash
 cd build-vm
+chmod +x deploy-lxc.sh
 ./deploy-lxc.sh
 ```
 
@@ -493,6 +495,7 @@ cd /opt/talos-cleanroom
 
 ```bash
 cd apps/loki
+chmod +x build-and-push.sh
 ./build-and-push.sh
 ```
 
@@ -504,17 +507,19 @@ This script:
 
 ### Scanning Console
 
+Both Scanning Console and Portal require the **repo root** as the Docker build context (they depend on `lib/talos-common`):
+
 ```bash
-cd /opt/talos-cleanroom/scanning-app
-docker build -t harbor.knowledgeondemand.net/cleanroom/scanning-console:latest .
+cd /opt/talos-cleanroom
+docker build -f scanning-app/Dockerfile -t harbor.knowledgeondemand.net/cleanroom/scanning-console:latest .
 docker push harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
 ```
 
 ### Portal
 
 ```bash
-cd /opt/talos-cleanroom/portal
-docker build -t harbor.knowledgeondemand.net/cleanroom/portal:latest .
+cd /opt/talos-cleanroom
+docker build -f portal/Dockerfile -t harbor.knowledgeondemand.net/cleanroom/portal:latest .
 docker push harbor.knowledgeondemand.net/cleanroom/portal:latest
 ```
 
@@ -605,6 +610,7 @@ The Deployment Console runs in a Proxmox LXC container and provides a web UI for
 
 ```bash
 cd webui
+chmod +x deploy-lxc.sh
 ./deploy-lxc.sh
 ```
 
