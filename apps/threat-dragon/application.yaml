@@ -16,7 +16,7 @@ spec:
     directory:
       recurse: false
       include: '*.yaml'
-      exclude: 'application.yaml'
+      exclude: '{application.yaml,*.sops.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: threat-dragon

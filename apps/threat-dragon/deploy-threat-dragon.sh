@@ -45,8 +45,17 @@ echo ""
 
 # Apply secrets (should be done before ArgoCD syncs)
 echo "[3/4] Applying secrets..."
-kubectl apply -f "${SCRIPT_DIR}/secrets.yaml"
-echo "Secrets applied"
+if [[ -f "${SCRIPT_DIR}/secrets.sops.yaml" ]]; then
+    sops -d "${SCRIPT_DIR}/secrets.sops.yaml" | kubectl apply -f -
+    echo "Secrets applied (SOPS-decrypted)"
+elif [[ -f "${SCRIPT_DIR}/secrets.yaml" ]]; then
+    echo "Warning: Using unencrypted secrets (encrypt with SOPS for production)"
+    kubectl apply -f "${SCRIPT_DIR}/secrets.yaml"
+    echo "Secrets applied (unencrypted)"
+else
+    echo "Error: No secrets file found. Run generate-secrets.sh first."
+    exit 1
+fi
 echo ""
 
 # Deploy via ArgoCD
@@ -84,7 +93,6 @@ echo "  Add DNS record for threatdragon.knowledgeondemand.net"
 echo "  pointing to your Traefik LoadBalancer IP"
 echo ""
 echo "IMPORTANT: Update secrets before production use!"
-echo "  Generate new keys: openssl rand -hex 16"
-echo "  Edit: ${SCRIPT_DIR}/secrets.yaml"
-echo "  Apply: kubectl apply -f ${SCRIPT_DIR}/secrets.yaml"
+echo "  Generate new keys: ./scripts/generate-secrets.sh"
+echo "  Apply: sops -d ${SCRIPT_DIR}/secrets.sops.yaml | kubectl apply -f -"
 echo ""

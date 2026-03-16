@@ -1,22 +1,69 @@
-# Terraform state & plans
+# ============================================
+# Terraform
+# ============================================
+# State files
 *.tfstate
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
 *.tfplan*
 
-# Terraform credentials / env (sensitive)
+# Terraform credentials / env (sensitive — contains API tokens, passwords)
 credentials.auto.tfvars
 *.auto.tfvars.json
 credentials.sh
 .envrc
 
-# OPNSense generated scripts and backups (contain sensitive API credentials)
+# Auto-generated terraform.tfvars from deploy-lxc.sh (contain passwords)
+terraform/webui-lxc/terraform.tfvars
+terraform/build-lxc/terraform.tfvars
+
+# ============================================
+# Secrets — unencrypted plaintext
+# ============================================
+# Only *.sops.yaml (SOPS-encrypted) should be committed
+# Ignore plaintext secret files that should be encrypted first
+**/repo-credentials.yaml
+!**/repo-credentials.sops.yaml
+# Plaintext K8s secret files in apps/ (use secrets.sops.yaml instead)
+apps/*/secrets.yaml
+
+# ============================================
+# Talos cluster
+# ============================================
+# Generated machine configs (contain cluster secrets)
+cluster/clusterconfig/
+
+# ============================================
+# Application runtime
+# ============================================
+# Environment files (may contain secrets)
+.env
+.env.local
+.env.production
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# ============================================
+# OPNSense
+# ============================================
 **/scripts/opnsense_*.ps1
 **/opnsense_backups/*.xml
 **/opnsense_backups/*.tar.gz
 
-# Unencrypted secrets (must be encrypted with SOPS before committing)
-# Keep the .sops.yaml versions, ignore plaintext
-**/repo-credentials.yaml
-!**/repo-credentials.sops.yaml
+# ============================================
+# IDE / OS
+# ============================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

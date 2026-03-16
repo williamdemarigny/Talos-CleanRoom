@@ -1,0 +1,49 @@
+---
+creation_rules:
+  # ArgoCD repository credentials
+  - path_regex: .*apps/argocd/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Cert-manager secrets (Cloudflare API token, etc.)
+  - path_regex: .*apps/cert-manager/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Ceph CSI secrets (CephX keyring)
+  - path_regex: .*ceph-storage/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Metasploit secrets
+  - path_regex: .*apps/metasploit/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Faraday secrets
+  - path_regex: .*apps/faraday/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # OpenVAS secrets
+  - path_regex: .*apps/openvas/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Traefik secrets
+  - path_regex: .*apps/traefik/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Scanning Console secrets
+  - path_regex: .*apps/scanning-console/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Portal secrets
+  - path_regex: .*apps/portal/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # CleanRoom DB secrets
+  - path_regex: .*apps/cleanroom-db/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Talos cluster secrets
+  - path_regex: .*cluster/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Default catch-all rule
+  - age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
