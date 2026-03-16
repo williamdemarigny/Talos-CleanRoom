@@ -11,7 +11,7 @@ from talos_common.auth import get_current_user_optional
 from talos_common.routers.auth import router as auth_router
 
 from app.config import get_settings
-from app.routers import portal
+from app.routers import portal, credentials
 
 # Initialize talos_common with our settings getter
 talos_common.init(get_settings)
@@ -36,6 +36,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(portal.router, prefix="/api/portal", tags=["Portal"])
+app.include_router(credentials.router, prefix="/api/credentials", tags=["Credentials"])
 
 
 # --- Page routes ---
@@ -48,8 +49,20 @@ async def index(request: Request, user: dict = Depends(get_current_user_optional
     return templates.TemplateResponse("landing.html", {
         "request": request,
         "user": user,
+        "page": "home",
         "deployment_console_url": settings.deployment_console_url,
         "scanning_console_url": settings.scanning_console_url,
+    })
+
+
+@app.get("/credentials")
+async def credentials_page(request: Request, user: dict = Depends(get_current_user_optional)):
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("credentials.html", {
+        "request": request,
+        "user": user,
+        "page": "credentials",
     })
 
 

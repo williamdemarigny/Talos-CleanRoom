@@ -27,6 +27,8 @@ terraform/build-lxc/terraform.tfvars
 !**/repo-credentials.sops.yaml
 # Plaintext K8s secret files in apps/ (use secrets.sops.yaml instead)
 apps/*/secrets.yaml
+# Plaintext credential vault (use credential-vault.sops.yaml instead)
+apps/portal/credential-vault.yaml
 
 # ============================================
 # Talos cluster
