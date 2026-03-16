@@ -15,7 +15,7 @@ spec:
     path: apps/cleanroom-db
     directory:
       recurse: false
-      exclude: 'application.yaml'
+      exclude: '{application.yaml,*.sops.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: cleanroom-db

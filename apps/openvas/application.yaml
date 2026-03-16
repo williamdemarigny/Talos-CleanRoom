@@ -16,7 +16,7 @@ spec:
     path: apps/openvas
     directory:
       recurse: false
-      exclude: 'application.yaml'
+      exclude: '{application.yaml,*.sops.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: openvas

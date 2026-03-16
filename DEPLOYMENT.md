@@ -16,17 +16,18 @@ Complete deployment instructions for standing up the full Talos CleanRoom platfo
 6. [Install ArgoCD](#6-install-argocd)
 7. [Deploy Infrastructure Stack](#7-deploy-infrastructure-stack)
 8. [Configure DNS](#8-configure-dns)
-9. [Deploy Security Tools](#9-deploy-security-tools)
-10. [Apply Network Policies](#10-apply-network-policies)
-11. [Deploy Build VM](#11-deploy-build-vm)
-12. [Build and Push Container Images](#12-build-and-push-container-images)
-13. [Deploy CleanRoom Database](#13-deploy-cleanroom-database)
-14. [Deploy Scanning Console](#14-deploy-scanning-console)
-15. [Deploy Unified Portal](#15-deploy-unified-portal)
-16. [Deploy Deployment Console (WebUI)](#16-deploy-deployment-console-webui)
-17. [Post-Deployment Verification](#17-post-deployment-verification)
-18. [Change Default Credentials](#18-change-default-credentials)
-19. [Troubleshooting](#19-troubleshooting)
+9. [Apply Application Secrets](#9-apply-application-secrets)
+10. [Deploy Security Tools](#10-deploy-security-tools)
+11. [Apply Network Policies](#11-apply-network-policies)
+12. [Deploy Build VM](#12-deploy-build-vm)
+13. [Build and Push Container Images](#13-build-and-push-container-images)
+14. [Deploy CleanRoom Database](#14-deploy-cleanroom-database)
+15. [Deploy Scanning Console](#15-deploy-scanning-console)
+16. [Deploy Unified Portal](#16-deploy-unified-portal)
+17. [Deploy Deployment Console (WebUI)](#17-deploy-deployment-console-webui)
+18. [Post-Deployment Verification](#18-post-deployment-verification)
+19. [Change Default Credentials](#19-change-default-credentials)
+20. [Troubleshooting](#20-troubleshooting)
 
 ---
 
@@ -116,6 +117,10 @@ This creates encrypted secret files for:
 - **OpenVAS** — admin + database passwords
 - **Faraday** — admin + database passwords
 - **Metasploit** — database + RPC passwords
+- **CleanRoom DB** — PostgreSQL password
+- **Scanning Console** — secret key, database URL, admin hash (shares SECRET_KEY with Portal for SSO)
+- **Portal** — secret key, admin hash (reuses Scanning Console values for SSO)
+- **Threat Dragon** — encryption key, JWT signing + refresh keys
 
 Use `--dry-run` to preview without writing files.
 
@@ -298,7 +303,30 @@ See [docs/DNS-MAPPING.md](docs/DNS-MAPPING.md) for the complete IP and DNS refer
 
 ---
 
-## 9. Deploy Security Tools
+## 9. Apply Application Secrets
+
+Secrets were generated in Step 3 but not yet applied to the cluster. Decrypt and apply them now (before deploying the apps that reference them):
+
+```bash
+# Apply ALL application secrets at once
+./scripts/apply-secrets.sh
+
+# Or apply individually
+sops -d apps/openvas/secrets.sops.yaml       | kubectl apply -f -
+sops -d apps/faraday/secrets.sops.yaml       | kubectl apply -f -
+sops -d apps/metasploit/secrets.sops.yaml    | kubectl apply -f -
+sops -d apps/traefik/basic-auth-secret.sops.yaml | kubectl apply -f -
+sops -d apps/threat-dragon/secrets.sops.yaml | kubectl apply -f -
+```
+
+Use `--dry-run` to preview: `./scripts/apply-secrets.sh --dry-run`
+Use `--app <name>` to target one app: `./scripts/apply-secrets.sh --app metasploit`
+
+> **Important:** Secrets must exist in the cluster before the pods that reference them start. If a pod starts before its secret is applied, it will enter `CreateContainerConfigError` state. Fix by applying the secret and the pod will auto-recover.
+
+---
+
+## 10. Deploy Security Tools
 
 Apply each ArgoCD Application. They auto-sync and self-heal.
 
@@ -346,7 +374,7 @@ done
 
 ---
 
-## 10. Apply Network Policies
+## 11. Apply Network Policies
 
 Apply zero-trust network policies (default-deny per namespace with explicit allow rules):
 
@@ -362,7 +390,7 @@ See [apps/network-policies/README.md](apps/network-policies/README.md) for the f
 
 ---
 
-## 11. Deploy Build VM
+## 12. Deploy Build VM
 
 The Build VM is a Proxmox LXC container with Docker CE for building and pushing container images.
 
@@ -395,7 +423,7 @@ docker info    # should show Docker engine running
 
 ---
 
-## 12. Build and Push Container Images
+## 13. Build and Push Container Images
 
 SSH into the Build VM and build all three container images:
 
@@ -443,7 +471,7 @@ Expected: `cleanroom/loki-rs-scanner`, `cleanroom/scanning-console`, `cleanroom/
 
 ---
 
-## 13. Deploy CleanRoom Database
+## 14. Deploy CleanRoom Database
 
 PostgreSQL 17 backing the Scanning Console:
 
@@ -470,7 +498,7 @@ The database includes:
 
 ---
 
-## 14. Deploy Scanning Console
+## 15. Deploy Scanning Console
 
 The Scanning Console provides vulnerability scanning (Nmap, OpenVAS, Metasploit, LOKI-RS IOC) with PostgreSQL persistence:
 
@@ -490,7 +518,7 @@ Verify at `https://scan.knowledgeondemand.net`.
 
 ---
 
-## 15. Deploy Unified Portal
+## 16. Deploy Unified Portal
 
 The Portal is the landing page providing SSO across all three applications:
 
@@ -508,7 +536,7 @@ Verify at `https://cleanroom.knowledgeondemand.net`.
 
 ---
 
-## 16. Deploy Deployment Console (WebUI)
+## 17. Deploy Deployment Console (WebUI)
 
 The Deployment Console runs in a Proxmox LXC container and provides a web UI for cluster lifecycle management:
 
@@ -545,7 +573,7 @@ Access at `http://10.83.3.190:8000` (login: `admin` / `admin`).
 
 ---
 
-## 17. Post-Deployment Verification
+## 18. Post-Deployment Verification
 
 ### Service Access Points
 
@@ -602,7 +630,7 @@ curl -sk https://cleanroom.knowledgeondemand.net/api/system/health
 
 ---
 
-## 18. Change Default Credentials
+## 19. Change Default Credentials
 
 **Do this before any production use.**
 
@@ -625,7 +653,7 @@ python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes
 
 ---
 
-## 19. Troubleshooting
+## 20. Troubleshooting
 
 ### Terraform cannot connect to Proxmox
 
@@ -732,6 +760,7 @@ HEALTH:.status.health.status
 | Talos config application | [cluster/apply-configs.sh](cluster/apply-configs.sh) |
 | VM Terraform config | [terraform/cluster-create/](terraform/cluster-create/) |
 | Secret generation | [scripts/generate-secrets.sh](scripts/generate-secrets.sh) |
+| Secret application | [scripts/apply-secrets.sh](scripts/apply-secrets.sh) |
 | WebUI LXC deployment | [webui/deploy-lxc.sh](webui/deploy-lxc.sh) |
 | Build VM LXC deployment | [build-vm/deploy-lxc.sh](build-vm/deploy-lxc.sh) |
 | LOKI image build | [apps/loki/build-and-push.sh](apps/loki/build-and-push.sh) |
@@ -755,15 +784,16 @@ Proxmox Cluster (online)
     ├─ [7] deploy-ingress-stack.sh      → MetalLB, cert-manager, Traefik, Ceph CSI
     ├─ [8] DNS records                  → *.knowledgeondemand.net → Traefik LB IP
     │
-    ├─ [9] Security tool ArgoCD apps    → Harbor, OpenVAS, Faraday, Metasploit, Threat Dragon
-    ├─ [10] Network policies            → Zero-trust namespace isolation
+    ├─ [9] apply-secrets.sh             → Decrypt + apply all app secrets to K8s
+    ├─ [10] Security tool ArgoCD apps   → Harbor, OpenVAS, Faraday, Metasploit, Threat Dragon
+    ├─ [11] Network policies            → Zero-trust namespace isolation
     │
-    ├─ [11] Build VM LXC               → Docker build environment
-    ├─ [12] Image builds                → LOKI-RS, scanning-console, portal → Harbor
+    ├─ [12] Build VM LXC               → Docker build environment
+    ├─ [13] Image builds                → LOKI-RS, scanning-console, portal → Harbor
     │
-    ├─ [13] CleanRoom DB               → PostgreSQL 17 StatefulSet
-    ├─ [14] Scanning Console            → Vulnerability scanning web app
-    ├─ [15] Portal                      → Unified landing page + SSO
+    ├─ [14] CleanRoom DB               → PostgreSQL 17 StatefulSet
+    ├─ [15] Scanning Console            → Vulnerability scanning web app
+    ├─ [16] Portal                      → Unified landing page + SSO
     │
-    └─ [16] Deployment Console LXC      → Cluster lifecycle web UI
+    └─ [17] Deployment Console LXC      → Cluster lifecycle web UI
 ```
