@@ -531,6 +531,20 @@ curl -sk https://harbor.knowledgeondemand.net/api/v2.0/projects/cleanroom/reposi
 
 Expected: `cleanroom/loki-rs-scanner`, `cleanroom/scanning-console`, `cleanroom/portal`.
 
+### Create Harbor Pull Secrets
+
+The `loki-scanner` namespace gets its pull secret from `build-and-push.sh`, but scanning-console and portal need theirs created manually (or automatically via `DeployCluster.sh` step 12):
+
+```bash
+for ns in scanning-console portal; do
+    kubectl create secret docker-registry harbor-pull-secret \
+        --namespace="$ns" \
+        --docker-server=harbor.knowledgeondemand.net \
+        --docker-username=admin \
+        --docker-password=Harbor12345
+done
+```
+
 ---
 
 ## 14. Deploy CleanRoom Database
@@ -773,10 +787,15 @@ kubectl -n openvas get networkpolicy
 # Check the pull secret exists in the namespace
 kubectl -n <namespace> get secret harbor-pull-secret
 
-# Recreate if missing (from Build VM)
-ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom/apps/loki
-./build-and-push.sh    # also creates pull secrets
+# Recreate if missing
+for ns in scanning-console portal loki-scanner; do
+    kubectl create secret docker-registry harbor-pull-secret \
+        --namespace="$ns" \
+        --docker-server=harbor.knowledgeondemand.net \
+        --docker-username=admin \
+        --docker-password=Harbor12345 \
+        2>/dev/null || echo "  already exists in $ns"
+done
 ```
 
 ### Scanning Console can't reach tools
