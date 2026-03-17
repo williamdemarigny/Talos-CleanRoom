@@ -73,6 +73,19 @@ patches:
       disabled: false
       servers:
         - time.cloudflare.com
+# Harbor registry — skip TLS verification (staging certs are untrusted)
+# Switch to trusted certs by removing this block when using letsencrypt-prod
+- |-
+  machine:
+    registries:
+      mirrors:
+        harbor.knowledgeondemand.net:
+          endpoints:
+            - https://harbor.knowledgeondemand.net
+      config:
+        harbor.knowledgeondemand.net:
+          tls:
+            insecureSkipVerify: true
 # Common kernel modules and sysctls
 - |-
   machine:

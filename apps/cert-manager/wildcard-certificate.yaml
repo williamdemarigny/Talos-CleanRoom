@@ -22,9 +22,10 @@ spec:
   # Secret name where the certificate will be stored
   secretName: knowledgeondemand-wildcard-tls
 
-  # Certificate issuer - using production for trusted certificates
+  # Certificate issuer - using staging to avoid rate limits during testing
+  # Switch to letsencrypt-prod for trusted certificates in production
   issuerRef:
-    name: letsencrypt-prod
+    name: letsencrypt-staging
     kind: ClusterIssuer
 
   # Common name (primary domain)
