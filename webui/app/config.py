@@ -21,7 +21,7 @@ class Settings(BaseAppSettings):
     repo_root: Path = Path("/repo")
 
     # Deployment
-    master_node: str = "talos-CleanRoom-master-01.knowledgeondemand.net"
+    master_node: str = "10.83.3.10"
     health_check_retries: int = 30
     health_check_interval: int = 10
 
