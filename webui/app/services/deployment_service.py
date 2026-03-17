@@ -719,6 +719,22 @@ class DeploymentService(BaseServiceMixin):
             else:
                 await self.log(-1, "warn", "Build VM destroy failed (non-fatal)")
 
+        # Step 4: Clean up stale SSH known_hosts entries
+        await self.log(-1, "info", "Step 4: Cleaning up SSH known_hosts...")
+        known_hosts_files = [
+            Path.home() / ".ssh" / "known_hosts",
+            Path("/root/.ssh/known_hosts"),
+        ]
+        cleanup_ips = list(self.node_ips) + [get_settings().build_vm_ip.split("/")[0]]
+        for kh_path in known_hosts_files:
+            if kh_path.exists():
+                for ip in cleanup_ips:
+                    await self.process_manager.run_command_simple(
+                        ["ssh-keygen", "-f", str(kh_path), "-R", ip],
+                        timeout=5,
+                    )
+                await self.log(-1, "info", f"  Cleaned {kh_path}")
+
         await self.log(-1, "info", "Cleanup completed")
         return result.success
 
