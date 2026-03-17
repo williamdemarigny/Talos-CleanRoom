@@ -2143,6 +2143,10 @@ class DeploymentService(BaseServiceMixin):
             f'- service: Traefik Dashboard\n  url: https://traefik.knowledgeondemand.net\n  username: admin\n  password: "{traefik_pw}"\n'
             f'- service: Portal\n  url: https://cleanroom.knowledgeondemand.net\n  username: admin\n  password: "admin"\n'
         )
+        # Create the K8s secret (ArgoCD excludes *.sops.yaml, so this won't be synced from git)
+        await self._create_secret(step_id, "portal", "credential-vault",
+                                  {"credentials.yaml": vault_yaml})
+
         # Indent vault_yaml for stringData block
         indented_vault = "\n".join("    " + line for line in vault_yaml.splitlines())
 
