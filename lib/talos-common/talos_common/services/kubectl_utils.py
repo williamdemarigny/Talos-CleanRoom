@@ -35,13 +35,13 @@ class KubernetesHelper:
     async def check_connectivity(self, timeout: float = 10) -> bool:
         """Check if kubectl can connect to the Kubernetes cluster.
 
-        Runs ``kubectl cluster-info --request-timeout=5s``.
+        Runs ``kubectl get nodes`` which requires minimal RBAC permissions.
 
         Returns:
             True if the cluster is reachable, False otherwise.
         """
         result = await self.process_manager.run_command_simple(
-            ["kubectl", "cluster-info", "--request-timeout=5s"],
+            ["kubectl", "get", "nodes", "--request-timeout=5s", "-o", "name"],
             timeout=timeout
         )
         return result.success
