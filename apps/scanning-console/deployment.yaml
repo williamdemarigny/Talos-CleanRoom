@@ -87,6 +87,8 @@ spec:
             secretKeyRef:
               name: scanning-console-credentials
               key: admin-password-hash
+        - name: HOME
+          value: /tmp
         ports:
         - containerPort: 8000
           name: http
