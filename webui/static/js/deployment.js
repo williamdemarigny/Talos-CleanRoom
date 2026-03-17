@@ -36,7 +36,14 @@ function deploymentMonitor() {
             { id: 12, name: 'deploy_faraday', description: 'Deploy Faraday' },
             { id: 13, name: 'deploy_metasploit', description: 'Deploy Metasploit' },
             { id: 14, name: 'deploy_threat_dragon', description: 'Deploy Threat Dragon' },
-            { id: 15, name: 'configure_integrations', description: 'Configure Integrations' },
+            { id: 15, name: 'deploy_harbor', description: 'Deploy Harbor Registry' },
+            { id: 16, name: 'configure_integrations', description: 'Configure Integrations' },
+            { id: 17, name: 'generate_secrets', description: 'Generate & Apply Secrets' },
+            { id: 18, name: 'commit_push_secrets', description: 'Commit & Push Secrets' },
+            { id: 19, name: 'deploy_build_vm', description: 'Deploy Build VM' },
+            { id: 20, name: 'build_push_images', description: 'Build & Push Container Images' },
+            { id: 21, name: 'deploy_cleanroom_apps', description: 'Deploy CleanRoom Applications' },
+            { id: 22, name: 'apply_network_policies', description: 'Apply Network Policies' },
         ],
 
         get statusText() {
@@ -180,7 +187,7 @@ function deploymentMonitor() {
                         this.isRunning = false;
                         this.stopElapsedTimer();
                         this.stopPolling();
-                    } else if (data.status === 'success' && data.step_id === this.stepDefinitions.length - 1) {
+                    } else if (data.status === 'success' && data.step_id === this.steps.length - 1) {
                         // Last step completed
                         this.status = 'completed';
                         this.isRunning = false;
@@ -276,6 +283,57 @@ function deploymentMonitor() {
             }
         },
 
+        async resumeDeployment(fromStep) {
+            if (this.isRunning) return;
+
+            if (!confirm('Resume deployment from where it left off?')) return;
+
+            try {
+                let url = '/api/deployment/resume';
+                if (fromStep !== undefined) url += `?from_step=${fromStep}`;
+                const response = await fetch(url, { method: 'POST' });
+                if (response.ok) {
+                    this.status = 'running';
+                    this.isRunning = true;
+                    this.startTime = new Date();
+                    this.startElapsedTimer();
+                    this.startPolling();
+                    // Note: logs are NOT cleared — append mode
+                } else {
+                    const error = await response.json();
+                    alert('Failed to resume deployment: ' + error.detail);
+                }
+            } catch (e) {
+                alert('Failed to resume deployment: ' + e.message);
+            }
+        },
+
+        async skipStep(stepId) {
+            if (this.isRunning) return;
+
+            const step = this.steps.find(s => s.id === stepId);
+            const stepName = step ? step.description : `Step ${stepId}`;
+            if (!confirm(`Skip "${stepName}" and continue deployment?`)) return;
+
+            try {
+                const response = await fetch(`/api/deployment/skip-step?step_id=${stepId}`, { method: 'POST' });
+                if (response.ok) {
+                    // Step will be marked skipped and deployment will resume
+                    if (step) step.status = 'skipped';
+                    this.status = 'running';
+                    this.isRunning = true;
+                    this.startTime = new Date();
+                    this.startElapsedTimer();
+                    this.startPolling();
+                } else {
+                    const error = await response.json();
+                    alert('Failed to skip step: ' + error.detail);
+                }
+            } catch (e) {
+                alert('Failed to skip step: ' + e.message);
+            }
+        },
+
         async runCleanup() {
             if (this.isRunning) return;
 
@@ -343,6 +401,7 @@ function deploymentMonitor() {
                 case 'running': return 'bg-yellow-900/20 border-l-4 border-yellow-500';
                 case 'success': return 'bg-green-900/20 border-l-4 border-green-500';
                 case 'failed': return 'bg-red-900/20 border-l-4 border-red-500';
+                case 'skipped': return 'bg-yellow-900/10 border-l-4 border-yellow-600';
                 default: return 'bg-gray-700/50';
             }
         },
@@ -352,6 +411,7 @@ function deploymentMonitor() {
                 case 'running': return 'bg-yellow-900';
                 case 'success': return 'bg-green-900';
                 case 'failed': return 'bg-red-900';
+                case 'skipped': return 'bg-yellow-900';
                 default: return 'bg-gray-700';
             }
         },

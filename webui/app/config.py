@@ -40,6 +40,20 @@ class Settings(BaseAppSettings):
         "jq", "curl", "kubectl", "helm", "git"
     ]
 
+    # Build VM (LXC container for Docker image builds)
+    build_vm_ip: str = "10.83.3.191"
+    build_vm_vmid: int = 201
+    build_vm_ssh_user: str = "deploy"
+    build_vm_gateway: str = "10.83.3.1"
+    build_vm_vlan_id: int = 3
+
+    # Proxmox SSH (for pct exec during Build VM setup)
+    proxmox_host: str = "pve01.knowledgeondemand.net"
+    proxmox_ssh_user: str = "root"
+
+    # Credentials file path (reuse cluster-create credentials)
+    credentials_tfvars_path: str = "terraform/cluster-create/credentials.auto.tfvars"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

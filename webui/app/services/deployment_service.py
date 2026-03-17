@@ -51,6 +51,12 @@ VM_READY_RETRY_INTERVAL = 10      # Seconds between VM readiness checks
 # Persistent state file — survives webapp restarts, cleared only on cleanup
 STATE_FILE = Path("/app/data/deployment_state.json")
 
+# Log sanitization — precompiled patterns for redacting sensitive data
+_REDACT_PATTERNS = [
+    re.compile(r'(password|token|secret[-_]?key|api[-_]?token)[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'--from-literal=\S+=\S+'),
+]
+
 
 @dataclass
 class DeploymentService(BaseServiceMixin):
@@ -78,21 +84,21 @@ class DeploymentService(BaseServiceMixin):
         self.node_ips = settings.node_ips
         self._load_state()
 
-    def _get_fernet(self):
-        """Derive a Fernet encryption key from the webapp's SECRET_KEY."""
-        import base64
-        import hashlib
+    def _get_fernet_key(self):
+        """Derive a Fernet encryption key from the webapp's SECRET_KEY.
+
+        Uses HMAC-SHA256 with domain separation via BaseAppSettings.fernet_key,
+        ensuring the state-encryption key is distinct from JWT/code-exchange keys.
+        """
         settings = get_settings()
-        # Derive a 32-byte key from SECRET_KEY via SHA-256 (deterministic)
-        key_bytes = hashlib.sha256(settings.secret_key.encode()).digest()
-        return base64.urlsafe_b64encode(key_bytes)
+        return settings.fernet_key
 
     def _save_state(self):
-        """Persist credentials and deployment status to disk (encrypted).
+        """Persist full deployment state to disk (encrypted).
 
         Uses Fernet symmetric encryption keyed to the webapp's SECRET_KEY.
-        This allows the webapp to survive restarts without losing service
-        credentials. The state file is only cleared on explicit cleanup.
+        Saves credentials, step statuses, and recent logs so the deployment
+        can be resumed after a webapp restart or failure.
         """
         try:
             from cryptography.fernet import Fernet
@@ -107,41 +113,116 @@ class DeploymentService(BaseServiceMixin):
                     self.current_deployment.id
                     if self.current_deployment else None
                 ),
+                "current_step": (
+                    self.current_deployment.current_step
+                    if self.current_deployment else 0
+                ),
+                "error_message": (
+                    self.current_deployment.error_message
+                    if self.current_deployment else None
+                ),
+                "started_at": (
+                    self.current_deployment.started_at.isoformat()
+                    if self.current_deployment and self.current_deployment.started_at
+                    else None
+                ),
                 "completed_at": (
                     self.current_deployment.completed_at.isoformat()
                     if self.current_deployment and self.current_deployment.completed_at
                     else None
                 ),
+                "steps": [
+                    {
+                        "id": s.id, "name": s.name, "description": s.description,
+                        "status": s.status.value,
+                        "started_at": s.started_at.isoformat() if s.started_at else None,
+                        "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                        "error_message": s.error_message,
+                    }
+                    for s in (self.current_deployment.steps if self.current_deployment else [])
+                ],
+                "logs": [
+                    {
+                        "step_id": entry.step_id, "level": entry.level,
+                        "message": entry.message,
+                        "timestamp": entry.timestamp.isoformat(),
+                    }
+                    for entry in self.logs[-500:]
+                ],
             }
             plaintext = json.dumps(state).encode()
-            f = Fernet(self._get_fernet())
+            f = Fernet(self._get_fernet_key())
             STATE_FILE.write_bytes(f.encrypt(plaintext))
         except Exception:
             pass  # Non-fatal — credentials still work in memory
 
     def _load_state(self):
-        """Restore credentials and deployment status from disk (decrypted)."""
+        """Restore full deployment state from disk (decrypted).
+
+        Restores credentials, step statuses, and logs so the UI shows
+        accurate state after a webapp restart and resume is possible.
+        """
         try:
             from cryptography.fernet import Fernet, InvalidToken
             if STATE_FILE.exists():
-                f = Fernet(self._get_fernet())
+                f = Fernet(self._get_fernet_key())
                 ciphertext = STATE_FILE.read_bytes()
                 plaintext = f.decrypt(ciphertext)
                 state = json.loads(plaintext.decode())
                 self.credentials = state.get("credentials", {})
-                # Restore a minimal deployment state so the credentials
-                # endpoint (which checks deployment.status == COMPLETED) works
+
+                # Restore logs
+                saved_logs = state.get("logs", [])
+                self.logs = [
+                    LogEntry(
+                        step_id=entry["step_id"],
+                        level=entry["level"],
+                        message=entry["message"],
+                        timestamp=datetime.fromisoformat(entry["timestamp"]),
+                    )
+                    for entry in saved_logs
+                ]
+
+                # Restore deployment state with full step info
                 saved_status = state.get("deployment_status")
-                if saved_status and self.credentials and not self.current_deployment:
+                if saved_status and not self.current_deployment:
+                    # Rebuild steps from saved state or fresh from DEPLOYMENT_STEPS
+                    saved_steps = state.get("steps", [])
+                    if saved_steps:
+                        steps = [
+                            DeploymentStep(
+                                id=s["id"], name=s["name"],
+                                description=s["description"],
+                                status=StepStatus(s["status"]),
+                                started_at=(
+                                    datetime.fromisoformat(s["started_at"])
+                                    if s.get("started_at") else None
+                                ),
+                                completed_at=(
+                                    datetime.fromisoformat(s["completed_at"])
+                                    if s.get("completed_at") else None
+                                ),
+                                error_message=s.get("error_message"),
+                            )
+                            for s in saved_steps
+                        ]
+                    else:
+                        steps = [DeploymentStep(**s.model_dump()) for s in DEPLOYMENT_STEPS]
+
                     self.current_deployment = DeploymentState(
                         id=state.get("deployment_id", "restored"),
                         status=DeploymentStatus(saved_status),
-                        started_at=datetime.utcnow(),
+                        current_step=state.get("current_step", 0),
+                        error_message=state.get("error_message"),
+                        started_at=(
+                            datetime.fromisoformat(state["started_at"])
+                            if state.get("started_at") else datetime.utcnow()
+                        ),
                         completed_at=(
                             datetime.fromisoformat(state["completed_at"])
-                            if state.get("completed_at") else datetime.utcnow()
+                            if state.get("completed_at") else None
                         ),
-                        steps=[]
+                        steps=steps,
                     )
         except Exception:
             pass  # Non-fatal — start fresh if state file is corrupt or key changed
@@ -182,6 +263,24 @@ class DeploymentService(BaseServiceMixin):
         alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
         return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+    def _sanitized_output_callback(self, step_id: int, level: str = "info"):
+        """Return an on_output callback that sanitizes and logs.
+
+        Redacts sensitive patterns (passwords, tokens) from log output
+        before forwarding to the deployment log.
+        """
+        async def callback(line: str):
+            sanitized = line
+            for pattern in _REDACT_PATTERNS:
+                sanitized = pattern.sub(
+                    lambda m: m.group().split('=')[0] + '=***'
+                    if '=' in m.group()
+                    else m.group().split(':')[0] + ': ***',
+                    sanitized,
+                )
+            await self.log(step_id, level, sanitized)
+        return callback
+
     async def _create_secret(
         self,
         step_id: int,
@@ -190,6 +289,9 @@ class DeploymentService(BaseServiceMixin):
         data: dict[str, str]
     ) -> bool:
         """Create a Kubernetes secret if it doesn't already exist.
+
+        Uses a temp file with ``kubectl apply -f`` instead of ``--from-literal``
+        to avoid leaking secret values in process argument lists.
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -200,6 +302,9 @@ class DeploymentService(BaseServiceMixin):
         Returns:
             True if secret exists or was created, False on error.
         """
+        import base64
+        import tempfile
+
         # Check if secret already exists
         check_result = await self.process_manager.run_command(
             ["kubectl", "get", "secret", secret_name, "-n", namespace],
@@ -210,15 +315,37 @@ class DeploymentService(BaseServiceMixin):
             await self.log(step_id, "info", f"Secret '{secret_name}' already exists in {namespace}")
             return True
 
-        # Build kubectl create secret command
-        cmd = ["kubectl", "create", "secret", "generic", secret_name, "-n", namespace]
-        for key, value in data.items():
-            cmd.append(f"--from-literal={key}={value}")
+        # Build secret manifest as JSON (kubectl accepts JSON via apply -f)
+        secret_data = {
+            k: base64.b64encode(v.encode()).decode() for k, v in data.items()
+        }
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": secret_name, "namespace": namespace},
+            "type": "Opaque",
+            "data": secret_data,
+        }
 
-        result = await self.process_manager.run_command(
-            cmd,
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
+        # Write to temp file, apply, then clean up
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as f:
+                json.dump(manifest, f)
+                temp_path = f.name
+
+            result = await self.process_manager.run_command(
+                ["kubectl", "apply", "-f", temp_path],
+                on_output=lambda line: self.log(step_id, "info", line),
+            )
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
         if result.success:
             await self.log(step_id, "info", f"Created secret '{secret_name}' in {namespace}")
@@ -226,6 +353,91 @@ class DeploymentService(BaseServiceMixin):
             await self.log(step_id, "error", f"Failed to create secret '{secret_name}': {result.output}")
 
         return result.success
+
+    async def _deploy_argocd_app(self, app_name: str, step_id: int) -> bool:
+        """Apply an ArgoCD Application manifest and return success.
+
+        Args:
+            app_name: Name of the app directory under ``apps/``.
+            step_id: The deployment step identifier for logging.
+        """
+        app_yaml = self.projects_dir / app_name / "application.yaml"
+        result = await self.process_manager.run_command(
+            ["kubectl", "apply", "-f", str(app_yaml)],
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not result.success:
+            await self.log(step_id, "error", f"Failed to apply ArgoCD app '{app_name}': {result.output}")
+        return result.success
+
+    async def _wait_for_argocd_sync(
+        self,
+        app_name: str,
+        step_id: int,
+        max_attempts: int = 30,
+        interval: int = 10,
+    ) -> bool:
+        """Poll ArgoCD Application until synced.
+
+        Args:
+            app_name: ArgoCD Application name.
+            step_id: The deployment step identifier for logging.
+            max_attempts: Maximum number of polling attempts.
+            interval: Seconds between polling attempts.
+
+        Returns:
+            True if the application reaches ``Synced`` status, False on timeout.
+        """
+        await self.log(step_id, "info", f"Waiting for ArgoCD to sync '{app_name}'...")
+
+        for i in range(max_attempts):
+            if self.current_deployment and self.current_deployment.status != DeploymentStatus.RUNNING:
+                return False
+
+            sync_result = await self.process_manager.run_command(
+                ["kubectl", "get", "application", app_name, "-n", "argocd",
+                 "-o", "jsonpath={.status.sync.status} {.status.health.status}"],
+                timeout=15,
+            )
+            parts = (sync_result.output or "").strip().split()
+            sync_status = parts[0] if len(parts) > 0 else ""
+            health_status = parts[1] if len(parts) > 1 else ""
+
+            if sync_status == "Synced":
+                await self.log(
+                    step_id, "info",
+                    f"ArgoCD synced '{app_name}' (health: {health_status or 'unknown'})",
+                )
+                return True
+
+            # Check for sync errors
+            if sync_status in ("Unknown", "OutOfSync"):
+                err_result = await self.process_manager.run_command(
+                    ["kubectl", "get", "application", app_name, "-n", "argocd",
+                     "-o", "jsonpath={.status.conditions[*].message}"],
+                    timeout=15,
+                )
+                err_msg = (err_result.output or "").strip()
+                if err_msg:
+                    await self.log(step_id, "warn", f"ArgoCD sync issue: {err_msg[:300]}")
+
+            await self.log(
+                step_id, "info",
+                f"ArgoCD: sync={sync_status or 'pending'} health={health_status or 'unknown'}... "
+                f"({i + 1}/{max_attempts})",
+            )
+            await asyncio.sleep(interval)
+
+        # Dump full ArgoCD application status for debugging
+        await self.log(step_id, "error", f"ArgoCD failed to sync '{app_name}' after {max_attempts * interval}s")
+        diag = await self.process_manager.run_command(
+            ["kubectl", "get", "application", app_name, "-n", "argocd", "-o", "yaml"],
+            timeout=15,
+        )
+        if diag.output:
+            for line in diag.output.strip().split('\n')[-30:]:
+                await self.log(step_id, "info", line)
+        return False
 
     async def log(self, step_id: int, level: str, message: str):
         """Log a message and notify via callback."""
@@ -310,6 +522,109 @@ class DeploymentService(BaseServiceMixin):
 
         return True
 
+    async def resume_deployment(
+        self,
+        from_step: Optional[int] = None,
+        log_callback: Optional[Callable[[LogEntry], Awaitable[None]]] = None,
+        step_callback: Optional[Callable[[DeploymentStep], Awaitable[None]]] = None,
+    ) -> DeploymentState:
+        """Resume a failed or aborted deployment.
+
+        Preserves existing logs and credentials. Re-runs from the failed step
+        (or from ``from_step`` if specified).
+
+        Args:
+            from_step: Step ID to resume from. If None, resumes from the
+                first non-successful step.
+            log_callback: Optional async callback for log entries.
+            step_callback: Optional async callback for step updates.
+
+        Returns:
+            The updated DeploymentState.
+
+        Raises:
+            RuntimeError: If no deployment exists to resume, or one is running.
+        """
+        if self.is_running():
+            raise RuntimeError("Deployment already in progress")
+        if not self.current_deployment:
+            raise RuntimeError("No deployment to resume")
+        if self.current_deployment.status not in (
+            DeploymentStatus.FAILED, DeploymentStatus.ABORTED
+        ):
+            raise RuntimeError(
+                f"Cannot resume deployment in state: {self.current_deployment.status.value}"
+            )
+
+        # Update callbacks
+        if log_callback is not None:
+            self.log_callback = log_callback
+        if step_callback is not None:
+            self.step_callback = step_callback
+
+        # Determine resume point
+        if from_step is None:
+            # Find first non-successful step
+            from_step = 0
+            for step in self.current_deployment.steps:
+                if step.status in (StepStatus.SUCCESS, StepStatus.SKIPPED):
+                    from_step = step.id + 1
+                else:
+                    break
+
+        # Reset the failed/running step so it can re-run
+        for step in self.current_deployment.steps:
+            if step.id >= from_step and step.status in (
+                StepStatus.FAILED, StepStatus.RUNNING
+            ):
+                step.status = StepStatus.PENDING
+                step.error_message = None
+                step.started_at = None
+                step.completed_at = None
+
+        # Set deployment back to running
+        self.current_deployment.status = DeploymentStatus.RUNNING
+        self.current_deployment.error_message = None
+        self.current_deployment.completed_at = None
+
+        await self.log(-1, "info", f"Resuming deployment from step {from_step}...")
+
+        # Run deployment in background from the resume point
+        asyncio.create_task(self._run_deployment(resume_from_step=from_step))
+
+        return self.current_deployment
+
+    async def skip_step(self, step_id: int) -> bool:
+        """Mark a step as SKIPPED and resume from the next step.
+
+        Args:
+            step_id: The step to skip.
+
+        Returns:
+            True if the step was skipped and deployment resumed.
+        """
+        if self.is_running():
+            raise RuntimeError("Cannot skip step while deployment is running")
+        if not self.current_deployment:
+            raise RuntimeError("No deployment exists")
+        if step_id < 0 or step_id >= len(self.current_deployment.steps):
+            raise ValueError(f"Invalid step ID: {step_id}")
+
+        step = self.current_deployment.steps[step_id]
+        if step.status not in (StepStatus.FAILED, StepStatus.PENDING):
+            raise RuntimeError(
+                f"Can only skip failed or pending steps, not {step.status.value}"
+            )
+
+        step.status = StepStatus.SKIPPED
+        step.completed_at = datetime.utcnow()
+        await self.log(step_id, "warn", f"Step '{step.description}' skipped by user")
+        self._save_state()
+
+        # Resume from the next step
+        await self.resume_deployment(from_step=step_id + 1)
+        return True
+
     async def cleanup(self) -> bool:
         """Run cleanup with Talos reset and Terraform destroy.
 
@@ -380,38 +695,84 @@ class DeploymentService(BaseServiceMixin):
         )
 
         if result.success:
-            await self.log(-1, "info", "Cleanup completed successfully")
+            await self.log(-1, "info", "Cluster Terraform destroy completed")
         else:
-            await self.log(-1, "error", "Terraform destroy failed")
+            await self.log(-1, "error", "Cluster Terraform destroy failed")
 
+        # Step 3: Destroy Build VM (if it was deployed)
+        build_lxc_dir = self.repo_root / "terraform" / "build-lxc"
+        build_tfvars = build_lxc_dir / "terraform.tfvars"
+        if build_tfvars.exists():
+            await self.log(-1, "info", "Step 3: Destroying Build VM...")
+            build_result = await self.process_manager.run_command(
+                ["terraform", "destroy", "-auto-approve"],
+                cwd=build_lxc_dir,
+                on_output=lambda line: self.log(-1, "info", line),
+            )
+            if build_result.success:
+                await self.log(-1, "info", "Build VM destroyed")
+                # Clean up generated tfvars
+                try:
+                    build_tfvars.unlink()
+                except OSError:
+                    pass
+            else:
+                await self.log(-1, "warn", "Build VM destroy failed (non-fatal)")
+
+        await self.log(-1, "info", "Cleanup completed")
         return result.success
 
-    async def _run_deployment(self):
-        """Execute the full deployment process."""
+    def _get_step_methods(self):
+        """Return the ordered list of (step_id, method) tuples.
+
+        Centralised so both ``_run_deployment`` and future steps can extend
+        the list without duplicating it.
+        """
+        return [
+            (0, self._step_validate_git),
+            (1, self._step_check_dependencies),
+            (2, self._step_terraform_deploy),
+            (3, self._step_wait_for_vms),
+            (4, self._step_generate_talos_config),
+            (5, self._step_apply_talos_configs),
+            (6, self._step_verify_cluster_health),
+            (7, self._step_get_kubeconfig),
+            (8, self._step_install_argocd),
+            (9, self._step_deploy_infrastructure),
+            (10, self._step_argocd_self_management),
+            (11, self._step_deploy_openvas),
+            (12, self._step_deploy_faraday),
+            (13, self._step_deploy_metasploit),
+            (14, self._step_deploy_threat_dragon),
+            (15, self._step_deploy_harbor),
+            (16, self._step_configure_integrations),
+            (17, self._step_generate_secrets),
+            (18, self._step_commit_push_secrets),
+            (19, self._step_deploy_build_vm),
+            (20, self._step_build_push_images),
+            (21, self._step_deploy_cleanroom_apps),
+            (22, self._step_apply_network_policies),
+        ]
+
+    async def _run_deployment(self, resume_from_step: int = 0):
+        """Execute the deployment process, optionally resuming from a step.
+
+        Args:
+            resume_from_step: Step ID to resume from. Steps before this
+                that are already SUCCESS or SKIPPED are left untouched.
+        """
         try:
-            steps = [
-                (0, self._step_validate_git),
-                (1, self._step_check_dependencies),
-                (2, self._step_terraform_deploy),
-                (3, self._step_wait_for_vms),
-                (4, self._step_generate_talos_config),
-                (5, self._step_apply_talos_configs),
-                (6, self._step_verify_cluster_health),
-                (7, self._step_get_kubeconfig),
-                (8, self._step_install_argocd),
-                (9, self._step_deploy_infrastructure),
-                (10, self._step_argocd_self_management),
-                (11, self._step_deploy_openvas),
-                (12, self._step_deploy_faraday),
-                (13, self._step_deploy_metasploit),
-                (14, self._step_deploy_threat_dragon),
-                (15, self._step_deploy_harbor),
-                (16, self._step_configure_integrations),
-            ]
+            steps = self._get_step_methods()
 
             for step_id, step_func in steps:
                 if self.current_deployment.status != DeploymentStatus.RUNNING:
                     break
+
+                # Skip completed/skipped steps when resuming
+                if step_id < resume_from_step:
+                    existing = self.current_deployment.steps[step_id]
+                    if existing.status in (StepStatus.SUCCESS, StepStatus.SKIPPED):
+                        continue
 
                 self.current_deployment.current_step = step_id
                 await self.update_step(step_id, StepStatus.RUNNING)
@@ -421,11 +782,14 @@ class DeploymentService(BaseServiceMixin):
                 if not success:
                     await self.update_step(step_id, StepStatus.FAILED)
                     self.current_deployment.status = DeploymentStatus.FAILED
-                    self.current_deployment.error_message = f"Failed at step: {DEPLOYMENT_STEPS[step_id].description}"
-                    await self.log(step_id, "error", f"Step failed: {DEPLOYMENT_STEPS[step_id].description}")
+                    step_desc = self.current_deployment.steps[step_id].description
+                    self.current_deployment.error_message = f"Failed at step: {step_desc}"
+                    await self.log(step_id, "error", f"Step failed: {step_desc}")
+                    self._save_state()  # Checkpoint on failure
                     break
 
                 await self.update_step(step_id, StepStatus.SUCCESS)
+                self._save_state()  # Checkpoint after every successful step
 
             if self.current_deployment.status == DeploymentStatus.RUNNING:
                 self.current_deployment.status = DeploymentStatus.COMPLETED
@@ -438,7 +802,6 @@ class DeploymentService(BaseServiceMixin):
 
         finally:
             self.current_deployment.completed_at = datetime.utcnow()
-            # Persist credentials + status so they survive webapp restarts
             self._save_state()
 
     async def _step_validate_git(self, step_id: int) -> bool:
@@ -1087,17 +1450,12 @@ class DeploymentService(BaseServiceMixin):
         """
         await self.log(step_id, "info", "Enabling ArgoCD self-management...")
 
-        app_yaml = self.projects_dir / "argocd" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
+        if not await self._deploy_argocd_app("argocd", step_id):
+            return False
 
-        if result.success:
-            await self.log(step_id, "info", "Waiting for ArgoCD self-management...")
-            await asyncio.sleep(ARGOCD_SYNC_WAIT)
-
-        return result.success
+        await self.log(step_id, "info", "Waiting for ArgoCD self-management sync...")
+        await asyncio.sleep(ARGOCD_SYNC_WAIT)
+        return True
 
     async def _step_deploy_openvas(self, step_id: int) -> bool:
         """Step 11: Deploy OpenVAS vulnerability scanner.
@@ -1137,60 +1495,9 @@ class DeploymentService(BaseServiceMixin):
         if not secret_created:
             await self.log(step_id, "warn", "Could not create secret, continuing anyway...")
 
-        app_yaml = self.projects_dir / "openvas" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
-
-        if not result.success:
+        if not await self._deploy_argocd_app("openvas", step_id):
             return False
-
-        # Wait for ArgoCD to sync the OpenVAS application
-        await self.log(step_id, "info", "Waiting for ArgoCD to sync OpenVAS application...")
-        synced = False
-        for i in range(30):
-            sync_result = await self.process_manager.run_command(
-                ["kubectl", "get", "application", "openvas", "-n", "argocd",
-                 "-o", "jsonpath={.status.sync.status} {.status.health.status}"],
-                timeout=15
-            )
-            parts = (sync_result.output or "").strip().split()
-            sync_status = parts[0] if len(parts) > 0 else ""
-            health_status = parts[1] if len(parts) > 1 else ""
-
-            if sync_status == "Synced":
-                await self.log(step_id, "info",
-                    f"ArgoCD synced OpenVAS (health: {health_status or 'unknown'})")
-                synced = True
-                break
-
-            # Check for sync errors
-            if sync_status in ("Unknown", "OutOfSync"):
-                err_result = await self.process_manager.run_command(
-                    ["kubectl", "get", "application", "openvas", "-n", "argocd",
-                     "-o", "jsonpath={.status.conditions[*].message}"],
-                    timeout=15
-                )
-                err_msg = (err_result.output or "").strip()
-                if err_msg:
-                    await self.log(step_id, "warn", f"ArgoCD sync issue: {err_msg[:300]}")
-            await self.log(step_id, "info",
-                f"ArgoCD: sync={sync_status or 'pending'} health={health_status or 'unknown'}... ({i+1}/30)")
-            await asyncio.sleep(10)
-
-        if not synced:
-            # Dump full ArgoCD application status for debugging
-            await self.log(step_id, "error", "ArgoCD failed to sync OpenVAS application")
-            diag = await self.process_manager.run_command(
-                ["kubectl", "get", "application", "openvas", "-n", "argocd", "-o", "yaml"],
-                timeout=15
-            )
-            if diag.output:
-                # Show last 30 lines of the YAML status
-                lines = diag.output.strip().split('\n')
-                for line in lines[-30:]:
-                    await self.log(step_id, "info", line)
+        if not await self._wait_for_argocd_sync("openvas", step_id):
             return False
 
         # Wait for PVCs to bind (OpenVAS needs 10 PVCs from Ceph CSI)
@@ -1331,13 +1638,7 @@ class DeploymentService(BaseServiceMixin):
         }
         self._save_state()
 
-        app_yaml = self.projects_dir / "faraday" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
-
-        if not result.success:
+        if not await self._deploy_argocd_app("faraday", step_id):
             return False
 
         # Wait for Faraday deployment to be ready before creating user
@@ -1431,41 +1732,24 @@ class DeploymentService(BaseServiceMixin):
         }
         self._save_state()
 
-        app_yaml = self.projects_dir / "metasploit" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
-
-        return result.success
+        return await self._deploy_argocd_app("metasploit", step_id)
 
     async def _step_deploy_threat_dragon(self, step_id: int) -> bool:
         """Step 14: Deploy Threat Dragon via ArgoCD Application."""
         await self.log(step_id, "info", "Deploying Threat Dragon...")
 
-        app_yaml = self.projects_dir / "threat-dragon" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
-
-        await self.log(step_id, "info", "Waiting for Threat Dragon to sync...")
-        await asyncio.sleep(ARGOCD_SYNC_WAIT)
-
-        return result.success
+        if not await self._deploy_argocd_app("threat-dragon", step_id):
+            return False
+        return await self._wait_for_argocd_sync("threat-dragon", step_id)
 
     async def _step_deploy_harbor(self, step_id: int) -> bool:
         """Step 15: Deploy Harbor container registry via ArgoCD Application."""
         await self.log(step_id, "info", "Deploying Harbor container registry...")
 
-        app_yaml = self.projects_dir / "harbor" / "application.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(app_yaml)],
-            on_output=lambda line: self.log(step_id, "info", line)
-        )
-
-        await self.log(step_id, "info", "Waiting for Harbor to sync...")
-        await asyncio.sleep(ARGOCD_SYNC_WAIT)
+        if not await self._deploy_argocd_app("harbor", step_id):
+            return False
+        if not await self._wait_for_argocd_sync("harbor", step_id):
+            return False
 
         # Log deployment summary
         await self.log(step_id, "info", "")
@@ -1500,7 +1784,7 @@ class DeploymentService(BaseServiceMixin):
         await self.log(step_id, "info", "Note: Build and push the LOKI-RS image from the build VM for IOC scanning.")
         await self.log(step_id, "info", "==========================================")
 
-        return result.success
+        return True
 
     async def _step_configure_integrations(self, step_id: int) -> bool:
         """Step 16: Configure security tool integrations.
@@ -1649,6 +1933,676 @@ class DeploymentService(BaseServiceMixin):
         await self.log(step_id, "info", "=== Integration setup complete ===")
 
         return True
+
+    # =================================================================
+    # Part 2: New deployment steps (17-22)
+    # =================================================================
+
+    def _read_proxmox_credentials(self) -> dict[str, str]:
+        """Parse Proxmox API token and SSH password from credentials.auto.tfvars.
+
+        Returns a dict with keys: proxmox_api_url, proxmox_api_token, proxmox_ssh_password.
+        """
+        settings = get_settings()
+        creds_path = self.repo_root / settings.credentials_tfvars_path
+        result = {}
+        if creds_path.exists():
+            for line in creds_path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"')
+                if key in ("proxmox_api_url", "proxmox_api_token", "proxmox_ssh_password"):
+                    result[key] = value
+        return result
+
+    async def _step_generate_secrets(self, step_id: int) -> bool:
+        """Step 17: Generate and apply K8s secrets for CleanRoom apps.
+
+        Creates secrets for cleanroom-db, scanning-console, and portal.
+        Steps 11-15 already created secrets for openvas, faraday, metasploit.
+        Also writes SOPS-encrypted YAML files and the credential vault.
+        """
+        await self.log(step_id, "info", "Generating secrets for CleanRoom applications...")
+
+        settings = get_settings()
+        sops_key_file = os.environ.get(
+            "SOPS_AGE_KEY_FILE",
+            os.path.expanduser("~/.config/sops/age/keys.txt"),
+        )
+        env = {"SOPS_AGE_KEY_FILE": sops_key_file}
+
+        # --- 1. Create K8s secrets for the 3 new services ---
+
+        # CleanRoom DB
+        await self.k8s.ensure_namespace("cleanroom-db")
+        db_password = self._generate_password()
+        await self._create_secret(step_id, "cleanroom-db", "cleanroom-db-credentials",
+                                  {"postgres-password": db_password})
+        self.credentials["cleanroom_db"] = {"username": "cleanroom", "password": db_password}
+
+        # Scanning Console
+        await self.k8s.ensure_namespace("scanning-console")
+        sc_admin_password = self._generate_password(16)
+        sc_secret_key = self._generate_password(48)
+        db_url = f"postgresql+asyncpg://cleanroom:{db_password}@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom"
+
+        # Generate bcrypt hash for admin password
+        hash_result = await self.process_manager.run_command_simple(
+            ["python3", "-c",
+             f"import bcrypt; print(bcrypt.hashpw(b'{sc_admin_password}', bcrypt.gensalt(10)).decode())"],
+            timeout=15,
+        )
+        sc_admin_hash = hash_result.output.strip() if hash_result.success else ""
+
+        await self._create_secret(step_id, "scanning-console", "scanning-console-credentials", {
+            "secret-key": sc_secret_key,
+            "database-url": db_url,
+            "admin-password-hash": sc_admin_hash,
+        })
+        self.credentials["scanning_console"] = {"username": "admin", "password": sc_admin_password}
+
+        # Portal (shares SECRET_KEY with Scanning Console for SSO)
+        await self.k8s.ensure_namespace("portal")
+        await self._create_secret(step_id, "portal", "portal-credentials", {
+            "secret-key": sc_secret_key,
+        })
+        self.credentials["portal"] = {"username": "admin", "password": "admin", "note": "Default"}
+
+        # Threat Dragon (keys for Threat Dragon — step 14 doesn't create secrets)
+        await self.k8s.ensure_namespace("threat-dragon")
+        td_enc = self._generate_password(32)
+        td_jwt = self._generate_password(32)
+        td_refresh = self._generate_password(32)
+        await self._create_secret(step_id, "threat-dragon", "threat-dragon-secrets", {
+            "encryption-keys": td_enc,
+            "jwt-signing-key": td_jwt,
+            "jwt-refresh-signing-key": td_refresh,
+        })
+
+        self._save_state()
+
+        # --- 2. Write SOPS-encrypted YAML files ---
+        await self.log(step_id, "info", "Writing SOPS-encrypted secret files...")
+
+        # Helper to write + encrypt one SOPS file
+        async def write_sops_file(rel_path: str, content: str) -> bool:
+            filepath = self.projects_dir.parent / rel_path
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            filepath.write_text(content)
+            result = await self.process_manager.run_command(
+                ["sops", "-e", "-i", str(filepath)],
+                env=env,
+                on_output=self._sanitized_output_callback(step_id),
+            )
+            if result.success:
+                await self.log(step_id, "info", f"  Encrypted: {rel_path}")
+            else:
+                await self.log(step_id, "warn", f"  SOPS encrypt failed for {rel_path}: {result.output[:200]}")
+            return result.success
+
+        # CleanRoom DB
+        await write_sops_file("apps/cleanroom-db/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: cleanroom-db-credentials\n"
+            "  namespace: cleanroom-db\ntype: Opaque\nstringData:\n"
+            f'  postgres-password: "{db_password}"\n'
+        ))
+
+        # Scanning Console
+        await write_sops_file("apps/scanning-console/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: scanning-console-credentials\n"
+            "  namespace: scanning-console\ntype: Opaque\nstringData:\n"
+            f'  secret-key: "{sc_secret_key}"\n'
+            f'  database-url: "{db_url}"\n'
+            f'  admin-password-hash: "{sc_admin_hash}"\n'
+        ))
+
+        # Portal
+        await write_sops_file("apps/portal/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: portal-credentials\n"
+            "  namespace: portal\ntype: Opaque\nstringData:\n"
+            f'  secret-key: "{sc_secret_key}"\n'
+        ))
+
+        # Threat Dragon
+        await write_sops_file("apps/threat-dragon/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: threat-dragon-secrets\n"
+            "  namespace: threat-dragon\ntype: Opaque\nstringData:\n"
+            f'  encryption-keys: "{td_enc}"\n'
+            f'  jwt-signing-key: "{td_jwt}"\n'
+            f'  jwt-refresh-signing-key: "{td_refresh}"\n'
+        ))
+
+        # --- 3. Generate credential vault for Portal ---
+        await self.log(step_id, "info", "Generating credential vault for Portal...")
+
+        openvas_pw = self.credentials.get("openvas", {}).get("password", "")
+        faraday_pw = self.credentials.get("faraday", {}).get("password", "")
+        traefik_pw = self.credentials.get("traefik", {}).get("password", "admin")
+
+        vault_yaml = (
+            f'- service: ArgoCD\n  url: https://argocd.knowledgeondemand.net\n  username: admin\n  password: "admin"\n'
+            f'- service: OpenVAS\n  url: https://openvas.knowledgeondemand.net\n  username: admin\n  password: "{openvas_pw}"\n'
+            f'- service: Faraday\n  url: https://faraday.knowledgeondemand.net\n  username: admin\n  password: "{faraday_pw}"\n'
+            f'- service: Harbor\n  url: https://harbor.knowledgeondemand.net\n  username: admin\n  password: "Harbor12345"\n'
+            f'- service: Scanning Console\n  url: https://scan.knowledgeondemand.net\n  username: admin\n  password: "{sc_admin_password}"\n'
+            f'- service: Traefik Dashboard\n  url: https://traefik.knowledgeondemand.net\n  username: admin\n  password: "{traefik_pw}"\n'
+            f'- service: Portal\n  url: https://cleanroom.knowledgeondemand.net\n  username: admin\n  password: "admin"\n'
+        )
+        # Indent vault_yaml for stringData block
+        indented_vault = "\n".join("    " + line for line in vault_yaml.splitlines())
+
+        await write_sops_file("apps/portal/credential-vault.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: credential-vault\n"
+            "  namespace: portal\ntype: Opaque\nstringData:\n  credentials.yaml: |\n"
+            f"{indented_vault}\n"
+        ))
+
+        self._save_state()
+        await self.log(step_id, "info", "Secret generation complete")
+        return True
+
+    async def _step_commit_push_secrets(self, step_id: int) -> bool:
+        """Step 18: Commit and push SOPS-encrypted secrets to git.
+
+        Adds encrypted secret files to git, verifies they contain SOPS
+        headers (not plaintext), commits, and pushes.
+        """
+        await self.log(step_id, "info", "Committing secrets to git...")
+
+        # Check for changes to commit
+        diff_result = await self.process_manager.run_command_simple(
+            ["git", "diff", "--name-only", "--", "apps/*/secrets.sops.yaml",
+             "apps/portal/credential-vault.sops.yaml"],
+            cwd=self.repo_root,
+        )
+        untracked = await self.process_manager.run_command_simple(
+            ["git", "ls-files", "--others", "--exclude-standard", "--",
+             "apps/*/secrets.sops.yaml", "apps/portal/credential-vault.sops.yaml"],
+            cwd=self.repo_root,
+        )
+
+        changed_files = [
+            f for f in (diff_result.output + "\n" + untracked.output).strip().splitlines() if f.strip()
+        ]
+
+        if not changed_files:
+            await self.log(step_id, "info", "No secret file changes to commit — skipping")
+            return True
+
+        # Verify files contain SOPS header (not plaintext)
+        for f in changed_files:
+            filepath = self.repo_root / f
+            if filepath.exists():
+                content = filepath.read_text(errors="replace")[:200]
+                if "sops:" not in content and "ENC[" not in content:
+                    await self.log(step_id, "error",
+                                   f"PLAINTEXT SECRET DETECTED in {f} — refusing to commit")
+                    return False
+
+        # Verify branch
+        branch_result = await self.process_manager.run_command_simple(
+            ["git", "branch", "--show-current"], cwd=self.repo_root,
+        )
+        current_branch = (branch_result.output or "").strip()
+        await self.log(step_id, "info", f"Current branch: {current_branch}")
+
+        # Stage files
+        stage_cmd = ["git", "add"] + [str(f) for f in changed_files]
+        stage_result = await self.process_manager.run_command(
+            stage_cmd, cwd=self.repo_root,
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not stage_result.success:
+            await self.log(step_id, "error", f"git add failed: {stage_result.output}")
+            return False
+
+        # Check if anything is actually staged
+        staged_check = await self.process_manager.run_command_simple(
+            ["git", "diff", "--cached", "--quiet"], cwd=self.repo_root,
+        )
+        if staged_check.success:
+            await self.log(step_id, "info", "Nothing staged — secrets unchanged")
+            return True
+
+        # Commit
+        commit_result = await self.process_manager.run_command(
+            ["git", "commit", "-m", "chore: regenerate SOPS-encrypted secrets [automated]"],
+            cwd=self.repo_root,
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not commit_result.success:
+            await self.log(step_id, "error", f"git commit failed: {commit_result.output}")
+            return False
+
+        # Push
+        push_result = await self.process_manager.run_command(
+            ["git", "push", "origin", current_branch],
+            cwd=self.repo_root,
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not push_result.success:
+            await self.log(step_id, "warn", f"git push failed (non-fatal): {push_result.output[:200]}")
+            # Non-fatal — secrets are already applied in K8s
+        else:
+            await self.log(step_id, "info", "Secrets pushed to git successfully")
+
+        return True
+
+    async def _step_deploy_build_vm(self, step_id: int) -> bool:
+        """Step 19: Deploy and configure the Build VM LXC container.
+
+        Uses Terraform to create the LXC, then configures it via Proxmox
+        SSH + pct exec (user creation, SSH keys, repo clone, Docker install).
+        """
+        await self.log(step_id, "info", "Deploying Build VM...")
+
+        settings = get_settings()
+        proxmox_creds = self._read_proxmox_credentials()
+
+        if not proxmox_creds.get("proxmox_api_token"):
+            await self.log(step_id, "error",
+                           f"Proxmox credentials not found in {settings.credentials_tfvars_path}")
+            return False
+
+        # Generate Build VM passwords
+        root_password = self._generate_password()
+        ssh_user_password = self._generate_password()
+
+        self.credentials["build_vm"] = {
+            "username": settings.build_vm_ssh_user,
+            "password": ssh_user_password,
+            "ip": settings.build_vm_ip,
+            "note": "Build VM SSH access",
+        }
+        self._save_state()
+
+        # --- Write terraform.tfvars ---
+        terraform_dir = self.repo_root / "terraform" / "build-lxc"
+        tfvars_path = terraform_dir / "terraform.tfvars"
+
+        await self.log(step_id, "info", "Writing Terraform configuration...")
+        tfvars_content = f"""# Auto-generated by deployment service
+# Proxmox Connection
+proxmox_api_url      = "{proxmox_creds.get('proxmox_api_url', '')}"
+proxmox_api_token    = "{proxmox_creds.get('proxmox_api_token', '')}"
+proxmox_ssh_user     = "{settings.proxmox_ssh_user}"
+proxmox_ssh_password = "{proxmox_creds.get('proxmox_ssh_password', '')}"
+proxmox_node         = ""
+proxmox_pool         = ""
+
+# LXC Container Configuration
+lxc_vmid      = {settings.build_vm_vmid}
+lxc_hostname  = "build-vm"
+lxc_cores     = 2
+lxc_memory    = 4096
+lxc_swap      = 512
+lxc_disk_size = 50
+lxc_storage   = "local-lvm"
+lxc_tags      = ["build", "docker", "management"]
+
+# Template
+template_storage      = "local"
+lxc_template_filename = "debian-12-standard_12.7-1_amd64.tar.zst"
+
+# Network
+network_bridge  = "vmbr0"
+vlan_id         = {settings.build_vm_vlan_id}
+lxc_ip_address  = "{settings.build_vm_ip}/24"
+lxc_gateway     = "{settings.build_vm_gateway}"
+lxc_mac_address = ""
+
+# DNS
+dns_domain  = "knowledgeondemand.net"
+dns_servers = ["1.1.1.1", "8.8.8.8"]
+
+# Auth
+lxc_root_password = "{root_password}"
+ssh_public_keys   = []
+
+# SSH User
+ssh_user          = "{settings.build_vm_ssh_user}"
+ssh_user_password = "{ssh_user_password}"
+ssh_user_groups   = "sudo,docker"
+"""
+        tfvars_path.write_text(tfvars_content)
+
+        # --- Terraform init + apply ---
+        await self.log(step_id, "info", "Running Terraform init...")
+        init_result = await self.process_manager.run_command(
+            ["terraform", "init"],
+            cwd=terraform_dir,
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not init_result.success:
+            await self.log(step_id, "error", f"Terraform init failed: {init_result.output[:300]}")
+            return False
+
+        await self.log(step_id, "info", "Running Terraform apply...")
+        apply_result = await self.process_manager.run_command(
+            ["terraform", "apply", "-auto-approve"],
+            cwd=terraform_dir,
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not apply_result.success:
+            await self.log(step_id, "error", "Terraform apply failed")
+            return False
+
+        await self.log(step_id, "info", f"Build VM container deployed at {settings.build_vm_ip}")
+
+        # --- Setup via Proxmox SSH + pct exec ---
+        await self.log(step_id, "info", "Configuring Build VM via pct exec...")
+
+        proxmox_ssh_pw = proxmox_creds.get("proxmox_ssh_password", "")
+        proxmox_host = settings.proxmox_host
+
+        # Read GitHub SSH key
+        github_key_path = Path.home() / ".ssh" / "github_deploy_key"
+        if not github_key_path.exists():
+            # Try alternative paths
+            for alt in [Path("/root/.ssh/github_deploy_key"), Path.home() / ".ssh" / "id_ed25519"]:
+                if alt.exists():
+                    github_key_path = alt
+                    break
+
+        github_key_content = ""
+        if github_key_path.exists():
+            github_key_content = github_key_path.read_text()
+            await self.log(step_id, "info", f"Using SSH key: {github_key_path}")
+        else:
+            await self.log(step_id, "warn", "No GitHub SSH key found — repo clone may fail")
+
+        # Get git branch
+        branch_result = await self.process_manager.run_command_simple(
+            ["git", "branch", "--show-current"], cwd=self.repo_root,
+        )
+        git_branch = (branch_result.output or "").strip() or "refactor/restructure"
+
+        # Build the pct exec setup script
+        setup_script = f"""set -e
+echo "=== Installing packages ==="
+apt-get update && apt-get install -y sudo git locales sshpass
+sed -i "s/# en_US.UTF-8/en_US.UTF-8/" /etc/locale.gen
+locale-gen en_US.UTF-8
+
+echo "=== Creating SSH user: {settings.build_vm_ssh_user} ==="
+useradd -m -s /bin/bash -G sudo {settings.build_vm_ssh_user} 2>/dev/null || echo "User exists"
+echo "{settings.build_vm_ssh_user}:{ssh_user_password}" | chpasswd
+echo "{settings.build_vm_ssh_user} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/{settings.build_vm_ssh_user}
+chmod 440 /etc/sudoers.d/{settings.build_vm_ssh_user}
+
+echo "=== Disabling root SSH login ==="
+sed -i "s/^#*PermitRootLogin.*/PermitRootLogin no/" /etc/ssh/sshd_config
+systemctl restart ssh
+
+echo "=== Setting up GitHub SSH key ==="
+SSH_USER_HOME="/home/{settings.build_vm_ssh_user}"
+mkdir -p ${{SSH_USER_HOME}}/.ssh
+chmod 700 ${{SSH_USER_HOME}}/.ssh
+cat > ${{SSH_USER_HOME}}/.ssh/github_deploy_key << 'KEYEOF'
+{github_key_content}
+KEYEOF
+chmod 600 ${{SSH_USER_HOME}}/.ssh/github_deploy_key
+cat > ${{SSH_USER_HOME}}/.ssh/config << 'SSHCONFIG'
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy_key
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+SSHCONFIG
+chmod 600 ${{SSH_USER_HOME}}/.ssh/config
+chown -R {settings.build_vm_ssh_user}:{settings.build_vm_ssh_user} ${{SSH_USER_HOME}}/.ssh
+
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+cp ${{SSH_USER_HOME}}/.ssh/github_deploy_key /root/.ssh/
+cp ${{SSH_USER_HOME}}/.ssh/config /root/.ssh/
+chmod 600 /root/.ssh/github_deploy_key /root/.ssh/config
+ssh-keyscan -t ed25519,rsa github.com >> /root/.ssh/known_hosts 2>/dev/null
+
+echo "=== Cloning repository (branch: {git_branch}) ==="
+mkdir -p /opt/talos-cleanroom
+chown {settings.build_vm_ssh_user}:{settings.build_vm_ssh_user} /opt/talos-cleanroom
+su - {settings.build_vm_ssh_user} -c "git clone -b {git_branch} git@github.com:williamdemarigny/Talos-CleanRoom.git /opt/talos-cleanroom"
+git config --global --add safe.directory /opt/talos-cleanroom
+
+echo "=== Running setup script ==="
+cd /opt/talos-cleanroom/build-vm/scripts
+chmod +x setup-lxc.sh
+./setup-lxc.sh
+
+echo "=== Adding user to docker group ==="
+usermod -aG docker {settings.build_vm_ssh_user} 2>/dev/null || echo "docker group not ready"
+
+echo "=== Setup Complete ==="
+"""
+        # Write setup script to temp file, then run via sshpass + pct exec
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+            f.write(setup_script)
+            setup_script_path = f.name
+
+        try:
+            # Execute pct exec via SSH to Proxmox host
+            pct_result = await self.process_manager.run_command(
+                ["sshpass", "-p", proxmox_ssh_pw,
+                 "ssh", "-o", "StrictHostKeyChecking=no",
+                 f"{settings.proxmox_ssh_user}@{proxmox_host}",
+                 f"pct exec {settings.build_vm_vmid} -- bash -s"],
+                on_output=self._sanitized_output_callback(step_id),
+                timeout=600,  # 10 minutes for full setup
+            )
+            # Feed the script via the process manager's stdin auto-send
+            # Since process_manager sends "y\n" to stdin, we need a different approach
+            # Use bash -c with the script inline instead
+        finally:
+            try:
+                os.unlink(setup_script_path)
+            except OSError:
+                pass
+
+        # Actually, run the setup via a different approach — SCP script then execute
+        # First, copy script to Proxmox host, then pct push + exec
+        await self.log(step_id, "info", "Executing setup via Proxmox SSH...")
+
+        # Write the script and transfer it
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+            f.write(setup_script)
+            setup_script_path = f.name
+
+        try:
+            # SCP script to Proxmox host
+            scp_result = await self.process_manager.run_command_simple(
+                ["sshpass", "-p", proxmox_ssh_pw,
+                 "scp", "-o", "StrictHostKeyChecking=no",
+                 setup_script_path,
+                 f"{settings.proxmox_ssh_user}@{proxmox_host}:/tmp/build-vm-setup.sh"],
+                timeout=30,
+            )
+            if not scp_result.success:
+                await self.log(step_id, "error", f"Failed to copy setup script to Proxmox: {scp_result.output}")
+                return False
+
+            # Push script into container and execute
+            exec_result = await self.process_manager.run_command(
+                ["sshpass", "-p", proxmox_ssh_pw,
+                 "ssh", "-o", "StrictHostKeyChecking=no",
+                 f"{settings.proxmox_ssh_user}@{proxmox_host}",
+                 f"pct push {settings.build_vm_vmid} /tmp/build-vm-setup.sh /tmp/setup.sh && "
+                 f"pct exec {settings.build_vm_vmid} -- bash /tmp/setup.sh && "
+                 f"rm -f /tmp/build-vm-setup.sh"],
+                on_output=self._sanitized_output_callback(step_id),
+                timeout=600,
+            )
+            if not exec_result.success:
+                await self.log(step_id, "error", "Build VM setup failed")
+                return False
+        finally:
+            try:
+                os.unlink(setup_script_path)
+            except OSError:
+                pass
+
+        # --- Copy kubeconfig to Build VM ---
+        await self.log(step_id, "info", "Copying kubeconfig to Build VM...")
+        container_ip = settings.build_vm_ip.split("/")[0]
+        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+        # Wait for SSH to be ready
+        for attempt in range(12):
+            ssh_check = await self.process_manager.run_command_simple(
+                ["sshpass", "-p", ssh_user_password,
+                 "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                 f"{settings.build_vm_ssh_user}@{container_ip}", "echo ok"],
+                timeout=15,
+            )
+            if ssh_check.success and "ok" in (ssh_check.output or ""):
+                break
+            await self.log(step_id, "info", f"Waiting for Build VM SSH... ({attempt + 1}/12)")
+            await asyncio.sleep(5)
+
+        kubeconfig_path = Path.home() / ".kube" / "config"
+        if kubeconfig_path.exists():
+            push_result = await self.process_manager.run_command_simple(
+                ["bash", "-c",
+                 f"sshpass -p '{ssh_user_password}' scp {ssh_opts} "
+                 f"{kubeconfig_path} {settings.build_vm_ssh_user}@{container_ip}:/tmp/kubeconfig && "
+                 f"sshpass -p '{ssh_user_password}' ssh {ssh_opts} "
+                 f"{settings.build_vm_ssh_user}@{container_ip} "
+                 f"'mkdir -p ~/.kube && mv /tmp/kubeconfig ~/.kube/config && chmod 600 ~/.kube/config && "
+                 f"sudo cp ~/.kube/config /root/.kube/config && sudo chmod 600 /root/.kube/config'"],
+                timeout=30,
+            )
+            if push_result.success:
+                await self.log(step_id, "info", "Kubeconfig copied to Build VM")
+            else:
+                await self.log(step_id, "warn", f"Kubeconfig copy failed: {push_result.output[:200]}")
+
+        await self.log(step_id, "info", "Build VM deployment complete")
+        return True
+
+    async def _step_build_push_images(self, step_id: int) -> bool:
+        """Step 20: Build and push container images from the Build VM.
+
+        SSHs to the Build VM and runs existing build-and-push.sh scripts
+        for LOKI-RS, Scanning Console, and Portal.
+        """
+        await self.log(step_id, "info", "Building and pushing container images...")
+
+        settings = get_settings()
+        container_ip = settings.build_vm_ip.split("/")[0]
+        ssh_user = settings.build_vm_ssh_user
+        ssh_password = self.credentials.get("build_vm", {}).get("password", "")
+
+        if not ssh_password:
+            await self.log(step_id, "error", "Build VM credentials not available")
+            return False
+
+        ssh_cmd_prefix = [
+            "sshpass", "-p", ssh_password,
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"{ssh_user}@{container_ip}",
+        ]
+
+        # Build scripts and their paths in the repo
+        build_scripts = [
+            ("LOKI-RS Scanner", "/opt/talos-cleanroom/apps/loki/build-and-push.sh"),
+            ("Scanning Console", "/opt/talos-cleanroom/scanning-app/build-and-push.sh"),
+            ("Portal", "/opt/talos-cleanroom/portal/build-and-push.sh"),
+        ]
+
+        for name, script_path in build_scripts:
+            await self.log(step_id, "info", f"Building {name}...")
+            build_result = await self.process_manager.run_command(
+                ssh_cmd_prefix + [f"cd $(dirname {script_path}) && sudo bash {script_path}"],
+                on_output=self._sanitized_output_callback(step_id),
+                timeout=600,  # 10 minutes per build
+            )
+            if not build_result.success:
+                await self.log(step_id, "error", f"Build failed for {name}")
+                return False
+            await self.log(step_id, "info", f"{name} built and pushed successfully")
+
+        self.credentials["harbor"] = {
+            "username": "admin", "password": "Harbor12345",
+            "note": "Change on first login",
+        }
+        self._save_state()
+
+        await self.log(step_id, "info", "All container images built and pushed to Harbor")
+        return True
+
+    async def _step_deploy_cleanroom_apps(self, step_id: int) -> bool:
+        """Step 21: Deploy CleanRoom DB, Scanning Console, and Portal via ArgoCD."""
+        await self.log(step_id, "info", "Deploying CleanRoom applications...")
+
+        # Deploy all three apps
+        for app in ["cleanroom-db", "scanning-console", "portal"]:
+            if not await self._deploy_argocd_app(app, step_id):
+                return False
+
+        # Wait for CleanRoom DB first (Scanning Console depends on it)
+        if not await self._wait_for_argocd_sync("cleanroom-db", step_id):
+            return False
+
+        # Then wait for remaining apps
+        if not await self._wait_for_argocd_sync("scanning-console", step_id):
+            return False
+        if not await self._wait_for_argocd_sync("portal", step_id):
+            return False
+
+        # Log access info
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "CleanRoom applications deployed:")
+        await self.log(step_id, "info", "  - Portal:           https://cleanroom.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Scanning Console: https://scan.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - CleanRoom DB:     Internal (cleanroom-db.cleanroom-db.svc)")
+
+        return True
+
+    async def _step_apply_network_policies(self, step_id: int) -> bool:
+        """Step 22: Apply zero-trust network policies to all namespaces.
+
+        Applied last because earlier steps need unrestricted network during setup.
+        """
+        await self.log(step_id, "info", "Applying network policies...")
+
+        netpol_dir = self.projects_dir / "network-policies"
+        if not netpol_dir.exists():
+            await self.log(step_id, "warn", f"Network policies directory not found: {netpol_dir}")
+            return True  # Non-fatal
+
+        result = await self.process_manager.run_command(
+            ["kubectl", "apply", "-f", str(netpol_dir)],
+            on_output=self._sanitized_output_callback(step_id),
+        )
+
+        if result.success:
+            await self.log(step_id, "info", "Network policies applied to all namespaces")
+        else:
+            await self.log(step_id, "error", f"Failed to apply network policies: {result.output[:300]}")
+
+        # Final deployment summary
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "==========================================")
+        await self.log(step_id, "info", "Full Platform Deployment Complete!")
+        await self.log(step_id, "info", "==========================================")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Access services at:")
+        await self.log(step_id, "info", "  - Portal:           https://cleanroom.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Scanning Console: https://scan.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - ArgoCD:           https://argocd.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - OpenVAS:          https://openvas.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Faraday:          https://faraday.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Harbor:           https://harbor.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Threat Dragon:    https://threatdragon.knowledgeondemand.net")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "View credentials: Deployment > Credentials tab")
+        await self.log(step_id, "info", "==========================================")
+
+        return result.success
 
 
 # Global deployment service instance
