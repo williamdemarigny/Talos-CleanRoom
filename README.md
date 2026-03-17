@@ -59,7 +59,7 @@ All three apps share a common `SECRET_KEY` for cross-app SSO via HMAC-signed one
 
 ```
 Talos-CleanRoom/
-+-- DEPLOYMENT.md                       # End-to-end deployment guide (20 steps)
++-- DEPLOYMENT.md                       # End-to-end deployment guide
 +-- CLAUDE.md                           # AI assistant primer
 |
 +-- apps/                               # ArgoCD-managed K8s applications
@@ -146,6 +146,23 @@ Talos-CleanRoom/
 
 For complete step-by-step deployment instructions, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
+### Quick Start (WebUI — Recommended)
+
+```bash
+# 1. Clone repo
+git clone git@github.com:williamdemarigny/Talos-CleanRoom.git
+cd Talos-CleanRoom
+git checkout refactor/restructure
+
+# 2. Deploy the WebUI LXC container
+cd webui && ./deploy-lxc.sh
+
+# 3. Open http://10.83.3.190:8000, login, click "Deploy"
+#    All 23 steps run automatically — secrets, Build VM, images, apps, network policies
+
+# 4. Configure DNS: *.knowledgeondemand.net → Traefik LB IP (10.83.3.200)
+```
+
 ### Quick Start (CLI)
 
 ```bash
@@ -158,7 +175,7 @@ git checkout refactor/restructure
 # 2. Automated deployment (Terraform -> Talos -> ArgoCD -> infra -> security tools)
 ./scripts/DeployCluster.sh
 
-# 3. Apply secrets and deploy remaining apps (see DEPLOYMENT.md steps 9-17)
+# 3. Apply secrets and deploy remaining apps (see DEPLOYMENT.md for manual steps)
 ./scripts/apply-secrets.sh
 ```
 
@@ -181,10 +198,13 @@ git checkout refactor/restructure
 
 ### What Requires Manual Steps
 
-- **DNS configuration** — create `*.knowledgeondemand.net` wildcard A record
+**WebUI (automated) path — only 2 manual steps after clicking Deploy:**
+- **Deployment Console** — `webui/deploy-lxc.sh` (one-time LXC setup, before deploying)
+- **DNS configuration** — create `*.knowledgeondemand.net` wildcard A record (after Traefik is up)
+
+**CLI path — additional manual steps:**
 - **Build VM** — `build-vm/deploy-lxc.sh` (interactive Proxmox prompts)
 - **Image builds** — SSH to Build VM, run `build-and-push.sh` for LOKI-RS, Scanning Console, Portal
-- **Deployment Console** — `webui/deploy-lxc.sh` (interactive Proxmox prompts)
 
 ## Accessing Services
 
@@ -201,11 +221,11 @@ git checkout refactor/restructure
 | Threat Dragon | https://threatdragon.knowledgeondemand.net | (no auth) |
 | Metasploit | `kubectl exec -n metasploit deploy/metasploit -c metasploit -- ./msfconsole` | CLI |
 
-> **Change all default passwords before production use.** See [DEPLOYMENT.md step 19](DEPLOYMENT.md#19-change-default-credentials).
+> **Change all default passwords before production use.** See [DEPLOYMENT.md — Change Default Credentials](DEPLOYMENT.md#a5-change-default-credentials).
 
 ## Troubleshooting
 
-See [DEPLOYMENT.md step 20](DEPLOYMENT.md#20-troubleshooting) for detailed troubleshooting.
+See [DEPLOYMENT.md — Troubleshooting](DEPLOYMENT.md#troubleshooting) for detailed troubleshooting.
 
 Common issues:
 - **OpenVAS OOMKill** — ospd-openvas needs 4Gi memory limit (not 1Gi)

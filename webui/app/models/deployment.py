@@ -88,4 +88,10 @@ DEPLOYMENT_STEPS = [
     DeploymentStep(id=14, name="deploy_threat_dragon", description="Deploy Threat Dragon"),
     DeploymentStep(id=15, name="deploy_harbor", description="Deploy Harbor Registry"),
     DeploymentStep(id=16, name="configure_integrations", description="Configure Integrations"),
+    DeploymentStep(id=17, name="generate_secrets", description="Generate & Apply Secrets"),
+    DeploymentStep(id=18, name="commit_push_secrets", description="Commit & Push Secrets"),
+    DeploymentStep(id=19, name="deploy_build_vm", description="Deploy Build VM"),
+    DeploymentStep(id=20, name="build_push_images", description="Build & Push Container Images"),
+    DeploymentStep(id=21, name="deploy_cleanroom_apps", description="Deploy CleanRoom Applications"),
+    DeploymentStep(id=22, name="apply_network_policies", description="Apply Network Policies"),
 ]

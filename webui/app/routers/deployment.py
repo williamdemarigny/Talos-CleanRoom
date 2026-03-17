@@ -179,10 +179,12 @@ async def get_credentials(
     """Get service credentials after a successful deployment."""
     deployment = service.get_status()
 
-    if deployment is None or deployment.status != DeploymentStatus.COMPLETED:
+    if deployment is None or deployment.status not in (
+        DeploymentStatus.COMPLETED, DeploymentStatus.FAILED
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Credentials are only available after a successful deployment"
+            detail="Credentials are only available after a completed or failed deployment"
         )
 
     if not service.credentials:
@@ -192,6 +194,61 @@ async def get_credentials(
         )
 
     return CredentialsResponse(credentials=service.credentials)
+
+
+@router.post("/resume", response_model=DeploymentResponse)
+async def resume_deployment(
+    from_step: Optional[int] = None,
+    user: dict = Depends(get_current_user),
+    service: DeploymentService = Depends(get_deployment_service),
+):
+    """Resume a failed or aborted deployment.
+
+    Optionally specify ``from_step`` to retry from a specific step.
+    Logs are preserved (appended, not cleared).
+    """
+    try:
+        deployment = await service.resume_deployment(from_step=from_step)
+        return DeploymentResponse(
+            success=True,
+            message=f"Deployment resumed from step {from_step if from_step is not None else 'last failure'}",
+            deployment_id=deployment.id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
+
+
+@router.post("/skip-step", response_model=DeploymentResponse)
+async def skip_step(
+    step_id: int,
+    user: dict = Depends(get_current_user),
+    service: DeploymentService = Depends(get_deployment_service),
+):
+    """Mark a step as SKIPPED and resume deployment from the next step."""
+    try:
+        await service.skip_step(step_id)
+        return DeploymentResponse(
+            success=True,
+            message=f"Step {step_id} skipped, deployment resumed from step {step_id + 1}",
+        )
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.post("/cleanup", response_model=DeploymentResponse)

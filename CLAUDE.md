@@ -54,12 +54,12 @@ Talos-CleanRoom/
 │   │   │   └── config.py     # NodeConfig, NetworkConfig, TerraformConfig
 │   │   ├── routers/
 │   │   │   ├── auth.py       # POST /api/auth/login, /logout, GET /me, POST /redeem-code
-│   │   │   ├── deployment.py # POST start/abort, GET status/logs/kubeconfig/credentials, POST cleanup
+│   │   │   ├── deployment.py # POST start/abort/resume/skip-step, GET status/logs/kubeconfig/credentials, POST cleanup
 │   │   │   ├── config.py     # GET/PUT terraform, GET talos/env, talos/config, all, validate
 │   │   │   ├── websocket.py  # WS /ws/deployment (deployment real-time updates)
 │   │   │   └── ws_manager.py # ConnectionManager (Set[WebSocket] + broadcast), create_message()
 │   │   └── services/
-│   │       ├── deployment_service.py  # 17-step cluster orchestrator (~1660 lines)
+│   │       ├── deployment_service.py  # 23-step deployment orchestrator (~2200 lines)
 │   │       ├── config_service.py      # Terraform/Talos config file management
 │   │       ├── kubectl_utils.py       # KubernetesHelper wrapper (~380 lines)
 │   │       ├── process_manager.py     # Async subprocess execution + cancellation
@@ -256,7 +256,7 @@ Portal generates HMAC-signed one-time codes → target app redeems via `POST /ap
 talos_common.services.BaseServiceMixin   # _log_with_callback(), check_cluster_connectivity(),
     │                                    #   poll_until(), @property k8s -> KubernetesHelper
     │
-    ├── webui: DeploymentService         # 17-step cluster orchestrator, Fernet state
+    ├── webui: DeploymentService         # 23-step deployment orchestrator, Fernet state, resumable
     ├── scanning-app: ScanService        # Nmap/OpenVAS/Metasploit, PostgreSQL persistence
     └── scanning-app: IocScanService     # LOKI-RS IOC scanning, PostgreSQL persistence
 ```
@@ -317,19 +317,20 @@ function deploymentMonitor() {
 
 ### Deployment Service — Steps & Timing
 
-17 steps (0-16) defined in `DEPLOYMENT_STEPS[]` in `models/deployment.py`.
+23 steps (0-22) defined in `DEPLOYMENT_STEPS[]` in `models/deployment.py`. Steps 17-22 automate secrets, Build VM, image builds, app deployment, and network policies.
 
 **Key timing constants** (in `deployment_service.py`):
 - `VM_BOOT_INITIAL_DELAY = 180` — wait after Terraform apply
 - `VM_READY_MAX_ATTEMPTS = 30`, `VM_READY_RETRY_INTERVAL = 10` — VM readiness polling
 - `TALOS_API_CHECK_TIMEOUT = 15` — per-node API check
 - State persisted to `/app/data/deployment_state.json` (Fernet-encrypted with SECRET_KEY)
+- Deployments are **resumable** — state checkpointed after every step, logs preserved across resume
 
 **Step execution pattern:**
 ```python
-async def _run_deployment(self):
-    step_methods = [self._step_validate_git, self._step_check_dependencies, ...]
-    for i, method in enumerate(step_methods):
+async def _run_deployment(self, resume_from_step: int = 0):
+    step_methods = self._get_step_methods()  # [(id, method), ...]
+    for step_id, method in step_methods:
         await self.update_step(i, StepStatus.RUNNING)
         success = await method(i)
         await self.update_step(i, StepStatus.SUCCESS if success else StepStatus.FAILED)

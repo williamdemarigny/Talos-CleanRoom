@@ -8,7 +8,10 @@ This guide is organized into two paths:
 - **[Automated Deployment (WebUI)](#automated-deployment-webui)** — recommended, uses the Deployment Console to orchestrate K8s cluster creation
 - **[Manual Deployment](#manual-deployment)** — step-by-step CLI commands for full control
 
-Both paths share the same [Prerequisites](#1-prerequisites) and [Initial Setup](#initial-setup-both-paths) (steps 1–4).
+Both paths share the same [Prerequisites](#1-prerequisites) and [Initial Setup](#initial-setup-both-paths).
+
+- **Automated path:** Only needs steps 1 (clone) — secrets and git push are handled by the WebUI (steps 17-18).
+- **Manual path:** Needs steps 1–3 (clone, generate secrets, push to git).
 
 ---
 
@@ -126,14 +129,16 @@ You now have two options:
 
 | Path | Best for | What it automates |
 |------|----------|-------------------|
-| **[Automated (WebUI)](#automated-deployment-webui)** | Most users | K8s cluster creation, ArgoCD, infra stack, security tools |
+| **[Automated (WebUI)](#automated-deployment-webui)** | Most users | Everything — K8s cluster, ArgoCD, infra, security tools, secrets, Build VM, images, apps, network policies (23 steps, zero manual intervention) |
 | **[Manual](#manual-deployment)** | Debugging, customization | Nothing — you run every command |
 
 ---
 
 # Automated Deployment (WebUI)
 
-The WebUI (Deployment Console) runs in a Proxmox LXC container and orchestrates the entire K8s cluster deployment through a web interface. Follow these steps in order.
+The WebUI (Deployment Console) runs in a Proxmox LXC container and orchestrates the entire platform deployment through a web interface. Only two manual steps remain after clicking "Deploy": DNS configuration and verification.
+
+> **Note:** Steps 2-3 (generate secrets, git push) from Initial Setup are **optional** for the automated path — the WebUI handles secret generation (step 17) and git push (step 18) automatically. You only need to run them manually if you want to customize passwords before deploying.
 
 ## A1. Deploy the Deployment Console
 
@@ -174,7 +179,7 @@ Access at `http://10.83.3.190:8000` (login: `admin` / `admin`).
 
 Open `http://10.83.3.190:8000`, login, and click **Deploy**.
 
-The WebUI runs a 17-step automated deployment:
+The WebUI runs a fully automated 23-step deployment:
 
 | Steps | What |
 |-------|------|
@@ -187,37 +192,22 @@ The WebUI runs a 17-step automated deployment:
 | 10 | ArgoCD self-management |
 | 11–15 | Security tools (OpenVAS, Faraday, Metasploit, Threat Dragon, Harbor) |
 | 16 | Configure integrations |
+| 17 | Generate & apply K8s secrets (all services) |
+| 18 | Commit & push SOPS-encrypted secrets to git |
+| 19 | Deploy Build VM (LXC with Docker CE) |
+| 20 | Build & push container images (LOKI-RS, Scanning Console, Portal) |
+| 21 | Deploy CleanRoom applications (DB, Scanning Console, Portal) |
+| 22 | Apply zero-trust network policies |
 
-Wait for all 17 steps to complete. The K8s cluster is now running with ArgoCD, full infrastructure, and all security tools including Harbor.
+Wait for all 23 steps to complete. The entire platform is now running — K8s cluster, infrastructure, security tools, custom applications, and network policies.
 
-## A3. Download Kubeconfig
+**Resumable deployments:** If any step fails, fix the issue and click **Resume** to continue from where it left off. You can also **Skip** a failed step to proceed to the next one. All logs are preserved across resume operations.
 
-The WebUI generated the kubeconfig during deployment and stored it on the WebUI LXC. Your local workstation needs a copy for all remaining steps.
+## A3. Configure DNS
 
-1. In the WebUI at `http://10.83.3.190:8000`, go to the **Deployment** page
-2. Click **Download Kubeconfig** to save `kubeconfig.yaml`
-3. Move it into place:
+Create DNS A records pointing to the Traefik LoadBalancer IP. You can do this while the deployment is still running (after step 9 deploys Traefik) or after it completes.
 
-```bash
-mkdir -p ~/.kube
-cp ~/Downloads/kubeconfig.yaml ~/.kube/config
-```
-
-> **Windows:** If your browser saves to a different location, adjust the `cp` path accordingly.
-
-4. Verify you can reach the cluster:
-
-```bash
-kubectl get nodes
-```
-
-Expected: 1 control-plane + 3 worker nodes in `Ready` state.
-
-> **Note:** All remaining steps (A4 onward) require `kubectl` access and should be run from your **local workstation** with the kubeconfig and the repo checked out.
-
-## A4. Configure DNS
-
-Create DNS A records pointing to the Traefik LoadBalancer IP:
+Get the Traefik LB IP (from WebUI credentials page, or via kubectl if you have the kubeconfig):
 
 ```bash
 kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
@@ -240,211 +230,7 @@ If using Cloudflare, these can be a single wildcard record: `*.knowledgeondemand
 
 See [docs/DNS-MAPPING.md](docs/DNS-MAPPING.md) for the complete reference.
 
-## A5. Apply Application Secrets
-
-> **Run from:** Local workstation (repo checkout with kubeconfig from A3)
-
-Decrypt and apply the SOPS-encrypted secrets to the K8s cluster:
-
-```bash
-./scripts/apply-secrets.sh
-```
-
-Or apply individually:
-
-```bash
-sops -d apps/openvas/secrets.sops.yaml       | kubectl apply -f -
-sops -d apps/faraday/secrets.sops.yaml       | kubectl apply -f -
-sops -d apps/metasploit/secrets.sops.yaml    | kubectl apply -f -
-sops -d apps/traefik/basic-auth-secret.sops.yaml | kubectl apply -f -
-sops -d apps/threat-dragon/secrets.sops.yaml | kubectl apply -f -
-sops -d apps/scanning-console/secrets.sops.yaml | kubectl apply -f -
-sops -d apps/portal/secrets.sops.yaml        | kubectl apply -f -
-sops -d apps/portal/credential-vault.sops.yaml | kubectl apply -f -
-sops -d apps/cleanroom-db/secrets.sops.yaml  | kubectl apply -f -
-```
-
-> **Important:** Secrets must exist before pods that reference them start. If a pod is in `CreateContainerConfigError`, apply its secret and it will auto-recover.
-
-## A6. Deploy the Build VM
-
-> **Run from:** Local workstation (repo checkout)
-
-The Build VM is a Proxmox LXC container with Docker CE for building container images. It needs the K8s cluster running (for kubeconfig) and Harbor running (to push images).
-
-```bash
-cd build-vm
-chmod +x deploy-lxc.sh
-./deploy-lxc.sh
-```
-
-The script prompts for:
-- Proxmox API token
-- Proxmox SSH password
-- LXC root password
-- `deploy` user password (for SSH access)
-- GitHub SSH key path (auto-detects common locations)
-- Kubeconfig path (for creating Harbor pull secrets in K8s)
-
-| Setting | Value |
-|---------|-------|
-| VMID | 201 |
-| IP | 10.83.3.191 |
-| Cores / RAM / Disk | 2 / 4 GB / 50 GB |
-| Installed | Docker CE, kubectl, curl, jq, git |
-
-Verify:
-
-```bash
-ssh deploy@10.83.3.191
-docker info    # should show Docker engine running
-```
-
-If the kubeconfig wasn't copied during deployment, copy it now:
-
-```bash
-scp ~/.kube/config deploy@10.83.3.191:~/.kube/config
-```
-
-## A7. Build and Push Container Images
-
-> **Run from:** Build VM (SSH to `deploy@10.83.3.191`)
-
-SSH into the Build VM and build all three custom images:
-
-```bash
-ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom
-git pull    # ensure latest code
-```
-
-### LOKI-RS IOC Scanner
-
-```bash
-cd apps/loki
-chmod +x build-and-push.sh
-./build-and-push.sh
-```
-
-This script:
-1. Creates the `cleanroom` project in Harbor (idempotent)
-2. Creates `harbor-pull-secret` in the `loki-scanner` namespace
-3. Builds the LOKI-RS image (`ubuntu:24.04` base + FUSE + SSHFS + CIFS)
-4. Pushes to `harbor.knowledgeondemand.net/cleanroom/loki-rs-scanner:v2.10.0`
-
-### Scanning Console
-
-Both Scanning Console and Portal require the **repo root** as the Docker build context (they depend on `lib/talos-common`):
-
-```bash
-cd /opt/talos-cleanroom
-docker build -f scanning-app/Dockerfile -t harbor.knowledgeondemand.net/cleanroom/scanning-console:latest .
-docker push harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
-```
-
-### Portal
-
-```bash
-cd /opt/talos-cleanroom
-docker build -f portal/Dockerfile -t harbor.knowledgeondemand.net/cleanroom/portal:latest .
-docker push harbor.knowledgeondemand.net/cleanroom/portal:latest
-```
-
-### Verify images in Harbor
-
-```bash
-curl -sk https://harbor.knowledgeondemand.net/api/v2.0/projects/cleanroom/repositories | jq '.[].name'
-```
-
-Expected: `cleanroom/loki-rs-scanner`, `cleanroom/scanning-console`, `cleanroom/portal`.
-
-### Create Harbor Pull Secrets
-
-The `loki-scanner` namespace gets its pull secret from `build-and-push.sh`, but scanning-console and portal need theirs:
-
-```bash
-for ns in scanning-console portal; do
-    kubectl create secret docker-registry harbor-pull-secret \
-        --namespace="$ns" \
-        --docker-server=harbor.knowledgeondemand.net \
-        --docker-username=admin \
-        --docker-password=Harbor12345 \
-        2>/dev/null || echo "  harbor-pull-secret already exists in $ns"
-done
-```
-
-## A8. Deploy CleanRoom Database
-
-> **Run from:** Local workstation (requires kubectl)
-
-PostgreSQL 17 backing the Scanning Console:
-
-```bash
-kubectl apply -f apps/cleanroom-db/application.yaml
-```
-
-Wait for ArgoCD to sync and create the resources, then verify:
-
-```bash
-# Wait for ArgoCD to sync (watch until SYNC=Synced, HEALTH=Healthy)
-kubectl -n argocd get application cleanroom-db -w
-
-# Verify StatefulSet is ready
-kubectl -n cleanroom-db rollout status statefulset/cleanroom-db --timeout=300s
-
-# Verify PostgreSQL is accepting connections
-kubectl -n cleanroom-db exec statefulset/cleanroom-db -- pg_isready
-```
-
-## A9. Deploy Scanning Console
-
-The Scanning Console provides vulnerability scanning (Nmap, OpenVAS, Metasploit, LOKI-RS IOC) with PostgreSQL persistence. The deployment includes an init container that runs Alembic database migrations before the app starts.
-
-```bash
-kubectl apply -f apps/scanning-console/application.yaml
-```
-
-Wait for ArgoCD to sync, then verify:
-
-```bash
-kubectl -n argocd get application scanning-console -w
-kubectl -n scanning-console rollout status deployment/scanning-console --timeout=300s
-```
-
-Verify at `https://scan.knowledgeondemand.net`.
-
-## A10. Deploy Unified Portal
-
-The Portal is the landing page providing SSO across all three applications:
-
-```bash
-kubectl apply -f apps/portal/application.yaml
-```
-
-Wait for ArgoCD to sync, then verify:
-
-```bash
-kubectl -n argocd get application portal -w
-kubectl -n portal rollout status deployment/portal --timeout=120s
-```
-
-Verify at `https://cleanroom.knowledgeondemand.net`.
-
-## A11. Apply Network Policies
-
-Apply zero-trust network policies (default-deny per namespace with explicit allow rules):
-
-```bash
-kubectl apply -f apps/network-policies/
-```
-
-This creates policies for: faraday, openvas, threat-dragon, metasploit, argocd, scanning-console, portal, cleanroom-db.
-
-> **Tip:** Network policies are applied last so you can verify all services are working before locking down traffic. If a service stops working after applying policies, temporarily remove the policy for that namespace to confirm it's the cause: `kubectl delete networkpolicy -n <namespace> --all`
-
-See [apps/network-policies/README.md](apps/network-policies/README.md) for the full policy matrix.
-
-## A12. Post-Deployment Verification
+## A4. Post-Deployment Verification
 
 ### Service Access Points
 
@@ -499,7 +285,7 @@ curl -sk https://cleanroom.knowledgeondemand.net/api/system/health
 2. Click the Scanning Console link — should SSO without re-entering credentials
 3. Click the Deployment Console link — should SSO to `http://10.83.3.190:8000`
 
-## A13. Change Default Credentials
+## A5. Change Default Credentials
 
 **Do this before any production use.**
 
@@ -525,33 +311,29 @@ python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes
 ## Automated Deployment Summary
 
 ```
-Local Workstation
+Local Workstation (one-time setup)
     ├─ [1]  Clone repo
-    ├─ [2]  generate-secrets.sh           → SOPS-encrypted secrets
-    ├─ [3]  git commit + push             → Secrets available for ArgoCD
+    ├─ [2]  generate-secrets.sh           → (optional — WebUI step 17 does this)
+    ├─ [3]  git commit + push             → (optional — WebUI step 18 does this)
     │
 Proxmox (run from local workstation)
     ├─ [A1] WebUI deploy-lxc.sh           → Deployment Console (10.83.3.190)
     │
-WebUI (browser)
-    ├─ [A2] WebUI "Deploy" button         → K8s cluster + ArgoCD + infra + security tools
-    │       (automated, ~45 min)
+WebUI (browser — fully automated, ~60 min)
+    ├─ [A2] Click "Deploy" button         → All 23 steps run unattended:
+    │       Steps 0-7:   K8s cluster (Terraform + Talos + bootstrap)
+    │       Steps 8-10:  ArgoCD + infrastructure + self-management
+    │       Steps 11-16: Security tools + integrations
+    │       Step  17:    Generate & apply K8s secrets
+    │       Step  18:    Commit & push secrets to git
+    │       Step  19:    Deploy Build VM (LXC + Docker CE)
+    │       Step  20:    Build & push container images
+    │       Step  21:    Deploy CleanRoom apps (DB, Scanner, Portal)
+    │       Step  22:    Apply network policies
     │
-Local Workstation (run from repo checkout with kubeconfig)
-    ├─ [A3] Retrieve kubeconfig           → Copy from WebUI LXC or download from WebUI
-    ├─ [A4] DNS records                   → *.knowledgeondemand.net
-    ├─ [A5] apply-secrets.sh              → App secrets into K8s
-    ├─ [A6] Build VM deploy-lxc.sh        → Docker build env (10.83.3.191)
-    │
-Build VM (SSH to 10.83.3.191)
-    ├─ [A7] Build + push images           → LOKI-RS, scanning-console, portal
-    │
-Local Workstation
-    ├─ [A8]  CleanRoom DB                 → PostgreSQL 17
-    ├─ [A9]  Scanning Console             → Scanning web app
-    ├─ [A10] Portal                       → SSO landing page
-    ├─ [A11] Network policies             → Zero-trust (applied last)
-    └─ [A12] Verification                → End-to-end checks
+Manual (only 2 steps remain)
+    ├─ [A3] DNS records                   → *.knowledgeondemand.net
+    └─ [A4] Verification                 → End-to-end checks
 ```
 
 ---
