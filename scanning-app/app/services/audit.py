@@ -34,7 +34,7 @@ async def log_audit(
         source_ip = request.client.host
 
     entry = AuditLog(
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.utcnow(),
         action=action,
         user=user,
         source_ip=source_ip,
