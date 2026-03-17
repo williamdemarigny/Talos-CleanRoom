@@ -2029,11 +2029,13 @@ class DeploymentService(BaseServiceMixin):
 
         # Helper to write + encrypt one SOPS file
         async def write_sops_file(rel_path: str, content: str) -> bool:
-            filepath = self.projects_dir.parent / rel_path
+            filepath = self.repo_root / rel_path
             filepath.parent.mkdir(parents=True, exist_ok=True)
             filepath.write_text(content)
+            # Run from repo root so SOPS finds .sops.yaml config
             result = await self.process_manager.run_command(
-                ["sops", "-e", "-i", str(filepath)],
+                ["sops", "-e", "-i", rel_path],
+                cwd=self.repo_root,
                 env=env,
                 on_output=self._sanitized_output_callback(step_id),
             )

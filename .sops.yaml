@@ -36,6 +36,10 @@ creation_rules:
   - path_regex: .*apps/portal/.*\.sops\.yaml$
     age: >-
       age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Threat Dragon secrets
+  - path_regex: .*apps/threat-dragon/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
   # CleanRoom DB secrets
   - path_regex: .*apps/cleanroom-db/.*\.sops\.yaml$
     age: >-
