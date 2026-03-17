@@ -2378,6 +2378,12 @@ chmod +x setup-lxc.sh
 echo "=== Adding user to docker group ==="
 usermod -aG docker {settings.build_vm_ssh_user} 2>/dev/null || echo "docker group not ready"
 
+echo "=== Installing Let's Encrypt staging CA ==="
+curl -sk https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem \
+    -o /usr/local/share/ca-certificates/letsencrypt-staging.crt
+update-ca-certificates
+systemctl restart docker
+
 echo "=== Setup Complete ==="
 """
         # Write setup script to temp file, then run via sshpass + pct exec
