@@ -8,6 +8,7 @@ Results are parsed from JSONL output and uploaded to Faraday.
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Optional, Callable, Awaitable, List
@@ -20,8 +21,12 @@ from app.models.ioc_scan import (
 from talos_common.services.process_manager import ProcessManager
 from talos_common.services.kubectl_utils import KubernetesHelper
 from app.services.faraday_client import FaradayClient
+from app.services import result_store
+from app.db import engine as db_engine
 from talos_common.services.base_service import BaseServiceMixin
 
+
+logger = logging.getLogger(__name__)
 
 # Timeouts (seconds)
 LOKI_SCAN_TIMEOUT = 7200      # 2 hours max for IOC scan
@@ -135,8 +140,8 @@ class IocScanService(BaseServiceMixin):
         if self.status_callback and self.current_scan:
             try:
                 await self.status_callback(self.current_scan)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Status broadcast callback failed: %s", exc)
 
     def is_running(self) -> bool:
         """Check if a scan is currently running."""
@@ -194,6 +199,19 @@ class IocScanService(BaseServiceMixin):
         await self.process_manager.cancel()
         await self.log("warn", "IOC scan aborted by user")
         await self._broadcast_state()
+
+        # Persist abort to database
+        try:
+            if db_engine._session_factory is not None:
+                async with db_engine._session_factory() as session:
+                    await result_store.persist_scan_complete(
+                        session,
+                        scan_id=scan.id,
+                        status="aborted",
+                    )
+        except Exception as exc:
+            logger.debug("Best-effort DB persistence failed: %s", exc)
+
         self._save_to_history()
         return True
 
@@ -204,6 +222,21 @@ class IocScanService(BaseServiceMixin):
             await self.log("info", f"Starting IOC scan against {request.target}")
             await self.log("info", f"Mount: {request.mount_type.value} | Path: {request.scan_path}")
 
+            # Persist scan start to PostgreSQL
+            try:
+                if db_engine._session_factory is not None:
+                    async with db_engine._session_factory() as session:
+                        await result_store.persist_scan_start(
+                            session,
+                            scan_id=scan.id,
+                            scan_type="ioc",
+                            target=request.target,
+                            mount_type=request.mount_type.value,
+                            scan_path=request.scan_path,
+                        )
+            except Exception as exc:
+                logger.debug("DB persist scan start failed: %s", exc)
+
             # Verify kubectl connectivity
             if not await self.k8s.check_connectivity():
                 await self.log("error", "Cannot connect to Kubernetes cluster")
@@ -211,6 +244,15 @@ class IocScanService(BaseServiceMixin):
                 scan.error_message = "Kubernetes cluster unreachable"
                 scan.completed_at = datetime.utcnow()
                 await self._broadcast_state()
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session, scan_id=scan.id,
+                                status="failed", error_message=scan.error_message,
+                            )
+                except Exception as exc:
+                    logger.debug("Best-effort DB persistence failed: %s", exc)
                 self._save_to_history()
                 return
 
@@ -230,6 +272,17 @@ class IocScanService(BaseServiceMixin):
                     scan.error_message = "LOKI-RS scan produced no output"
                     scan.completed_at = datetime.utcnow()
                     await self._broadcast_state()
+                # Persist failure/abort to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session, scan_id=scan.id,
+                                status=scan.status.value,
+                                error_message=scan.error_message,
+                            )
+                except Exception as exc:
+                    logger.debug("Best-effort DB persistence failed: %s", exc)
                 self._save_to_history()
                 return
 
@@ -250,6 +303,33 @@ class IocScanService(BaseServiceMixin):
                 f"{scan.warnings_count} warnings, {scan.notices_count} notices")
             await self._broadcast_state()
 
+            # Persist IOC findings to PostgreSQL
+            try:
+                if db_engine._session_factory is not None and findings:
+                    async with db_engine._session_factory() as session:
+                        # Ensure host exists for the target
+                        host_id = await result_store.persist_host(
+                            session, scan_id=scan.id, ip=request.target,
+                        )
+                        for finding in findings:
+                            await result_store.persist_ioc_finding(
+                                session,
+                                scan_id=scan.id,
+                                host_id=host_id,
+                                severity=finding.severity.value,
+                                score=finding.score,
+                                file_path=finding.file_path,
+                                rule_name=finding.rule_name,
+                                description=finding.description,
+                                matched_strings=finding.matched_strings,
+                                hash_md5=finding.hash_md5,
+                                hash_sha256=finding.hash_sha256,
+                                tags=finding.tags,
+                            )
+                    await self.log("info", f"Persisted {total} IOC finding(s) to database")
+            except Exception as exc:
+                logger.debug("DB persist IOC findings failed: %s", exc)
+
             # Upload to Faraday
             if findings:
                 scan.status = IocScanStatus.UPLOADING
@@ -268,6 +348,20 @@ class IocScanService(BaseServiceMixin):
                         await self.log("info",
                             "Results uploaded to Faraday workspace 'pentest': "
                             "https://faraday.knowledgeondemand.net")
+
+                    # Persist Faraday sync status
+                    try:
+                        if db_engine._session_factory is not None:
+                            async with db_engine._session_factory() as session:
+                                await result_store.persist_faraday_sync(
+                                    session,
+                                    scan_id=scan.id,
+                                    success=uploaded,
+                                    scan_type="ioc",
+                                    detail=f"IOC upload {'succeeded' if uploaded else 'failed'}",
+                                )
+                    except Exception as exc:
+                        logger.debug("Best-effort DB persistence failed: %s", exc)
                 else:
                     await self.log("warn", "Faraday credentials unavailable, skipping upload")
 
@@ -284,6 +378,18 @@ class IocScanService(BaseServiceMixin):
                 await self.log("info", "System appears clean (no alerts or warnings)")
             await self._broadcast_state()
 
+            # Persist scan completion to PostgreSQL
+            try:
+                if db_engine._session_factory is not None:
+                    async with db_engine._session_factory() as session:
+                        await result_store.persist_scan_complete(
+                            session,
+                            scan_id=scan.id,
+                            status="completed",
+                        )
+            except Exception as exc:
+                logger.debug("Best-effort DB persistence failed: %s", exc)
+
         except Exception as e:
             await self.log("error", f"IOC scan failed: {e}")
             if scan:
@@ -291,6 +397,19 @@ class IocScanService(BaseServiceMixin):
                 scan.error_message = str(e)
                 scan.completed_at = datetime.utcnow()
                 await self._broadcast_state()
+
+                # Persist failure to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session,
+                                scan_id=scan.id,
+                                status="failed",
+                                error_message=str(e),
+                            )
+                except Exception as exc:
+                    logger.debug("Best-effort DB persistence failed: %s", exc)
         finally:
             self._save_to_history()
 
