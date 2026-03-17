@@ -1130,11 +1130,15 @@ except Exception as e:
         # Create the nmap pod (don't use --attach/--rm since stdout capture is unreliable)
         # Instead: create pod → wait for completion → read logs → delete pod
         nmap_args_str = " ".join(flags + ["-oX", "-", target])
+        nmap_ns = "nmap-scanner"
+        # Ensure namespace exists
+        await self.k8s.ensure_namespace(nmap_ns)
+
         create_result = await self.process_manager.run_command_simple(
             ["kubectl", "run", pod_name,
              "--image=instrumentisto/nmap:latest",
              "--restart=Never",
-             "--namespace=default",
+             f"--namespace={nmap_ns}",
              "--", "nmap"] + flags + ["-oX", "-", target],
             timeout=30
         )
@@ -1148,7 +1152,7 @@ except Exception as e:
         # Wait for pod to complete
         wait_result = await self.process_manager.run_command_simple(
             ["kubectl", "wait", "--for=condition=Ready=false",
-             f"pod/{pod_name}", "--namespace=default",
+             f"pod/{pod_name}", f"--namespace={nmap_ns}",
              f"--timeout={timeout}s"],
             timeout=timeout + 30
         )
@@ -1158,7 +1162,7 @@ except Exception as e:
         poll_attempts = timeout // 5
         pod_done = False
         for attempt in range(poll_attempts):
-            phase = await self.k8s.get_pod_phase("default", pod_name)
+            phase = await self.k8s.get_pod_phase(nmap_ns, pod_name)
             if phase in ("Succeeded", "Failed"):
                 pod_done = True
                 await self.log("nmap", "info", f"Nmap pod finished (phase: {phase})")
@@ -1171,14 +1175,14 @@ except Exception as e:
 
         if not pod_done:
             await self.log("nmap", "error", f"Nmap scan timed out after {timeout}s")
-            await self.k8s.delete_pod("default", pod_name, force=True, timeout=15)
+            await self.k8s.delete_pod(nmap_ns, pod_name, force=True, timeout=15)
             return None
 
         # Read the pod logs (contains nmap XML output)
-        logs_result = await self.k8s.get_pod_logs("default", pod_name, timeout=30)
+        logs_result = await self.k8s.get_pod_logs(nmap_ns, pod_name, timeout=30)
 
         # Clean up the pod
-        await self.k8s.delete_pod("default", pod_name, force=True, timeout=15)
+        await self.k8s.delete_pod(nmap_ns, pod_name, force=True, timeout=15)
 
         output = logs_result.output or ""
 
