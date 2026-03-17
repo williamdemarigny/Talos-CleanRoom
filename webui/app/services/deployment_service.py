@@ -2379,10 +2379,10 @@ echo "=== Adding user to docker group ==="
 usermod -aG docker {settings.build_vm_ssh_user} 2>/dev/null || echo "docker group not ready"
 
 echo "=== Configuring Docker to trust Harbor registry ==="
-mkdir -p /etc/docker
-cat > /etc/docker/daemon.json << 'DOCKEREOF'
-{{"insecure-registries": ["harbor.knowledgeondemand.net"]}}
-DOCKEREOF
+echo | openssl s_client -connect harbor.knowledgeondemand.net:443 \
+    -servername harbor.knowledgeondemand.net 2>/dev/null \
+    | openssl x509 > /usr/local/share/ca-certificates/harbor.crt 2>/dev/null || true
+update-ca-certificates 2>/dev/null || true
 systemctl restart docker
 
 echo "=== Setup Complete ==="
