@@ -59,6 +59,43 @@
         </div>
     </div>
 
+    <!-- Deployment Complete Banner -->
+    <div x-show="status === 'completed'" class="mb-6 p-6 bg-green-900/30 border border-green-700 rounded-lg">
+        <h3 class="text-lg font-bold text-green-300 mb-3">Deployment Complete</h3>
+        <p class="text-green-200 mb-4">The full CleanRoom platform is deployed and running. Access your applications:</p>
+        <div class="flex flex-wrap gap-3">
+            <a href="https://cleanroom.knowledgeondemand.net" target="_blank"
+               class="inline-flex items-center px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                Portal
+            </a>
+            <a href="https://scan.knowledgeondemand.net" target="_blank"
+               class="inline-flex items-center px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                Scanning Console
+            </a>
+            <a href="https://argocd.knowledgeondemand.net" target="_blank"
+               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                ArgoCD
+            </a>
+            <a href="https://harbor.knowledgeondemand.net" target="_blank"
+               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                Harbor
+            </a>
+        </div>
+        <p class="text-sm text-green-200/70 mt-3">Default credentials: admin / admin (change before production use)</p>
+    </div>
+
     <!-- Progress Steps -->
     <div class="bg-gray-800 rounded-lg p-6 mb-6">
         <h2 class="text-lg font-medium text-white mb-4">Deployment Steps</h2>
