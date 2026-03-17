@@ -2515,10 +2515,16 @@ echo "=== Setup Complete ==="
             ("Portal", "/opt/talos-cleanroom/portal/build-and-push.sh"),
         ]
 
+        # Harbor credentials for build scripts
+        harbor_password = self.credentials.get("harbor", {}).get("password", "Harbor12345")
+
         for name, script_path in build_scripts:
             await self.log(step_id, "info", f"Building {name}...")
             build_result = await self.process_manager.run_command(
-                ssh_cmd_prefix + [f"cd $(dirname {script_path}) && sudo bash {script_path}"],
+                ssh_cmd_prefix + [
+                    f"cd $(dirname {script_path}) && "
+                    f"sudo HARBOR_USER=admin HARBOR_PASSWORD='{harbor_password}' bash {script_path}"
+                ],
                 on_output=self._sanitized_output_callback(step_id),
                 timeout=600,  # 10 minutes per build
             )
