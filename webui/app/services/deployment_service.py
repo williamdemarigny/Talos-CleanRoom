@@ -2246,8 +2246,8 @@ lxc_storage   = "local-lvm"
 lxc_tags      = ["build", "docker", "management"]
 
 # Template
-template_storage      = "local"
-lxc_template_filename = "debian-12-standard_12.7-1_amd64.tar.zst"
+template_storage      = "cephfs"
+lxc_template_filename = "debian-12-standard_12.12-1_amd64.tar.zst"
 
 # Network
 network_bridge  = "vmbr0"
