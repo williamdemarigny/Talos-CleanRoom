@@ -235,6 +235,39 @@ class DeploymentService(BaseServiceMixin):
         except Exception:
             pass
 
+    def _resolve_master_node(self) -> str:
+        """Resolve the control plane endpoint from cluster.auto.tfvars.
+
+        Reads the ``ip`` field of the first controlplane node from the
+        Terraform tfvars file.  Falls back to the ``master_node`` config
+        setting (which may be a FQDN) if the file can't be parsed.
+        """
+        try:
+            tfvars_path = self.repo_root / "terraform" / "cluster-create" / "cluster.auto.tfvars"
+            if tfvars_path.exists():
+                content = tfvars_path.read_text()
+                # Find the controlplane node block and extract its ip field
+                in_node = False
+                is_controlplane = False
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("{"):
+                        in_node = True
+                        is_controlplane = False
+                    elif stripped.startswith("}"):
+                        in_node = False
+                    elif in_node:
+                        if 'role' in stripped and 'controlplane' in stripped:
+                            is_controlplane = True
+                        if is_controlplane and stripped.startswith("ip"):
+                            # Parse:  ip  = "10.83.3.10",
+                            m = re.search(r'ip\s*=\s*"([^"]+)"', stripped)
+                            if m:
+                                return m.group(1)
+        except Exception:
+            pass
+        return self.master_node
+
     @property
     def terraform_dir(self) -> Path:
         return self.repo_root / "terraform" / "cluster-create"
@@ -1287,7 +1320,8 @@ class DeploymentService(BaseServiceMixin):
         max_wait = self.health_check_retries * self.health_check_interval
         await self.log(step_id, "info", f"Waiting for cluster health (max wait: {max_wait}s)...")
         await self.log(step_id, "info", f"Using TALOSCONFIG: {talosconfig}")
-        await self.log(step_id, "info", f"Target node: {self.master_node}")
+        master = self._resolve_master_node()
+        await self.log(step_id, "info", f"Target node: {master}")
 
         for i in range(1, self.health_check_retries + 1):
             if self.current_deployment.status != DeploymentStatus.RUNNING:
@@ -1295,8 +1329,8 @@ class DeploymentService(BaseServiceMixin):
 
             result = await self.process_manager.run_command_simple(
                 ["talosctl", "health",
-                 f"--nodes={self.master_node}",
-                 f"--endpoints={self.master_node}"],
+                 f"--nodes={master}",
+                 f"--endpoints={master}"],
                 env=env,
                 timeout=60
             )
@@ -1342,7 +1376,7 @@ class DeploymentService(BaseServiceMixin):
 
         await self.log(step_id, "info", f"Retrieving kubeconfig to {kubeconfig_path}...")
         result = await self.process_manager.run_command(
-            ["talosctl", "kubeconfig", f"--nodes={self.master_node}", str(kubeconfig_path)],
+            ["talosctl", "kubeconfig", f"--nodes={self._resolve_master_node()}", str(kubeconfig_path)],
             env=env,
             on_output=lambda line: self.log(step_id, "info", line)
         )
