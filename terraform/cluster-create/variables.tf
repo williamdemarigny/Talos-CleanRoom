@@ -45,6 +45,7 @@ variable "nodes" {
     vmid                    = number
     role                    = string
     fqdn                    = string
+    ip                      = optional(string)
     cores                   = number
     memory                  = number
     disk_size               = string
