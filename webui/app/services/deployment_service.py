@@ -2378,10 +2378,15 @@ chmod +x setup-lxc.sh
 echo "=== Adding user to docker group ==="
 usermod -aG docker {settings.build_vm_ssh_user} 2>/dev/null || echo "docker group not ready"
 
-echo "=== Installing Let's Encrypt staging CA ==="
+echo "=== Trusting Harbor registry certificate ==="
+mkdir -p /etc/docker/certs.d/harbor.knowledgeondemand.net
+echo | openssl s_client -connect harbor.knowledgeondemand.net:443 \
+    -servername harbor.knowledgeondemand.net 2>/dev/null \
+    | openssl x509 > /etc/docker/certs.d/harbor.knowledgeondemand.net/ca.crt 2>/dev/null || true
+# Also install system-wide for curl/wget
 curl -sk https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem \
-    -o /usr/local/share/ca-certificates/letsencrypt-staging.crt
-update-ca-certificates
+    -o /usr/local/share/ca-certificates/letsencrypt-staging.crt 2>/dev/null || true
+update-ca-certificates 2>/dev/null || true
 systemctl restart docker
 
 echo "=== Setup Complete ==="
