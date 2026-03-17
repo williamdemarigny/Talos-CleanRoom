@@ -67,6 +67,17 @@ spec:
       containers:
       - name: scanning-console
         image: harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          # Generate kubeconfig from ServiceAccount token (kubectl doesn't auto-detect in-cluster config in this image)
+          SA=/var/run/secrets/kubernetes.io/serviceaccount
+          mkdir -p /tmp/.kube
+          kubectl config set-cluster in-cluster --server=https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT} --certificate-authority=${SA}/ca.crt 2>/dev/null
+          kubectl config set-credentials sa --token="$(cat ${SA}/token)" 2>/dev/null
+          kubectl config set-context default --cluster=in-cluster --user=sa 2>/dev/null
+          kubectl config use-context default 2>/dev/null
+          exec uvicorn app.main:app --host 0.0.0.0 --port 8000
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
