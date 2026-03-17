@@ -20,6 +20,8 @@ from app.models.scan import (
 from talos_common.services.process_manager import ProcessManager
 from talos_common.services.kubectl_utils import KubernetesHelper
 from app.services.faraday_client import FaradayClient
+from app.services import result_store
+from app.db import engine as db_engine
 from talos_common.services.base_service import BaseServiceMixin
 
 
@@ -1021,6 +1023,28 @@ except Exception as e:
             await self.log(None, "info", f"Starting security scan against {target}")
             await self.log(None, "info", f"Profile: {profile.value} | Tools: {', '.join(t.tool.value for t in scan.tools)}")
 
+            # Persist scan start to PostgreSQL
+            db_scan_id = scan.id
+            try:
+                if db_engine._session_factory is not None:
+                    async with db_engine._session_factory() as session:
+                        await result_store.persist_scan_start(
+                            session,
+                            scan_id=db_scan_id,
+                            scan_type="security",
+                            target=target,
+                            profile=profile.value,
+                            tools_json=[t.tool.value for t in scan.tools],
+                            custom_modules=scan.custom_modules,
+                            openvas_config=scan.openvas_config,
+                            openvas_families=scan.openvas_families,
+                        )
+                    await self.log(None, "info", "Scan recorded in database")
+                else:
+                    await self.log(None, "warn", "Database not initialized, skipping persistence")
+            except Exception as db_err:
+                await self.log(None, "warn", f"Failed to persist scan start to database: {db_err}")
+
             # Check kubectl is available
             if not await self.k8s.check_connectivity():
                 await self.log(None, "error", "Cannot connect to Kubernetes cluster. Is the deployment complete?")
@@ -1058,15 +1082,37 @@ except Exception as e:
                         await self._update_tool_state(tool, status=ScanStatus.COMPLETED, completed_at=datetime.utcnow())
                         await self.log(tool.value, "info", f"{tool.value.upper()} scan completed")
 
+                        # Persist results to PostgreSQL
+                        try:
+                            if db_engine._session_factory is not None:
+                                await self._persist_tool_results(xml_result, tool.value, scan.id)
+                        except Exception as db_err:
+                            await self.log(tool.value, "warn", f"Failed to persist {tool.value} results to database: {db_err}")
+
                         # Upload to Faraday
+                        faraday_uploaded = False
                         if faraday_creds:
-                            uploaded = await self._upload_to_faraday(
+                            faraday_uploaded = await self._upload_to_faraday(
                                 xml_result, tool.value, faraday_creds,
                                 scan_id=scan.id, scan_profile=profile.value
                             )
-                            await self._update_tool_state(tool, uploaded_to_faraday=uploaded)
+                            await self._update_tool_state(tool, uploaded_to_faraday=faraday_uploaded)
                         else:
                             await self.log(tool.value, "warn", "Faraday credentials unavailable, skipping upload")
+
+                        # Log Faraday sync status to database
+                        try:
+                            if db_engine._session_factory is not None:
+                                async with db_engine._session_factory() as session:
+                                    await result_store.persist_faraday_sync(
+                                        session,
+                                        scan_id=scan.id,
+                                        success=faraday_uploaded,
+                                        scan_type="security",
+                                        detail=f"{tool.value} upload {'succeeded' if faraday_uploaded else 'skipped/failed'}",
+                                    )
+                        except Exception as db_err:
+                            await self.log(tool.value, "warn", f"Failed to log Faraday sync to database: {db_err}")
                     elif scan.status == ScanStatus.RUNNING:
                         await self._update_tool_state(
                             tool, status=ScanStatus.FAILED,
@@ -1101,11 +1147,52 @@ except Exception as e:
                         "Results available in Faraday workspace 'pentest': "
                         "https://faraday.knowledgeondemand.net")
 
+                # Persist scan completion to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session,
+                                scan_id=scan.id,
+                                status=scan.status.value,
+                                tools_json=[
+                                    {
+                                        "tool": ts.tool.value,
+                                        "status": ts.status.value,
+                                        "findings_count": ts.findings_count,
+                                        "uploaded_to_faraday": ts.uploaded_to_faraday,
+                                    }
+                                    for ts in scan.tools
+                                ],
+                            )
+                except Exception as db_err:
+                    await self.log(None, "warn", f"Failed to persist scan completion to database: {db_err}")
+
         except Exception as e:
             await self.log(None, "error", f"Scan failed: {e}")
             if self.current_scan:
                 self.current_scan.status = ScanStatus.FAILED
                 self.current_scan.completed_at = datetime.utcnow()
+                # Persist failure to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        tools_json = None
+                        if self.current_scan and self.current_scan.tools:
+                            tools_json = [
+                                {"tool": t.tool.value, "status": t.status.value,
+                                 "findings_count": t.findings_count}
+                                for t in self.current_scan.tools
+                            ]
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session,
+                                scan_id=self.current_scan.id,
+                                status="failed",
+                                error_message=str(e),
+                                tools_json=tools_json,
+                            )
+                except Exception:
+                    pass  # Best-effort
         finally:
             self._save_to_history()
 
@@ -3078,6 +3165,368 @@ except Exception as e:
         finally:
             if tmp_file and os.path.exists(tmp_file.name):
                 os.unlink(tmp_file.name)
+
+    # =========================================================================
+    # DATABASE PERSISTENCE
+    # =========================================================================
+
+    async def _persist_tool_results(self, xml_content: str, tool_name: str, scan_id: str):
+        """Dispatch XML persistence to the appropriate tool-specific parser."""
+        if tool_name == "nmap":
+            await self._persist_nmap_results(xml_content, scan_id)
+        elif tool_name == "openvas":
+            await self._persist_openvas_results(xml_content, scan_id)
+        elif tool_name == "metasploit":
+            await self._persist_metasploit_results(xml_content, scan_id)
+        else:
+            await self.log(tool_name, "warn", f"No DB persistence parser for tool: {tool_name}")
+
+    async def _persist_nmap_results(self, xml_content: str, scan_id: str):
+        """Parse nmap XML and persist hosts, services, and script vulns to PostgreSQL."""
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError as e:
+            await self.log("nmap", "warn", f"Failed to parse nmap XML for DB persistence: {e}")
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        async with db_engine._session_factory() as session:
+            for host_elem in root.findall("host"):
+                # Skip hosts that are down
+                status_elem = host_elem.find("status")
+                if status_elem is not None and status_elem.get("state") == "down":
+                    continue
+
+                # Extract IP address
+                addr_elem = host_elem.find("address[@addrtype='ipv4']")
+                if addr_elem is None:
+                    addr_elem = host_elem.find("address")
+                if addr_elem is None:
+                    continue
+                ip = addr_elem.get("addr", "")
+                if not ip:
+                    continue
+
+                # Extract OS
+                os_name = None
+                os_match = host_elem.find("os/osmatch")
+                if os_match is not None:
+                    os_name = os_match.get("name")
+
+                # Extract hostnames
+                hostnames = []
+                for hn in host_elem.findall("hostnames/hostname"):
+                    name = hn.get("name")
+                    if name:
+                        hostnames.append(name)
+
+                # Persist host
+                host_id = await result_store.persist_host(
+                    session, scan_id=scan_id, ip=ip,
+                    os=os_name, hostnames=hostnames or None,
+                )
+                hosts_created += 1
+
+                # Extract ports/services
+                ports_elem = host_elem.find("ports")
+                if ports_elem is None:
+                    continue
+
+                for port_elem in ports_elem.findall("port"):
+                    protocol = port_elem.get("protocol", "tcp")
+                    portid = port_elem.get("portid", "0")
+                    try:
+                        port_num = int(portid)
+                    except ValueError:
+                        continue
+
+                    state_elem = port_elem.find("state")
+                    port_state = state_elem.get("state", "unknown") if state_elem is not None else "unknown"
+                    if port_state != "open":
+                        continue
+
+                    svc_elem = port_elem.find("service")
+                    svc_name = svc_elem.get("name") if svc_elem is not None else None
+                    svc_product = svc_elem.get("product", "") if svc_elem is not None else ""
+                    svc_version = svc_elem.get("version", "") if svc_elem is not None else ""
+                    version_str = f"{svc_product} {svc_version}".strip() or None
+
+                    service_id = await result_store.persist_service(
+                        session, host_id=host_id, scan_id=scan_id,
+                        port=port_num, protocol=protocol,
+                        name=svc_name, version=version_str, status=port_state,
+                    )
+                    services_created += 1
+
+                    # Extract NSE script results as vulnerabilities
+                    for script_elem in port_elem.findall("script"):
+                        script_id = script_elem.get("id", "unknown")
+                        script_output = script_elem.get("output", "")
+
+                        # Determine severity from script ID heuristics
+                        severity = "info"
+                        high_keywords = ["vuln", "exploit", "cve", "ms17", "ms08",
+                                         "heartbleed", "shellshock", "log4shell", "bluekeep"]
+                        if any(kw in script_id.lower() for kw in high_keywords):
+                            severity = "high"
+                        elif script_id.lower() in ("ssl-cert", "ssl-date", "tls-alpn", "tls-nextprotoneg"):
+                            severity = "info"  # Informational SSL/TLS scripts
+                        elif "ssl" in script_id.lower() or "tls" in script_id.lower():
+                            severity = "medium"
+
+                        # Extract CVE references from output
+                        refs = re.findall(r"CVE-\d{4}-\d{4,}", script_output, re.IGNORECASE)
+
+                        await result_store.persist_vulnerability(
+                            session, scan_id=scan_id, host_id=host_id,
+                            service_id=service_id,
+                            name=script_id,
+                            severity=severity,
+                            description=script_output[:4000] if script_output else None,
+                            refs=refs or None,
+                            data=script_output[:8000] if script_output else None,
+                            tool_source="nmap",
+                        )
+                        vulns_created += 1
+
+        await self.log("nmap", "info",
+                       f"Database: persisted {hosts_created} host(s), "
+                       f"{services_created} service(s), {vulns_created} vuln(s)")
+
+    async def _persist_openvas_results(self, xml_content: str, scan_id: str):
+        """Parse OpenVAS XML and persist hosts, services, and vulns to PostgreSQL."""
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError as e:
+            await self.log("openvas", "warn", f"Failed to parse OpenVAS XML for DB persistence: {e}")
+            return
+
+        # Navigate: outer <report> → inner <report> → <results>
+        inner = root.find("report")
+        if inner is None:
+            inner = root
+        results_elem = inner.find("results")
+        if results_elem is None:
+            results_elem = inner
+        result_nodes = results_elem.findall("result")
+
+        # Extract host detail info (OS, hostnames) from <host> elements
+        host_detail_map = {}
+        for helem in inner.findall("host"):
+            ip = (helem.findtext("ip") or "").strip()
+            if not ip:
+                continue
+            hostnames = []
+            os_txt = ""
+            for d in helem.findall("detail"):
+                dname = (d.findtext("name") or "").strip()
+                dval = (d.findtext("value") or "").strip()
+                if dname == "hostname" and dval:
+                    hostnames.append(dval)
+                elif dname == "best_os_txt" and dval:
+                    os_txt = dval
+            host_detail_map[ip] = {"os": os_txt, "hostnames": hostnames}
+
+        severity_map = {
+            "Alarm": "critical", "High": "high", "Medium": "medium",
+            "Low": "low", "Log": "info", "Debug": "info",
+        }
+
+        host_db_ids = {}  # ip -> db host_id
+        service_db_ids = {}  # (ip, port, proto) -> db service_id
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        async with db_engine._session_factory() as session:
+            for r in result_nodes:
+                host_ip = (r.findtext("host") or "").strip()
+                if not host_ip:
+                    continue
+
+                # Ensure host in DB
+                if host_ip not in host_db_ids:
+                    hd = host_detail_map.get(host_ip, {})
+                    host_db_ids[host_ip] = await result_store.persist_host(
+                        session, scan_id=scan_id, ip=host_ip,
+                        os=hd.get("os") or None,
+                        hostnames=hd.get("hostnames") or None,
+                    )
+                    hosts_created += 1
+
+                host_id = host_db_ids[host_ip]
+
+                # Parse port
+                port_str = (r.findtext("port") or "").strip()
+                port_num = 0
+                protocol = "tcp"
+                if "/" in port_str:
+                    parts = port_str.split("/")
+                    protocol = parts[1] if len(parts) > 1 else "tcp"
+                    try:
+                        port_num = int(parts[0])
+                    except ValueError:
+                        pass
+
+                # Ensure service in DB (only for real ports)
+                service_id = None
+                if port_num > 0:
+                    svc_key = (host_ip, port_num, protocol)
+                    if svc_key not in service_db_ids:
+                        service_db_ids[svc_key] = await result_store.persist_service(
+                            session, host_id=host_id, scan_id=scan_id,
+                            port=port_num, protocol=protocol,
+                        )
+                        services_created += 1
+                    service_id = service_db_ids[svc_key]
+
+                # Extract vulnerability info
+                threat = (r.findtext("threat") or "Log").strip()
+                severity = severity_map.get(threat, "info")
+
+                nvt = r.find("nvt")
+                vuln_name = nvt.findtext("name", "Unknown") if nvt is not None else "Unknown"
+                desc = (r.findtext("description") or "").strip()
+
+                # Parse NVT tags for solution
+                tags_str = nvt.findtext("tags", "") if nvt is not None else ""
+                td = {}
+                if tags_str:
+                    for part in tags_str.split("|"):
+                        if "=" in part:
+                            k, v = part.split("=", 1)
+                            td[k.strip()] = v.strip()
+                solution = td.get("solution", "")
+
+                # Extract CVEs
+                cve_str = nvt.findtext("cve", "") if nvt is not None else ""
+                cves = [c.strip() for c in cve_str.split(",") if c.strip() and c.strip() != "NOCVE"]
+                refs = list(cves)
+                xref = nvt.findtext("xref", "") if nvt is not None else ""
+                if xref and xref != "NOXREF":
+                    refs.extend([x.strip() for x in xref.split(",") if x.strip()])
+
+                external_id = cves[0] if cves else None
+
+                await result_store.persist_vulnerability(
+                    session, scan_id=scan_id, host_id=host_id,
+                    service_id=service_id,
+                    name=vuln_name,
+                    severity=severity,
+                    description=desc[:4000] if desc else None,
+                    refs=refs or None,
+                    resolution=solution or None,
+                    external_id=external_id,
+                    tool_source="openvas",
+                )
+                vulns_created += 1
+
+        await self.log("openvas", "info",
+                       f"Database: persisted {hosts_created} host(s), "
+                       f"{services_created} service(s), {vulns_created} vuln(s)")
+
+    async def _persist_metasploit_results(self, xml_content: str, scan_id: str):
+        """Parse Metasploit db_export XML and persist hosts, services, and vulns to PostgreSQL."""
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError as e:
+            await self.log("metasploit", "warn", f"Failed to parse Metasploit XML for DB persistence: {e}")
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+        host_db_ids = {}  # msf host address -> db host_id
+
+        async with db_engine._session_factory() as session:
+            # db_export format: <MetasploitV5><hosts><host>...</host></hosts></MetasploitV5>
+            for host_elem in root.findall(".//host"):
+                ip = (host_elem.findtext("address") or "").strip()
+                if not ip:
+                    continue
+
+                os_name = (host_elem.findtext("os-name") or "").strip() or None
+
+                host_db_ids[ip] = await result_store.persist_host(
+                    session, scan_id=scan_id, ip=ip, os=os_name,
+                )
+                hosts_created += 1
+
+                # Persist services
+                service_db_ids = {}  # (port, proto) -> db service_id
+                for svc_elem in host_elem.findall(".//services/service"):
+                    port_str = (svc_elem.findtext("port") or "0").strip()
+                    try:
+                        port_num = int(port_str)
+                    except ValueError:
+                        continue
+                    protocol = (svc_elem.findtext("proto") or "tcp").strip()
+                    svc_name = (svc_elem.findtext("name") or "").strip() or None
+                    svc_info = (svc_elem.findtext("info") or "").strip() or None
+
+                    service_db_ids[(port_num, protocol)] = await result_store.persist_service(
+                        session, host_id=host_db_ids[ip], scan_id=scan_id,
+                        port=port_num, protocol=protocol,
+                        name=svc_name, version=svc_info,
+                    )
+                    services_created += 1
+
+                # Persist vulns
+                for vuln_elem in host_elem.findall(".//vulns/vuln"):
+                    vuln_name = (vuln_elem.findtext("name") or "Unknown").strip()
+
+                    # Extract refs — CVE is text content of <ref>, not a child <name>
+                    refs = []
+                    for ref_elem in vuln_elem.findall("refs/ref"):
+                        ref_text = (ref_elem.text or "").strip()
+                        if ref_text:
+                            refs.append(ref_text)
+
+                    # Determine severity from refs/name
+                    cves = re.findall(r"CVE-\d{4}-\d{4,}", " ".join(refs), re.IGNORECASE)
+                    severity = "info"
+                    all_text = (vuln_name + " " + " ".join(refs)).lower()
+                    critical_kw = ["ms17-010", "eternalblue", "bluekeep", "log4shell",
+                                   "shellshock", "heartbleed", "critical"]
+                    if any(kw in all_text for kw in critical_kw):
+                        severity = "critical"
+                    elif cves:
+                        severity = "medium"  # Has CVE but unknown severity
+                    elif any(kw in all_text for kw in ["exploit", "vuln", "weak"]):
+                        severity = "medium"
+
+                    external_id = cves[0] if cves else None
+
+                    # Build description from name + refs (db_export has no <info> element)
+                    desc_parts = [vuln_name]
+                    if refs:
+                        desc_parts.append("Refs: " + ", ".join(refs))
+                    description = " | ".join(desc_parts)
+
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_db_ids[ip],
+                        service_id=None,  # db_export doesn't link vulns to ports
+                        name=vuln_name,
+                        severity=severity,
+                        description=description[:4000],
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="metasploit",
+                    )
+                    vulns_created += 1
+
+        await self.log("metasploit", "info",
+                       f"Database: persisted {hosts_created} host(s), "
+                       f"{services_created} service(s), {vulns_created} vuln(s)")
 
     def _save_to_history(self):
         """Save current scan summary to history."""
