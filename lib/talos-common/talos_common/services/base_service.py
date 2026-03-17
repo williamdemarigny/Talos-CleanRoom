@@ -98,7 +98,7 @@ class BaseServiceMixin:
             True if the cluster is reachable, False otherwise.
         """
         result = await self.process_manager.run_command_simple(
-            ["kubectl", "cluster-info", "--request-timeout=5s"],
+            ["kubectl", "get", "nodes", "--request-timeout=5s", "-o", "name"],
             timeout=10
         )
         if not result.success and log_fn:
