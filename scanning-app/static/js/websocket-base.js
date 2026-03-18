@@ -95,8 +95,8 @@ class WebSocketBase {
         if (!comp) return;
 
         try {
-            // Fetch status
-            const statusResp = await fetch(this.pollStatusUrl);
+            // Fetch status (use authFetch for Bearer token auth)
+            const statusResp = await authFetch(this.pollStatusUrl);
             const statusData = await statusResp.json();
 
             // Delegate status handling to the page component
@@ -105,7 +105,7 @@ class WebSocketBase {
             }
 
             // Fetch logs (only new ones beyond what we have)
-            const logResp = await fetch(`${this.pollLogsUrl}?offset=${comp.logs.length}`);
+            const logResp = await authFetch(`${this.pollLogsUrl}?offset=${comp.logs.length}`);
             const logData = await logResp.json();
 
             if (logData.logs && logData.logs.length > 0) {
