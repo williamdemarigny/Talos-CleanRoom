@@ -253,7 +253,7 @@ function scanManager() {
             }
 
             try {
-                const response = await fetch('/api/scan/start', {
+                const response = await authFetch('/api/scan/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -286,7 +286,7 @@ function scanManager() {
             if (!confirm('Are you sure you want to abort the scan?')) return;
 
             try {
-                const response = await fetch('/api/scan/abort', { method: 'POST' });
+                const response = await authFetch('/api/scan/abort', { method: 'POST' });
                 if (response.ok) {
                     this.status = 'aborted';
                     this.stopTimer();
@@ -310,7 +310,7 @@ function scanManager() {
 
         async fetchStatus() {
             try {
-                const response = await fetch('/api/scan/status');
+                const response = await authFetch('/api/scan/status');
                 const data = await response.json();
                 this.status = data.status;
                 if (data.scan) {
@@ -331,7 +331,7 @@ function scanManager() {
 
         async fetchHistory() {
             try {
-                const response = await fetch('/api/scan/history');
+                const response = await authFetch('/api/scan/history');
                 const data = await response.json();
                 this.history = data.history || [];
             } catch (e) {
