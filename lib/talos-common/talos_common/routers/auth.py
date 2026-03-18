@@ -20,6 +20,7 @@ class Token(BaseModel):
     """Token response model."""
     access_token: str
     token_type: str = "bearer"
+    must_change_password: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -54,17 +55,21 @@ async def login(
         key="access_token",
         value=access_token,
         httponly=True,
+        secure=True,
         max_age=settings.access_token_expire_hours * 3600,
         samesite="lax",
     )
 
-    return Token(access_token=access_token)
+    return Token(
+        access_token=access_token,
+        must_change_password=settings.is_default_password,
+    )
 
 
 @router.post("/logout")
 async def logout(response: Response):
     """Logout and clear session."""
-    response.delete_cookie(key="access_token")
+    response.delete_cookie(key="access_token", secure=True, samesite="lax")
     return {"message": "Logged out successfully"}
 
 

@@ -13,13 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install shared library first (separate layer for caching)
+# Install shared library and Python dependencies together
+# (single pip call ensures consistent dependency resolution)
 COPY lib/talos-common /tmp/talos-common
-RUN pip install --no-cache-dir --user /tmp/talos-common
-
-# Install Python dependencies
 COPY webui/requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install /tmp/talos-common -r requirements.txt
 
 # Production image
 FROM python:3.11-slim
@@ -66,9 +64,8 @@ RUN curl -fsSL https://github.com/budimanjojo/talhelper/releases/latest/download
 RUN curl -fsSL https://github.com/getsops/sops/releases/latest/download/sops-v3.8.1.linux.amd64 -o /usr/local/bin/sops \
     && chmod +x /usr/local/bin/sops
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+# Copy Python packages from builder (to system paths for consistency)
+COPY --from=builder /install /usr/local
 
 # Copy application files
 COPY webui/app/ ./app/

@@ -21,7 +21,7 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         disconnected = set()
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(message)
             except Exception:

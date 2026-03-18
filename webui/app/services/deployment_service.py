@@ -10,6 +10,7 @@ complete deployment of a Talos Kubernetes cluster including:
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import subprocess
@@ -56,6 +57,8 @@ _REDACT_PATTERNS = [
     re.compile(r'(password|token|secret[-_]?key|api[-_]?token)[=:]\s*\S+', re.IGNORECASE),
     re.compile(r'--from-literal=\S+=\S+'),
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -533,10 +536,22 @@ class DeploymentService(BaseServiceMixin):
             steps=[DeploymentStep(**s.model_dump()) for s in DEPLOYMENT_STEPS]
         )
 
-        # Run deployment in background
-        asyncio.create_task(self._run_deployment())
+        # Run deployment in background with error handling
+        task = asyncio.create_task(self._run_deployment())
+        task.add_done_callback(self._handle_task_exception)
 
         return self.current_deployment
+
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """Handle unhandled exceptions from background deployment tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background deployment task failed with unhandled exception: %s", exc, exc_info=exc)
+            if self.current_deployment and self.current_deployment.status == DeploymentStatus.RUNNING:
+                self.current_deployment.status = DeploymentStatus.FAILED
+                self.current_deployment.completed_at = datetime.utcnow()
 
     async def abort_deployment(self) -> bool:
         """Abort the current deployment."""
@@ -622,8 +637,9 @@ class DeploymentService(BaseServiceMixin):
 
         await self.log(-1, "info", f"Resuming deployment from step {from_step}...")
 
-        # Run deployment in background from the resume point
-        asyncio.create_task(self._run_deployment(resume_from_step=from_step))
+        # Run deployment in background from the resume point with error handling
+        task = asyncio.create_task(self._run_deployment(resume_from_step=from_step))
+        task.add_done_callback(self._handle_task_exception)
 
         return self.current_deployment
 

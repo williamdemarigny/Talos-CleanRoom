@@ -1001,10 +1001,22 @@ except Exception as e:
             ]
         )
 
-        # Run scan in background
-        asyncio.create_task(self._run_scan())
+        # Run scan in background with error handling
+        task = asyncio.create_task(self._run_scan())
+        task.add_done_callback(self._handle_task_exception)
 
         return self.current_scan
+
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """Handle unhandled exceptions from background scan tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background scan task failed with unhandled exception: %s", exc, exc_info=exc)
+            if self.current_scan and self.current_scan.status == ScanStatus.RUNNING:
+                self.current_scan.status = ScanStatus.FAILED
+                self.current_scan.completed_at = datetime.utcnow()
 
     async def abort_scan(self) -> bool:
         """Abort the current scan."""
@@ -1041,7 +1053,7 @@ except Exception as e:
                         tools_json=tools_json,
                     )
         except Exception as exc:
-            logger.debug("Best-effort DB persistence failed: %s", exc)
+            logger.warning("DB persistence failed: %s", exc)
 
         self._save_to_history()
         return True
@@ -1251,7 +1263,7 @@ except Exception as e:
                                 tools_json=tools_json,
                             )
                 except Exception as exc:
-                    logger.debug("Best-effort DB persistence failed: %s", exc)
+                    logger.warning("DB persistence failed: %s", exc)
         finally:
             self._save_to_history()
 

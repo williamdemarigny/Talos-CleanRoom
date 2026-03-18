@@ -1,5 +1,6 @@
 """Scan state models for security scanning operations."""
 
+import ipaddress
 import re
 from enum import Enum
 from datetime import datetime
@@ -64,8 +65,38 @@ class ScanLogEntry(BaseLogEntry):
     tool: Optional[str] = None
 
 
-# Scan targets: IPs, CIDR, hostnames, comma-separated lists
-_TARGET_PATTERN = re.compile(r'^[a-zA-Z0-9.,:\-/_ ]+$')
+# RFC 1123 hostname pattern (labels: alphanumeric + hyphens, no leading/trailing hyphen)
+_HOSTNAME_RE = re.compile(
+    r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
+    r'(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
+)
+
+
+def _validate_single_target(token: str) -> str:
+    """Validate a single scan target token (IP, CIDR, or hostname).
+
+    Raises ValueError if the token is not a valid IP address,
+    CIDR network, or RFC 1123 hostname.
+    """
+    # Try IP address first
+    try:
+        ipaddress.ip_address(token)
+        return token
+    except ValueError:
+        pass
+    # Try CIDR notation
+    try:
+        ipaddress.ip_network(token, strict=False)
+        return token
+    except ValueError:
+        pass
+    # Try hostname (RFC 1123)
+    if _HOSTNAME_RE.match(token) and len(token) <= 253:
+        return token
+    raise ValueError(
+        f"Invalid target: {token!r}. Must be a valid IP address, "
+        "CIDR range, or hostname."
+    )
 
 
 class ScanRequest(BaseModel):
@@ -83,10 +114,10 @@ class ScanRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("Target must not be empty")
-        if not _TARGET_PATTERN.match(v):
-            raise ValueError(
-                "Target contains invalid characters. "
-                "Only alphanumerics, dots, commas, colons, hyphens, slashes, "
-                "underscores, and spaces are allowed."
-            )
+        # Support comma-separated list of targets
+        tokens = [t.strip() for t in v.split(",") if t.strip()]
+        if not tokens:
+            raise ValueError("Target must not be empty")
+        for token in tokens:
+            _validate_single_target(token)
         return v

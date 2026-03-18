@@ -6,16 +6,20 @@ uploads remain the secondary (best-effort) path; PostgreSQL is the
 primary, synchronous store.
 
 All functions accept an ``AsyncSession`` obtained from ``get_session()``.
+
+Batch variants (``persist_hosts_batch``, ``persist_vulns_batch``,
+``persist_ioc_findings_batch``) commit once for many rows, reducing
+database round-trips from O(N) to O(1).
 """
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import repository as repo
-from app.db.models import Scan
+from app.db.models import Scan, Host, Service, Vulnerability, IocFinding
 
 logger = logging.getLogger(__name__)
 
@@ -224,3 +228,139 @@ async def persist_audit(
         detail=detail,
     )
     await session.commit()
+
+
+# ── Batch Operations ─────────────────────────────────────────────
+# These functions reduce database round-trips from O(N) to O(1) by
+# batching multiple rows into a single commit.
+
+
+async def persist_hosts_batch(
+    session: AsyncSession,
+    scan_id: str,
+    hosts: List[Dict],
+) -> Dict[str, int]:
+    """Persist multiple hosts in a single transaction.
+
+    Args:
+        session: Async database session.
+        scan_id: Parent scan ID.
+        hosts: List of dicts with keys: ip, os, hostnames, description.
+
+    Returns:
+        Mapping of IP address to database host ID.
+    """
+    ip_to_id: Dict[str, int] = {}
+    for h in hosts:
+        host = await repo.upsert_host(
+            session, scan_id, h["ip"],
+            os=h.get("os"),
+            hostnames=h.get("hostnames"),
+            description=h.get("description"),
+        )
+        ip_to_id[h["ip"]] = host.id
+    await session.commit()
+    return ip_to_id
+
+
+async def persist_services_batch(
+    session: AsyncSession,
+    scan_id: str,
+    services: List[Dict],
+) -> Dict[Tuple[int, int, str], int]:
+    """Persist multiple services in a single transaction.
+
+    Args:
+        session: Async database session.
+        scan_id: Parent scan ID.
+        services: List of dicts with keys: host_id, port, protocol, name, version, status.
+
+    Returns:
+        Mapping of (host_id, port, protocol) to database service ID.
+    """
+    svc_to_id: Dict[Tuple[int, int, str], int] = {}
+    for s in services:
+        svc = await repo.create_service(
+            session,
+            host_id=s["host_id"],
+            scan_id=scan_id,
+            port=s["port"],
+            protocol=s.get("protocol", "tcp"),
+            name=s.get("name"),
+            version=s.get("version"),
+            status=s.get("status", "open"),
+        )
+        svc_to_id[(s["host_id"], s["port"], s.get("protocol", "tcp"))] = svc.id
+    await session.commit()
+    return svc_to_id
+
+
+async def persist_vulns_batch(
+    session: AsyncSession,
+    scan_id: str,
+    vulns: List[Dict],
+) -> int:
+    """Persist multiple vulnerabilities in a single transaction.
+
+    Args:
+        session: Async database session.
+        scan_id: Parent scan ID.
+        vulns: List of dicts matching persist_vulnerability kwargs.
+
+    Returns:
+        Number of vulnerabilities persisted.
+    """
+    for v in vulns:
+        await repo.create_vulnerability(
+            session,
+            scan_id=scan_id,
+            host_id=v["host_id"],
+            service_id=v.get("service_id"),
+            name=v["name"],
+            severity=v["severity"],
+            description=v.get("description"),
+            refs=v.get("refs"),
+            resolution=v.get("resolution"),
+            data=v.get("data"),
+            external_id=v.get("external_id"),
+            tags=v.get("tags"),
+            tool_source=v.get("tool_source"),
+        )
+    await session.commit()
+    return len(vulns)
+
+
+async def persist_ioc_findings_batch(
+    session: AsyncSession,
+    scan_id: str,
+    findings: List[Dict],
+    host_id: Optional[int] = None,
+) -> int:
+    """Persist multiple IOC findings in a single transaction.
+
+    Args:
+        session: Async database session.
+        scan_id: Parent scan ID.
+        findings: List of dicts matching persist_ioc_finding kwargs.
+        host_id: Optional host ID to assign to all findings.
+
+    Returns:
+        Number of findings persisted.
+    """
+    for f in findings:
+        await repo.create_ioc_finding(
+            session,
+            scan_id=scan_id,
+            host_id=f.get("host_id", host_id),
+            severity=f["severity"],
+            score=f["score"],
+            file_path=f["file_path"],
+            rule_name=f.get("rule_name"),
+            description=f.get("description"),
+            matched_strings=f.get("matched_strings"),
+            hash_md5=f.get("hash_md5"),
+            hash_sha256=f.get("hash_sha256"),
+            tags=f.get("tags"),
+        )
+    await session.commit()
+    return len(findings)
