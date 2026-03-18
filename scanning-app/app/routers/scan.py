@@ -2,7 +2,13 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import Optional
+
+
+def _iso(dt: datetime | None) -> str | None:
+    """Format a naive-UTC datetime as ISO-8601 with Z suffix for JS."""
+    return dt.isoformat() + "Z" if dt else None
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -28,7 +34,7 @@ async def scan_log_callback(entry: ScanLogEntry):
         "tool": entry.tool,
         "level": entry.level,
         "message": entry.message,
-        "timestamp": entry.timestamp.isoformat()
+        "timestamp": _iso(entry.timestamp)
     })
     await scan_manager.broadcast(message)
 
@@ -38,8 +44,8 @@ async def scan_tool_callback(tool_state: ScanToolState):
     message = create_message("scan_tool_update", {
         "tool": tool_state.tool.value,
         "status": tool_state.status.value,
-        "started_at": tool_state.started_at.isoformat() if tool_state.started_at else None,
-        "completed_at": tool_state.completed_at.isoformat() if tool_state.completed_at else None,
+        "started_at": _iso(tool_state.started_at),
+        "completed_at": _iso(tool_state.completed_at),
         "error_message": tool_state.error_message,
         "findings_count": tool_state.findings_count,
         "uploaded_to_faraday": tool_state.uploaded_to_faraday
@@ -147,14 +153,14 @@ async def get_scan_status(user: dict = Depends(get_current_user)):
             "target": scan.target,
             "profile": scan.profile.value,
             "status": scan.status.value,
-            "started_at": scan.started_at.isoformat() if scan.started_at else None,
-            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "started_at": _iso(scan.started_at),
+            "completed_at": _iso(scan.completed_at),
             "tools": [
                 {
                     "tool": ts.tool.value,
                     "status": ts.status.value,
-                    "started_at": ts.started_at.isoformat() if ts.started_at else None,
-                    "completed_at": ts.completed_at.isoformat() if ts.completed_at else None,
+                    "started_at": _iso(ts.started_at),
+                    "completed_at": _iso(ts.completed_at),
                     "error_message": ts.error_message,
                     "findings_count": ts.findings_count,
                     "uploaded_to_faraday": ts.uploaded_to_faraday
@@ -244,14 +250,14 @@ async def scan_websocket(websocket: WebSocket, token: str = None):
                 "target": scan.target,
                 "profile": scan.profile.value,
                 "status": scan.status.value,
-                "started_at": scan.started_at.isoformat() if scan.started_at else None,
-                "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+                "started_at": _iso(scan.started_at),
+                "completed_at": _iso(scan.completed_at),
                 "tools": [
                     {
                         "tool": ts.tool.value,
                         "status": ts.status.value,
-                        "started_at": ts.started_at.isoformat() if ts.started_at else None,
-                        "completed_at": ts.completed_at.isoformat() if ts.completed_at else None,
+                        "started_at": _iso(ts.started_at),
+                        "completed_at": _iso(ts.completed_at),
                         "error_message": ts.error_message,
                         "findings_count": ts.findings_count,
                         "uploaded_to_faraday": ts.uploaded_to_faraday
@@ -263,7 +269,7 @@ async def scan_websocket(websocket: WebSocket, token: str = None):
                         "tool": log.tool,
                         "level": log.level,
                         "message": log.message,
-                        "timestamp": log.timestamp.isoformat()
+                        "timestamp": _iso(log.timestamp)
                     }
                     for log in service.logs
                 ]
