@@ -289,7 +289,7 @@ function iocScanManager() {
             }
 
             try {
-                const response = await fetch('/api/ioc-scan/start', {
+                const response = await authFetch('/api/ioc-scan/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -321,7 +321,7 @@ function iocScanManager() {
             if (!confirm('Are you sure you want to abort the IOC scan?')) return;
 
             try {
-                const response = await fetch('/api/ioc-scan/abort', { method: 'POST' });
+                const response = await authFetch('/api/ioc-scan/abort', { method: 'POST' });
                 if (response.ok) {
                     this.status = 'aborted';
                     this.stopTimer();
@@ -350,7 +350,7 @@ function iocScanManager() {
 
         async fetchStatus() {
             try {
-                const response = await fetch('/api/ioc-scan/status');
+                const response = await authFetch('/api/ioc-scan/status');
                 const data = await response.json();
                 this.status = data.status;
                 if (data.scan) {
@@ -377,7 +377,7 @@ function iocScanManager() {
 
         async fetchHistory() {
             try {
-                const response = await fetch('/api/ioc-scan/history');
+                const response = await authFetch('/api/ioc-scan/history');
                 const data = await response.json();
                 this.history = data.history || [];
             } catch (e) {
