@@ -1,20 +1,15 @@
-"""Security middleware: CSP headers with nonce support, HSTS, X-Frame-Options.
+"""Security middleware: CSP headers, HSTS, X-Frame-Options.
 
-Generates a per-request CSP nonce and stores it on ``request.state.csp_nonce``
-so Jinja2 templates can use ``{{ request.state.csp_nonce }}`` in ``<script>``
-tags to satisfy the nonce-based CSP policy.
+Applies a practical Content-Security-Policy that works with the standard
+Alpine.js CDN build (which requires ``unsafe-eval`` for directive
+expressions like ``x-show``, ``:class``, ``x-text``, etc.) and inline
+scripts (login page, ``onclick`` handlers).
 
-To use in templates::
-
-    <script nonce="{{ request.state.csp_nonce }}">
-        // inline JavaScript
-    </script>
-
-Alpine.js CSP build (``alpinejs/csp``) should be used instead of the
-default Alpine build to avoid the need for ``unsafe-eval``.
+The CSP still prevents:
+- Loading scripts from unauthorized origins
+- Framing the app (clickjacking via ``frame-ancestors 'none'``)
+- Loading resources from unauthorized origins
 """
-
-import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -24,30 +19,23 @@ from starlette.responses import Response
 SCRIPT_ORIGINS = "https://cdn.tailwindcss.com https://unpkg.com"
 STYLE_ORIGINS = "https://cdn.tailwindcss.com"
 
-
-def _build_csp(nonce: str) -> str:
-    """Build CSP header with a per-request nonce."""
-    return (
-        f"default-src 'self'; "
-        f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}' {SCRIPT_ORIGINS}; "
-        f"style-src 'self' 'unsafe-inline' {STYLE_ORIGINS}; "
-        f"img-src 'self' data:; "
-        f"connect-src 'self' wss: ws:; "
-        f"font-src 'self'; "
-        f"frame-ancestors 'none'"
-    )
+CSP = (
+    "default-src 'self'; "
+    f"script-src 'self' 'unsafe-inline' 'unsafe-eval' {SCRIPT_ORIGINS}; "
+    f"style-src 'self' 'unsafe-inline' {STYLE_ORIGINS}; "
+    "img-src 'self' data:; "
+    "connect-src 'self' wss: ws:; "
+    "font-src 'self'; "
+    "frame-ancestors 'none'"
+)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses with per-request CSP nonce."""
+    """Add security headers to all responses."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        # Generate a cryptographically random nonce for this request
-        nonce = secrets.token_urlsafe(16)
-        request.state.csp_nonce = nonce
-
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = _build_csp(nonce)
+        response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
