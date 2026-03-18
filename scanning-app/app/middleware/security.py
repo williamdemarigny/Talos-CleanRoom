@@ -29,7 +29,7 @@ def _build_csp(nonce: str) -> str:
     """Build CSP header with a per-request nonce."""
     return (
         f"default-src 'self'; "
-        f"script-src 'self' 'nonce-{nonce}' {SCRIPT_ORIGINS}; "
+        f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}' {SCRIPT_ORIGINS}; "
         f"style-src 'self' 'unsafe-inline' {STYLE_ORIGINS}; "
         f"img-src 'self' data:; "
         f"connect-src 'self' wss: ws:; "
