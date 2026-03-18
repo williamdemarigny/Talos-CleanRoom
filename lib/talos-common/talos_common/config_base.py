@@ -29,6 +29,16 @@ class BaseAppSettings(BaseSettings):
     )  # Default: admin
     access_token_expire_hours: int = 8
 
+    # Known default hash — used to detect first-login and prompt password change
+    _DEFAULT_PASSWORD_HASH: str = (
+        "$2b$12$Fosg.8JShshDJrpDuu2/T.9gzo05L2RJ.n1n5rQM35a7AN2NK555e"
+    )
+
+    @property
+    def is_default_password(self) -> bool:
+        """Return True if the admin password hash is still the default."""
+        return self.admin_password_hash == self._DEFAULT_PASSWORD_HASH
+
     @property
     def jwt_signing_key(self) -> str:
         """Derived key for JWT signing (HMAC-SHA256 of secret_key + context)."""

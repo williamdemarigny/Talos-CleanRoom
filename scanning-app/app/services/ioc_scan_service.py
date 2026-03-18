@@ -179,9 +179,23 @@ class IocScanService(BaseServiceMixin):
         )
         self.current_scan = scan
 
-        # Run the scan in background
-        asyncio.create_task(self._run_scan(request))
+        # Run the scan in background with error handling
+        task = asyncio.create_task(self._run_scan(request))
+        task.add_done_callback(self._handle_task_exception)
         return scan
+
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """Handle unhandled exceptions from background IOC scan tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background IOC scan task failed with unhandled exception: %s", exc, exc_info=exc)
+            if self.current_scan and self.current_scan.status not in (
+                IocScanStatus.COMPLETED, IocScanStatus.FAILED, IocScanStatus.ABORTED
+            ):
+                self.current_scan.status = IocScanStatus.FAILED
+                self.current_scan.completed_at = datetime.utcnow()
 
     async def abort_scan(self) -> bool:
         """Abort the current scan and clean up the pod."""
@@ -210,7 +224,7 @@ class IocScanService(BaseServiceMixin):
                         status="aborted",
                     )
         except Exception as exc:
-            logger.debug("Best-effort DB persistence failed: %s", exc)
+            logger.warning("DB persistence failed: %s", exc)
 
         self._save_to_history()
         return True
@@ -235,7 +249,7 @@ class IocScanService(BaseServiceMixin):
                             scan_path=request.scan_path,
                         )
             except Exception as exc:
-                logger.debug("DB persist scan start failed: %s", exc)
+                logger.warning("DB persist scan start failed: %s", exc)
 
             # Verify kubectl connectivity
             if not await self.k8s.check_connectivity():
@@ -252,7 +266,7 @@ class IocScanService(BaseServiceMixin):
                                 status="failed", error_message=scan.error_message,
                             )
                 except Exception as exc:
-                    logger.debug("Best-effort DB persistence failed: %s", exc)
+                    logger.warning("DB persistence failed: %s", exc)
                 self._save_to_history()
                 return
 
@@ -282,7 +296,7 @@ class IocScanService(BaseServiceMixin):
                                 error_message=scan.error_message,
                             )
                 except Exception as exc:
-                    logger.debug("Best-effort DB persistence failed: %s", exc)
+                    logger.warning("DB persistence failed: %s", exc)
                 self._save_to_history()
                 return
 
@@ -328,7 +342,7 @@ class IocScanService(BaseServiceMixin):
                             )
                     await self.log("info", f"Persisted {total} IOC finding(s) to database")
             except Exception as exc:
-                logger.debug("DB persist IOC findings failed: %s", exc)
+                logger.warning("DB persist IOC findings failed: %s", exc)
 
             # Upload to Faraday
             if findings:
@@ -361,7 +375,7 @@ class IocScanService(BaseServiceMixin):
                                     detail=f"IOC upload {'succeeded' if uploaded else 'failed'}",
                                 )
                     except Exception as exc:
-                        logger.debug("Best-effort DB persistence failed: %s", exc)
+                        logger.warning("DB persistence failed: %s", exc)
                 else:
                     await self.log("warn", "Faraday credentials unavailable, skipping upload")
 
@@ -388,7 +402,7 @@ class IocScanService(BaseServiceMixin):
                             status="completed",
                         )
             except Exception as exc:
-                logger.debug("Best-effort DB persistence failed: %s", exc)
+                logger.warning("DB persistence failed: %s", exc)
 
         except Exception as e:
             await self.log("error", f"IOC scan failed: {e}")
@@ -409,7 +423,7 @@ class IocScanService(BaseServiceMixin):
                                 error_message=str(e),
                             )
                 except Exception as exc:
-                    logger.debug("Best-effort DB persistence failed: %s", exc)
+                    logger.warning("DB persistence failed: %s", exc)
         finally:
             self._save_to_history()
 

@@ -1,5 +1,6 @@
 """IOC scan state models for LOKI-RS host-based IOC scanning."""
 
+import ipaddress
 import re
 from enum import Enum
 from datetime import datetime
@@ -52,10 +53,13 @@ class IocScanLogEntry(BaseLogEntry):
     pass
 
 
-# IOC targets: IPs and hostnames only
-_IOC_TARGET_PATTERN = re.compile(r'^[a-zA-Z0-9.\-]+$')
-# Scan path: filesystem path, no shell metacharacters
-_SCAN_PATH_PATTERN = re.compile(r'^[a-zA-Z0-9/.\-_ ]+$')
+# RFC 1123 hostname pattern
+_HOSTNAME_RE = re.compile(
+    r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
+    r'(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
+)
+# Scan path: absolute path only, no shell metacharacters or traversal
+_SCAN_PATH_PATTERN = re.compile(r'^/[a-zA-Z0-9/.\-_]*$')
 
 
 class IocScanRequest(BaseModel):
@@ -70,15 +74,30 @@ class IocScanRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("Target must not be empty")
-        if not _IOC_TARGET_PATTERN.match(v):
-            raise ValueError("Target contains invalid characters")
-        return v
+        # IOC scan targets a single host (IP or hostname)
+        try:
+            ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            pass
+        if _HOSTNAME_RE.match(v) and len(v) <= 253:
+            return v
+        raise ValueError(
+            f"Invalid target: {v!r}. Must be a valid IP address or hostname."
+        )
 
     @field_validator("scan_path")
     @classmethod
     def validate_scan_path(cls, v: str) -> str:
+        if ".." in v:
+            raise ValueError("Scan path must not contain '..' (path traversal)")
+        if not v.startswith("/"):
+            raise ValueError("Scan path must be an absolute path starting with '/'")
         if not _SCAN_PATH_PATTERN.match(v):
-            raise ValueError("Scan path contains invalid characters")
+            raise ValueError(
+                "Scan path contains invalid characters. "
+                "Only alphanumerics, slashes, dots, hyphens, and underscores are allowed."
+            )
         return v
     ssh_username: Optional[str] = None
     ssh_password: Optional[str] = None

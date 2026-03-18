@@ -18,6 +18,10 @@ class ScanningSettings(BaseAppSettings):
         "@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom"
     )
 
+    # Database pool
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
     # Faraday integration
     faraday_sync_enabled: bool = True
 

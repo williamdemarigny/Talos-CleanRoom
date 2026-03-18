@@ -9,9 +9,15 @@ the same ProcessResult objects used throughout the codebase.
 """
 
 import asyncio
+import base64 as b64
+import re
 from typing import Optional, List
 
 from talos_common.services.process_manager import ProcessManager, ProcessResult
+
+# Kubernetes namespace names: lowercase alphanumeric + hyphens, 1-63 chars,
+# must start/end with alphanumeric.  RFC 1123 label.
+_NAMESPACE_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$|^[a-z0-9]$')
 
 
 class KubernetesHelper:
@@ -111,15 +117,12 @@ class KubernetesHelper:
 
         password_b64 = result.output.strip()
 
-        # Decode base64 via shell (matches existing pattern in services)
-        decode_result = await self.process_manager.run_command_simple(
-            ["bash", "-c", f"echo '{password_b64}' | base64 -d"],
-            timeout=5
-        )
-
-        if decode_result.success and decode_result.output.strip():
-            return decode_result.output.strip()
-        return None
+        # Decode base64 in Python (avoids shell injection risk and subprocess overhead)
+        try:
+            decoded = b64.b64decode(password_b64).decode("utf-8").strip()
+            return decoded if decoded else None
+        except Exception:
+            return None
 
     async def get_pod_phase(
         self,
@@ -302,7 +305,17 @@ class KubernetesHelper:
 
         Returns:
             ProcessResult from the operation.
+
+        Raises:
+            ValueError: If ``namespace`` contains characters outside the
+                allowed Kubernetes naming rules (RFC 1123 label).
         """
+        if not _NAMESPACE_RE.match(namespace):
+            raise ValueError(
+                f"Invalid namespace name: {namespace!r}. "
+                "Must match RFC 1123: lowercase alphanumeric or '-', 1-63 chars, "
+                "start/end with alphanumeric."
+            )
         if privileged:
             return await self.process_manager.run_command_simple(
                 ["bash", "-c",
