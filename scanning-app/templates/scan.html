@@ -417,7 +417,7 @@
             </div>
         </div>
         {% call log_viewer(ref_name="logContainer", height="h-80") %}
-            <template x-for="log in filteredLogs" :key="log.timestamp + log.message">
+            <template x-for="(log, idx) in filteredLogs" :key="idx">
                 <div :class="logClass(log)">
                     <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
                     <span x-show="log.tool" class="text-cyan-400" x-text="'[' + log.tool + ']'"></span>
