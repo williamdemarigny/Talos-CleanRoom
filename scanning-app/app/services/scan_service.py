@@ -874,7 +874,8 @@ except Exception as e:
 
         # Sort by name for consistent UI display
         configs.sort(key=lambda c: c["name"])
-        self._openvas_configs_cache = configs
+        if configs:  # Don't cache empty results (may be transient failure)
+            self._openvas_configs_cache = configs
         return configs
 
     async def get_openvas_families(self) -> list:
@@ -952,7 +953,8 @@ except Exception as e:
 
         # Sort by name for consistent UI display
         families.sort(key=lambda f: f["name"])
-        self._openvas_families_cache = families
+        if families:  # Don't cache empty results (may be transient failure)
+            self._openvas_families_cache = families
         return families
 
     def get_status(self) -> Optional[ScanState]:
