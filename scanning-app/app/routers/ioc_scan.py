@@ -1,7 +1,13 @@
 """IOC Scan API router with REST endpoints and WebSocket for real-time updates."""
 
 import json
+from datetime import datetime
 from typing import Optional
+
+
+def _iso(dt: datetime | None) -> str | None:
+    """Format a naive-UTC datetime as ISO-8601 with Z suffix for JS."""
+    return dt.isoformat() + "Z" if dt else None
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -24,7 +30,7 @@ async def ioc_log_callback(entry: IocScanLogEntry):
     message = create_message("ioc_log", {
         "level": entry.level,
         "message": entry.message,
-        "timestamp": entry.timestamp.isoformat()
+        "timestamp": _iso(entry.timestamp)
     })
     await ioc_manager.broadcast(message)
 
@@ -37,8 +43,8 @@ async def ioc_status_callback(scan_state: IocScanState):
         "target": scan_state.target,
         "mount_type": scan_state.mount_type.value,
         "scan_path": scan_state.scan_path,
-        "started_at": scan_state.started_at.isoformat() if scan_state.started_at else None,
-        "completed_at": scan_state.completed_at.isoformat() if scan_state.completed_at else None,
+        "started_at": _iso(scan_state.started_at),
+        "completed_at": _iso(scan_state.completed_at),
         "alerts_count": scan_state.alerts_count,
         "warnings_count": scan_state.warnings_count,
         "notices_count": scan_state.notices_count,
@@ -133,8 +139,8 @@ async def get_ioc_scan_status(user: dict = Depends(get_current_user)):
             "mount_type": scan.mount_type.value,
             "scan_path": scan.scan_path,
             "status": scan.status.value,
-            "started_at": scan.started_at.isoformat() if scan.started_at else None,
-            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "started_at": _iso(scan.started_at),
+            "completed_at": _iso(scan.completed_at),
             "alerts_count": scan.alerts_count,
             "warnings_count": scan.warnings_count,
             "notices_count": scan.notices_count,
@@ -215,8 +221,8 @@ async def ioc_scan_websocket(websocket: WebSocket, token: str = None):
                 "mount_type": scan.mount_type.value,
                 "scan_path": scan.scan_path,
                 "status": scan.status.value,
-                "started_at": scan.started_at.isoformat() if scan.started_at else None,
-                "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+                "started_at": _iso(scan.started_at),
+                "completed_at": _iso(scan.completed_at),
                 "alerts_count": scan.alerts_count,
                 "warnings_count": scan.warnings_count,
                 "notices_count": scan.notices_count,
@@ -241,7 +247,7 @@ async def ioc_scan_websocket(websocket: WebSocket, token: str = None):
                     {
                         "level": log.level,
                         "message": log.message,
-                        "timestamp": log.timestamp.isoformat()
+                        "timestamp": _iso(log.timestamp)
                     }
                     for log in service.logs
                 ]
