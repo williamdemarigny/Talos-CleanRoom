@@ -7,7 +7,7 @@ from BaseAppSettings.  Each app includes this router at startup:
     app.include_router(auth_router, prefix="/api/auth")
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from pydantic import BaseModel
 
 import talos_common
@@ -36,6 +36,7 @@ class UserInfo(BaseModel):
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     response: Response,
     form_data: LoginRequest,
     settings=Depends(talos_common.get_settings),
@@ -50,12 +51,19 @@ async def login(
 
     access_token = create_access_token(form_data.username, settings)
 
+    # Set secure flag only when behind TLS (direct HTTP in LXC won't send
+    # Secure cookies, breaking login).  X-Forwarded-Proto is set by Traefik.
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto") == "https"
+    )
+
     # Also set cookie for browser-based access
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=is_https,
         max_age=settings.access_token_expire_hours * 3600,
         samesite="lax",
     )
@@ -67,9 +75,13 @@ async def login(
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
     """Logout and clear session."""
-    response.delete_cookie(key="access_token", secure=True, samesite="lax")
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto") == "https"
+    )
+    response.delete_cookie(key="access_token", secure=is_https, samesite="lax")
     return {"message": "Logged out successfully"}
 
 
