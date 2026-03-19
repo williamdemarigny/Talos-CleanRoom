@@ -675,14 +675,19 @@ class DeploymentService(BaseServiceMixin):
         return True
 
     async def cleanup(self) -> bool:
-        """Run cleanup with Talos reset and Terraform destroy.
+        """Run cleanup with Talos reset, Terraform destroy, and Ceph RBD cleanup.
 
         This method performs a complete cleanup by:
         1. Resetting all Talos nodes to wipe ephemeral partitions (CNI IPAM state)
         2. Running Terraform destroy to remove all infrastructure
+        3. Purging orphaned CSI RBD volumes from the Ceph kubernetes pool
+        4. Destroying Build VM (if deployed)
+        5. Cleaning up SSH known_hosts entries
 
         The Talos reset prevents stale CNI/IPAM state from causing IP exhaustion
-        on subsequent deployments.
+        on subsequent deployments. The Ceph cleanup removes RBD images that were
+        provisioned by the CSI driver but can no longer be cleaned up by K8s
+        finalizers after the cluster VMs are destroyed.
         """
         await self.log(-1, "info", "Starting cleanup process...")
         self.credentials = {}
@@ -748,11 +753,45 @@ class DeploymentService(BaseServiceMixin):
         else:
             await self.log(-1, "error", "Cluster Terraform destroy failed")
 
-        # Step 3: Destroy Build VM (if it was deployed)
+        # Step 3: Clean up orphaned Ceph RBD images from the kubernetes pool
+        # When K8s VMs are destroyed, CSI-provisioned RBD volumes become orphaned
+        # because the K8s PV finalizers can no longer run. Clean them up via SSH
+        # to a Proxmox node which has direct access to the Ceph cluster.
+        await self.log(-1, "info", "Step 3: Cleaning up orphaned Ceph RBD volumes...")
+        proxmox_creds = self._read_proxmox_credentials()
+        proxmox_ssh_pw = proxmox_creds.get("proxmox_ssh_password", "")
+        settings = get_settings()
+
+        if proxmox_ssh_pw:
+            ceph_cleanup_cmd = (
+                "rbd ls -p kubernetes 2>/dev/null | grep '^csi-vol-' | "
+                "while read img; do "
+                "rbd snap purge kubernetes/$img 2>/dev/null; "
+                "rbd rm kubernetes/$img 2>/dev/null && "
+                "echo \"Removed: $img\"; "
+                "done; "
+                "echo \"CSI volume cleanup complete\""
+            )
+            ceph_result = await self.process_manager.run_command(
+                ["sshpass", "-p", proxmox_ssh_pw,
+                 "ssh", "-o", "StrictHostKeyChecking=no",
+                 f"{settings.proxmox_ssh_user}@{settings.proxmox_host}",
+                 ceph_cleanup_cmd],
+                on_output=lambda line: self.log(-1, "info", line),
+                timeout=600,  # 10 minutes — may have hundreds of images
+            )
+            if ceph_result.success:
+                await self.log(-1, "info", "Ceph RBD cleanup completed")
+            else:
+                await self.log(-1, "warn", "Ceph RBD cleanup failed (non-fatal) — orphaned volumes may remain")
+        else:
+            await self.log(-1, "warn", "Skipping Ceph cleanup — no Proxmox SSH password available")
+
+        # Step 4: Destroy Build VM (if it was deployed)
         build_lxc_dir = self.repo_root / "terraform" / "build-lxc"
         build_tfvars = build_lxc_dir / "terraform.tfvars"
         if build_tfvars.exists():
-            await self.log(-1, "info", "Step 3: Destroying Build VM...")
+            await self.log(-1, "info", "Step 4: Destroying Build VM...")
             build_result = await self.process_manager.run_command(
                 ["terraform", "destroy", "-auto-approve"],
                 cwd=build_lxc_dir,
@@ -768,8 +807,8 @@ class DeploymentService(BaseServiceMixin):
             else:
                 await self.log(-1, "warn", "Build VM destroy failed (non-fatal)")
 
-        # Step 4: Clean up stale SSH known_hosts entries
-        await self.log(-1, "info", "Step 4: Cleaning up SSH known_hosts...")
+        # Step 5: Clean up stale SSH known_hosts entries
+        await self.log(-1, "info", "Step 5: Cleaning up SSH known_hosts...")
         known_hosts_files = [
             Path.home() / ".ssh" / "known_hosts",
             Path("/root/.ssh/known_hosts"),
