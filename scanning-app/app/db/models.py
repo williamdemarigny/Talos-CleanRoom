@@ -197,6 +197,27 @@ class FaradaySyncLog(Base):
     )
 
 
+class CveCache(Base):
+    """Local cache of NVD/EPSS data to avoid redundant API calls across scans."""
+    __tablename__ = "cve_cache"
+
+    cve_id = Column(String, primary_key=True)
+    cvss_score = Column(Float, nullable=True)
+    cvss_vector = Column(String, nullable=True)
+    cvss_version = Column(String, nullable=True)
+    nvd_severity = Column(String, nullable=True)
+    weakness_ids = Column(JSONB, nullable=True)
+    cpe_matches = Column(JSONB, nullable=True)
+    epss_score = Column(Float, nullable=True)
+    epss_percentile = Column(Float, nullable=True)
+    fetched_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_cve_cache_expires", "expires_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

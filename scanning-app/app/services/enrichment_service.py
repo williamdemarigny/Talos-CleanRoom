@@ -3,13 +3,16 @@
 Queries external APIs after scan completion to enrich CVE-bearing
 vulnerabilities with authoritative severity scores, exploit probability,
 and threat intelligence context.
+
+Phase 2 additions: CVE cache (PostgreSQL), concurrent NVD requests,
+and prefetch-during-scan support.
 """
 
 import asyncio
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -22,13 +25,6 @@ logger = logging.getLogger(__name__)
 
 # Strict CVE ID validation — primary SSRF defense
 _CVE_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$")
-
-# Application-level domain allowlist
-_ALLOWED_HOSTS = frozenset([
-    "services.nvd.nist.gov",
-    "api.first.org",
-    "otx.alienvault.com",
-])
 
 # NVD API base URL
 _NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -75,12 +71,13 @@ class EnrichmentService:
 
     def __init__(self):
         self._client: Optional[httpx.AsyncClient] = None
-        self._semaphore = asyncio.Semaphore(1)  # serialize enrichment runs
-        self._nvd_last_call = 0.0
+        self._enrich_semaphore = asyncio.Semaphore(1)  # serialize enrichment runs
+        self._nvd_rate_limiter = _TokenBucket(rate=0.15)  # default: ~6.5s between
         self._running = False
         self._progress = 0
         self._total = 0
         self._status = "idle"
+        self._cache_stats = {"hits": 0, "misses": 0}
 
     def _ensure_client(self):
         """Lazily create the httpx client."""
@@ -96,20 +93,16 @@ class EnrichmentService:
     # ── Public API ────────────────────────────────────────────────
 
     async def enrich_scan(self, scan_id: str, broadcast_callback=None):
-        """Enrich all CVE-bearing vulns from a completed scan.
-
-        Args:
-            scan_id: The scan ID to enrich.
-            broadcast_callback: Optional async callable to broadcast progress.
-        """
+        """Enrich all CVE-bearing vulns from a completed scan."""
         settings = get_settings()
         if not settings.enrichment_enabled:
             return
 
-        async with self._semaphore:
+        async with self._enrich_semaphore:
             self._running = True
             self._status = "running"
             self._progress = 0
+            self._cache_stats = {"hits": 0, "misses": 0}
             try:
                 await self._do_enrich(scan_id, settings, broadcast_callback)
             except Exception as exc:
@@ -119,6 +112,82 @@ class EnrichmentService:
                 self._running = False
                 if self._status == "running":
                     self._status = "idle"
+
+    async def prefetch_cves(self, cve_ids: list):
+        """Prefetch NVD+EPSS data into cache without updating vuln rows.
+
+        Called after each tool's results are persisted (fire-and-forget).
+        Only populates the cve_cache table — does NOT update vulnerability rows.
+        """
+        settings = get_settings()
+        if not settings.enrichment_enabled:
+            return
+
+        self._ensure_client()
+        session_factory = db_engine.get_session_factory()
+        if session_factory is None:
+            return
+
+        valid_cves = [c for c in set(cve_ids) if _CVE_PATTERN.match(c)]
+        if not valid_cves:
+            return
+
+        # Filter out CVEs already in cache
+        async with session_factory() as session:
+            cached = await repo.get_cached_cves(session, valid_cves)
+        uncached = [c for c in valid_cves if c not in cached]
+        if not uncached:
+            logger.debug("Prefetch: all %d CVEs already cached", len(valid_cves))
+            return
+
+        logger.info("Prefetching %d uncached CVEs into cache", len(uncached))
+
+        # Configure rate limit
+        rate = 1.0 / settings.nvd_rate_limit_keyed if settings.nvd_api_key else 1.0 / settings.nvd_rate_limit
+        self._nvd_rate_limiter = _TokenBucket(rate=rate)
+        nvd_semaphore = asyncio.Semaphore(settings.enrichment_max_concurrent_nvd)
+
+        async def fetch_one(cve_id):
+            async with nvd_semaphore:
+                await self._nvd_rate_limiter.acquire()
+                return cve_id, await self._query_nvd(cve_id, settings)
+
+        # Concurrent NVD fetch
+        tasks = [fetch_one(cve) for cve in uncached]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # EPSS bulk fetch
+        epss_data = {}
+        if settings.epss_enabled:
+            epss_data = await self._query_epss_batch(uncached)
+
+        # Write to cache
+        ttl = timedelta(days=settings.enrichment_cache_ttl_days)
+        now = datetime.utcnow()
+        async with session_factory() as session:
+            for item in results:
+                if isinstance(item, Exception):
+                    continue
+                cve_id, nvd = item
+                if not nvd:
+                    continue
+                epss = epss_data.get(cve_id, {})
+                await repo.upsert_cve_cache(
+                    session, cve_id,
+                    cvss_score=nvd.get("cvss_score"),
+                    cvss_vector=nvd.get("cvss_vector"),
+                    cvss_version=nvd.get("cvss_version"),
+                    nvd_severity=nvd.get("nvd_severity"),
+                    weakness_ids=nvd.get("weakness_ids"),
+                    cpe_matches=nvd.get("cpe_matches"),
+                    epss_score=epss.get("epss"),
+                    epss_percentile=epss.get("percentile"),
+                    fetched_at=now,
+                    expires_at=now + ttl,
+                )
+            await session.commit()
+
+        logger.info("Prefetch complete: %d CVEs cached", sum(1 for r in results if not isinstance(r, Exception) and r[1]))
 
     async def enrich_pending(self, limit: int = 100):
         """Re-enrich any pending/failed vulns (manual trigger)."""
@@ -135,7 +204,6 @@ class EnrichmentService:
             if not vulns:
                 logger.info("No pending vulns to enrich")
                 return
-            # Group by scan_id and enrich each scan's vulns
             scan_ids = {v.scan_id for v in vulns}
 
         for sid in scan_ids:
@@ -148,6 +216,8 @@ class EnrichmentService:
             "running": self._running,
             "progress": self._progress,
             "total": self._total,
+            "cache_hits": self._cache_stats.get("hits", 0),
+            "cache_misses": self._cache_stats.get("misses", 0),
         }
 
     async def close(self):
@@ -164,13 +234,8 @@ class EnrichmentService:
     # ── Internal ──────────────────────────────────────────────────
 
     async def _do_enrich(self, scan_id: str, settings, broadcast_callback):
-        """Core enrichment logic: NVD pass → EPSS pass → DB update."""
+        """Core enrichment: cache check → NVD (concurrent) → EPSS → DB update."""
         self._ensure_client()
-
-        # 0. Connectivity pre-check
-        if not await self._check_connectivity():
-            logger.warning("NVD unreachable — skipping enrichment for scan %s", scan_id)
-            return
 
         session_factory = db_engine.get_session_factory()
         if session_factory is None:
@@ -184,7 +249,6 @@ class EnrichmentService:
                 return
 
             # Also find vulns with CVEs in refs but no external_id
-            all_vulns_with_refs = []
             from sqlalchemy import select
             from app.db.models import Vulnerability
             result = await session.execute(
@@ -201,10 +265,8 @@ class EnrichmentService:
                     if cves:
                         v.external_id = cves[0]
                         v.enrichment_status = "pending"
-                        all_vulns_with_refs.append(v)
-            if all_vulns_with_refs:
-                await session.commit()
-                vulns.extend(all_vulns_with_refs)
+                        vulns.append(v)
+            await session.commit()
 
         # 2. Extract unique CVE IDs (dedup)
         unique_cves = sorted({v.external_id for v in vulns if v.external_id and _CVE_PATTERN.match(v.external_id)})
@@ -216,39 +278,107 @@ class EnrichmentService:
         self._progress = 0
         logger.info("Enriching %d unique CVEs for scan %s", len(unique_cves), scan_id)
 
-        # 3. NVD pass — query per unique CVE, cache results
+        # 3. Check cache first (short session)
         nvd_cache = {}
-        rate_limit = settings.nvd_rate_limit_keyed if settings.nvd_api_key else settings.nvd_rate_limit
+        uncached_cves = []
+        async with session_factory() as session:
+            cached_entries = await repo.get_cached_cves(session, unique_cves)
+            for cve_id in unique_cves:
+                if cve_id in cached_entries:
+                    entry = cached_entries[cve_id]
+                    nvd_cache[cve_id] = {
+                        "cvss_score": entry.cvss_score,
+                        "cvss_vector": entry.cvss_vector,
+                        "cvss_version": entry.cvss_version,
+                        "nvd_severity": entry.nvd_severity,
+                        "weakness_ids": entry.weakness_ids,
+                        "cpe_matches": entry.cpe_matches,
+                    }
+                    self._cache_stats["hits"] += 1
+                else:
+                    uncached_cves.append(cve_id)
+                    self._cache_stats["misses"] += 1
 
-        for cve_id in unique_cves:
-            data = await self._query_nvd(cve_id, settings)
-            if data:
-                nvd_cache[cve_id] = data
-            self._progress += 1
+        logger.info("Cache: %d hits, %d misses", self._cache_stats["hits"], self._cache_stats["misses"])
 
-            if broadcast_callback:
-                try:
-                    await broadcast_callback({
-                        "type": "enrichment_update",
-                        "data": {
-                            "scan_id": scan_id,
-                            "progress": self._progress,
-                            "total": self._total,
-                            "status": "running",
-                        },
-                    })
-                except Exception:
-                    pass
+        # 4. NVD pass — concurrent requests for uncached CVEs
+        if uncached_cves:
+            # Connectivity pre-check
+            if not await self._check_connectivity():
+                logger.warning("NVD unreachable — skipping NVD enrichment for scan %s", scan_id)
+            else:
+                rate = 1.0 / settings.nvd_rate_limit_keyed if settings.nvd_api_key else 1.0 / settings.nvd_rate_limit
+                self._nvd_rate_limiter = _TokenBucket(rate=rate)
+                nvd_semaphore = asyncio.Semaphore(settings.enrichment_max_concurrent_nvd)
 
-            # Rate limit between NVD calls
-            await asyncio.sleep(rate_limit)
+                async def fetch_and_track(cve_id):
+                    async with nvd_semaphore:
+                        await self._nvd_rate_limiter.acquire()
+                        data = await self._query_nvd(cve_id, settings)
+                        self._progress += 1
+                        if broadcast_callback:
+                            try:
+                                await broadcast_callback({
+                                    "type": "enrichment_update",
+                                    "data": {
+                                        "scan_id": scan_id,
+                                        "progress": self._progress + self._cache_stats["hits"],
+                                        "total": self._total,
+                                        "status": "running",
+                                    },
+                                })
+                            except Exception:
+                                pass
+                        return cve_id, data
 
-        # 4. EPSS pass — bulk query
+                tasks = [fetch_and_track(cve) for cve in uncached_cves]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Write results to both nvd_cache dict and DB cache
+                ttl = timedelta(days=settings.enrichment_cache_ttl_days)
+                now = datetime.utcnow()
+                async with session_factory() as session:
+                    for item in results:
+                        if isinstance(item, Exception):
+                            logger.warning("NVD fetch failed: %s", item)
+                            continue
+                        cve_id, data = item
+                        if data:
+                            nvd_cache[cve_id] = data
+                            await repo.upsert_cve_cache(
+                                session, cve_id,
+                                cvss_score=data.get("cvss_score"),
+                                cvss_vector=data.get("cvss_vector"),
+                                cvss_version=data.get("cvss_version"),
+                                nvd_severity=data.get("nvd_severity"),
+                                weakness_ids=data.get("weakness_ids"),
+                                cpe_matches=data.get("cpe_matches"),
+                                fetched_at=now,
+                                expires_at=now + ttl,
+                            )
+                    await session.commit()
+
+        # Mark progress for cached CVEs
+        self._progress = self._total
+
+        # 5. EPSS pass — bulk query all unique CVEs (cached EPSS may be stale)
         epss_data = {}
         if settings.epss_enabled:
             epss_data = await self._query_epss_batch(unique_cves)
+            # Update EPSS in cache for freshness
+            if epss_data:
+                async with session_factory() as session:
+                    for cve_id, epss in epss_data.items():
+                        await repo.upsert_cve_cache(
+                            session, cve_id,
+                            epss_score=epss.get("epss"),
+                            epss_percentile=epss.get("percentile"),
+                            fetched_at=datetime.utcnow(),
+                            expires_at=datetime.utcnow() + timedelta(days=settings.enrichment_cache_ttl_days),
+                        )
+                    await session.commit()
 
-        # 5. Write enrichment data (short session)
+        # 6. Write enrichment data to vuln rows (short session, bulk by CVE)
         enriched_count = 0
         async with session_factory() as session:
             for cve_id in unique_cves:
@@ -259,14 +389,10 @@ class EnrichmentService:
                     "enrichment_status": "enriched" if nvd or epss else "failed",
                     "enriched_at": datetime.utcnow(),
                     "enrichment_source": ",".join(
-                        s for s in [
-                            "nvd" if nvd else None,
-                            "epss" if epss else None,
-                        ] if s
+                        s for s in ["nvd" if nvd else None, "epss" if epss else None] if s
                     ) or None,
                 }
 
-                # NVD fields
                 if nvd:
                     enrichment_data.update({
                         "cvss_score": nvd.get("cvss_score"),
@@ -277,7 +403,6 @@ class EnrichmentService:
                         "weakness_ids": nvd.get("weakness_ids"),
                     })
 
-                # EPSS fields
                 if epss:
                     enrichment_data.update({
                         "epss_score": epss.get("epss"),
@@ -292,8 +417,9 @@ class EnrichmentService:
             await session.commit()
 
         logger.info(
-            "Enrichment complete for scan %s: %d CVEs queried, %d vuln rows updated",
-            scan_id, len(unique_cves), enriched_count,
+            "Enrichment complete for scan %s: %d CVEs (%d cached, %d fetched), %d vuln rows updated",
+            scan_id, len(unique_cves), self._cache_stats["hits"],
+            self._cache_stats["misses"], enriched_count,
         )
         self._status = "idle"
 
@@ -342,7 +468,7 @@ class EnrichmentService:
             if resp.status_code == 404:
                 return None
             if resp.status_code == 403:
-                logger.warning("NVD rate limited on %s — backing off", cve_id)
+                logger.warning("NVD rate limited on %s — backing off 30s", cve_id)
                 await asyncio.sleep(30)
                 return None
             resp.raise_for_status()
@@ -418,7 +544,6 @@ class EnrichmentService:
         self._ensure_client()
         epss_data = {}
 
-        # Chunk into groups of 100 (URL length constraint)
         for i in range(0, len(cve_ids), 100):
             chunk = cve_ids[i:i + 100]
             try:
@@ -443,3 +568,31 @@ class EnrichmentService:
                 await asyncio.sleep(1.0)
 
         return epss_data
+
+
+# ── Rate Limiter ──────────────────────────────────────────────────
+
+class _TokenBucket:
+    """Simple async token bucket rate limiter for NVD API calls."""
+
+    def __init__(self, rate: float = 0.15):
+        """Args: rate = tokens per second (0.15 = ~6.5s between calls)."""
+        self._rate = rate
+        self._tokens = 1.0
+        self._max_tokens = 1.0
+        self._last_refill = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        """Wait until a token is available, then consume it."""
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                elapsed = now - self._last_refill
+                self._tokens = min(self._max_tokens, self._tokens + elapsed * self._rate)
+                self._last_refill = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+            # Wait and retry
+            await asyncio.sleep(0.5)

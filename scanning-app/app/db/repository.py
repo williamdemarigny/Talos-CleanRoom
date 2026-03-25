@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     Scan, Host, Service, Vulnerability, IocFinding,
-    FaradaySyncLog, AuditLog,
+    FaradaySyncLog, AuditLog, CveCache,
 )
 
 
@@ -127,6 +127,9 @@ async def list_vulns(
     scan_id: Optional[str] = None,
     severity: Optional[str] = None,
     remediation_status: Optional[str] = None,
+    enrichment_status: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
     limit: int = 100,
     offset: int = 0,
 ) -> List[Vulnerability]:
@@ -137,7 +140,23 @@ async def list_vulns(
         q = q.where(Vulnerability.severity == severity)
     if remediation_status:
         q = q.where(Vulnerability.remediation_status == remediation_status)
-    q = q.order_by(Vulnerability.id).limit(limit).offset(offset)
+    if enrichment_status:
+        q = q.where(Vulnerability.enrichment_status == enrichment_status)
+
+    # Sorting
+    _SORT_COLUMNS = {
+        "cvss_score": Vulnerability.cvss_score,
+        "epss_score": Vulnerability.epss_score,
+        "severity": Vulnerability.severity,
+        "name": Vulnerability.name,
+    }
+    sort_col = _SORT_COLUMNS.get(sort_by)
+    if sort_col is not None:
+        q = q.order_by(sort_col.desc().nullslast() if sort_order == "desc" else sort_col.asc().nullsfirst())
+    else:
+        q = q.order_by(Vulnerability.id)
+
+    q = q.limit(limit).offset(offset)
     result = await session.execute(q)
     return list(result.scalars().all())
 
@@ -314,6 +333,46 @@ async def list_audit_log(
     q = q.order_by(AuditLog.timestamp.desc()).limit(limit).offset(offset)
     result = await session.execute(q)
     return list(result.scalars().all())
+
+
+# ── CVE Cache ─────────────────────────────────────────────────────
+
+async def get_cached_cve(session: AsyncSession, cve_id: str) -> Optional[CveCache]:
+    """Get a non-expired cache entry for a CVE."""
+    result = await session.execute(
+        select(CveCache).where(
+            and_(CveCache.cve_id == cve_id, CveCache.expires_at > func.now())
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_cached_cves(session: AsyncSession, cve_ids: List[str]) -> dict:
+    """Bulk-fetch non-expired cache entries. Returns {cve_id: CveCache}."""
+    if not cve_ids:
+        return {}
+    result = await session.execute(
+        select(CveCache).where(
+            and_(CveCache.cve_id.in_(cve_ids), CveCache.expires_at > func.now())
+        )
+    )
+    return {c.cve_id: c for c in result.scalars().all()}
+
+
+async def upsert_cve_cache(session: AsyncSession, cve_id: str, **kwargs) -> CveCache:
+    """Insert or update a CVE cache entry."""
+    result = await session.execute(
+        select(CveCache).where(CveCache.cve_id == cve_id)
+    )
+    entry = result.scalar_one_or_none()
+    if entry:
+        for k, v in kwargs.items():
+            setattr(entry, k, v)
+    else:
+        entry = CveCache(cve_id=cve_id, **kwargs)
+        session.add(entry)
+    await session.flush()
+    return entry
 
 
 # ── Summary / Aggregations ────────────────────────────────────────
