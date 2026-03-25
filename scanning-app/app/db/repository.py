@@ -128,6 +128,8 @@ async def list_vulns(
     severity: Optional[str] = None,
     remediation_status: Optional[str] = None,
     enrichment_status: Optional[str] = None,
+    cvss_min: Optional[float] = None,
+    epss_min: Optional[float] = None,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
     limit: int = 100,
@@ -142,6 +144,10 @@ async def list_vulns(
         q = q.where(Vulnerability.remediation_status == remediation_status)
     if enrichment_status:
         q = q.where(Vulnerability.enrichment_status == enrichment_status)
+    if cvss_min is not None:
+        q = q.where(Vulnerability.cvss_score >= cvss_min)
+    if epss_min is not None:
+        q = q.where(Vulnerability.epss_score >= epss_min)
 
     # Sorting
     _SORT_COLUMNS = {

@@ -203,6 +203,8 @@ async def list_vulns(
     severity: Optional[str] = None,
     remediation_status: Optional[str] = None,
     enrichment_status: Optional[str] = None,
+    cvss_min: Optional[float] = None,
+    epss_min: Optional[float] = None,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
     limit: int = 100,
@@ -215,6 +217,7 @@ async def list_vulns(
         session, scan_id=scan_id, severity=severity,
         remediation_status=remediation_status,
         enrichment_status=enrichment_status,
+        cvss_min=cvss_min, epss_min=epss_min,
         sort_by=sort_by, sort_order=sort_order,
         limit=limit, offset=offset,
     )
