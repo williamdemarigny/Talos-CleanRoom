@@ -32,6 +32,9 @@ _NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 # EPSS API base URL
 _EPSS_API_URL = "https://api.first.org/data/v1/epss"
 
+# OTX API base URL
+_OTX_API_URL = "https://otx.alienvault.com/api/v1/indicators/cve"
+
 # CVSS severity thresholds
 _CVSS_SEVERITY = [
     (9.0, "critical"),
@@ -378,19 +381,29 @@ class EnrichmentService:
                         )
                     await session.commit()
 
-        # 6. Write enrichment data to vuln rows (short session, bulk by CVE)
+        # 6. OTX pass — per-CVE threat intelligence (if enabled)
+        otx_data = {}
+        if settings.otx_enabled and settings.otx_api_key:
+            otx_data = await self._query_otx_batch(unique_cves, settings)
+
+        # 7. Write enrichment data to vuln rows (short session, bulk by CVE)
         enriched_count = 0
         async with session_factory() as session:
             for cve_id in unique_cves:
                 nvd = nvd_cache.get(cve_id, {})
                 epss = epss_data.get(cve_id, {})
+                otx = otx_data.get(cve_id)
+
+                sources = [s for s in [
+                    "nvd" if nvd else None,
+                    "epss" if epss else None,
+                    "otx" if otx else None,
+                ] if s]
 
                 enrichment_data = {
                     "enrichment_status": "enriched" if nvd or epss else "failed",
                     "enriched_at": datetime.utcnow(),
-                    "enrichment_source": ",".join(
-                        s for s in ["nvd" if nvd else None, "epss" if epss else None] if s
-                    ) or None,
+                    "enrichment_source": ",".join(sources) or None,
                 }
 
                 if nvd:
@@ -408,6 +421,9 @@ class EnrichmentService:
                         "epss_score": epss.get("epss"),
                         "epss_percentile": epss.get("percentile"),
                     })
+
+                if otx:
+                    enrichment_data["threat_intel"] = otx
 
                 rows = await repo.update_enrichment_by_cve(
                     session, scan_id, cve_id, **enrichment_data
@@ -568,6 +584,58 @@ class EnrichmentService:
                 await asyncio.sleep(1.0)
 
         return epss_data
+
+
+    async def _query_otx(self, cve_id: str, settings) -> Optional[dict]:
+        """Query AlienVault OTX for threat intelligence on a CVE."""
+        if not _CVE_PATTERN.match(cve_id):
+            return None
+
+        self._ensure_client()
+        try:
+            resp = await self._client.get(
+                f"{_OTX_API_URL}/{cve_id}/general",
+                headers={"X-OTX-API-KEY": settings.otx_api_key},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+
+            data = resp.json()
+            pulse_info = data.get("pulse_info", {})
+            pulse_count = pulse_info.get("count", 0)
+            if pulse_count == 0:
+                return None
+
+            # Extract tags and adversaries from pulses
+            tags = set()
+            adversaries = set()
+            for pulse in pulse_info.get("pulses", [])[:20]:
+                for tag in pulse.get("tags", []):
+                    tags.add(tag.lower())
+                adversary = pulse.get("adversary")
+                if adversary:
+                    adversaries.add(adversary)
+
+            return {
+                "otx_pulse_count": pulse_count,
+                "otx_tags": sorted(tags)[:20],
+                "otx_adversaries": sorted(adversaries),
+            }
+
+        except Exception as exc:
+            logger.warning("OTX query failed for %s: %s", cve_id, exc)
+            return None
+
+    async def _query_otx_batch(self, cve_ids: list, settings) -> dict:
+        """Query OTX for multiple CVEs with rate limiting."""
+        otx_data = {}
+        for cve_id in cve_ids:
+            result = await self._query_otx(cve_id, settings)
+            if result:
+                otx_data[cve_id] = result
+            await asyncio.sleep(0.5)  # OTX rate limit: ~2 req/s
+        return otx_data
 
 
 # ── Rate Limiter ──────────────────────────────────────────────────

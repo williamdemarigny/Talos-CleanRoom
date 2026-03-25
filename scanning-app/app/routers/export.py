@@ -17,6 +17,13 @@ from app.services.audit import log_audit
 router = APIRouter()
 
 
+def _csv_safe(value: str) -> str:
+    """Prefix values starting with formula characters to prevent CSV injection."""
+    if value and value[0] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
 @router.get("/vulns/csv")
 async def export_vulns_csv(
     http_request: Request,
@@ -43,13 +50,21 @@ async def export_vulns_csv(
         "ID", "Scan ID", "Host ID", "Name", "Severity",
         "External ID", "Tool Source", "Remediation Status",
         "Remediation Notes", "Description",
+        "CVSS Score", "CVSS Vector", "CVSS Version", "NVD Severity",
+        "EPSS Score", "EPSS Percentile", "Enrichment Status",
     ])
     for v in vulns:
         writer.writerow([
-            v.id, v.scan_id, v.host_id, v.name, v.severity,
+            v.id, v.scan_id, v.host_id, _csv_safe(v.name), v.severity,
             v.external_id or "", v.tool_source or "",
-            v.remediation_status or "", v.remediation_notes or "",
-            (v.description or "")[:500],
+            v.remediation_status or "", _csv_safe(v.remediation_notes or ""),
+            _csv_safe((v.description or "")[:500]),
+            v.cvss_score if v.cvss_score is not None else "",
+            v.cvss_vector or "", v.cvss_version or "",
+            v.nvd_severity or "",
+            f"{v.epss_score:.4f}" if v.epss_score is not None else "",
+            f"{v.epss_percentile:.4f}" if v.epss_percentile is not None else "",
+            v.enrichment_status or "skipped",
         ])
 
     output.seek(0)
@@ -94,6 +109,17 @@ async def export_vulns_json(
             "remediation_notes": v.remediation_notes,
             "refs": v.refs,
             "tags": v.tags,
+            "cvss_score": v.cvss_score,
+            "cvss_vector": v.cvss_vector,
+            "cvss_version": v.cvss_version,
+            "nvd_severity": v.nvd_severity,
+            "epss_score": v.epss_score,
+            "epss_percentile": v.epss_percentile,
+            "enrichment_status": v.enrichment_status,
+            "enriched_at": v.enriched_at.isoformat() if v.enriched_at else None,
+            "cpe_matches": v.cpe_matches,
+            "weakness_ids": v.weakness_ids,
+            "threat_intel": v.threat_intel,
         }
         for v in vulns
     ]
@@ -147,6 +173,16 @@ async def export_scan_json(
                         "external_id": v.external_id, "description": v.description,
                         "tool_source": v.tool_source,
                         "remediation_status": v.remediation_status,
+                        "cvss_score": v.cvss_score,
+                        "cvss_vector": v.cvss_vector,
+                        "cvss_version": v.cvss_version,
+                        "nvd_severity": v.nvd_severity,
+                        "epss_score": v.epss_score,
+                        "epss_percentile": v.epss_percentile,
+                        "enrichment_status": v.enrichment_status,
+                        "cpe_matches": v.cpe_matches,
+                        "weakness_ids": v.weakness_ids,
+                        "threat_intel": v.threat_intel,
                     }
                     for v in h.vulnerabilities
                 ],

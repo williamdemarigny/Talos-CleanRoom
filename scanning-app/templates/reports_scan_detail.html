@@ -73,9 +73,9 @@
                             <!-- Vulns -->
                             <div x-show="host.vulnerabilities.length > 0">
                                 <span class="text-xs text-gray-500">Vulnerabilities:</span>
-                                <div class="space-y-1 mt-1">
+                                <div class="space-y-1.5 mt-1">
                                     <template x-for="v in host.vulnerabilities" :key="v.id">
-                                        <div class="flex items-center gap-2 text-xs">
+                                        <div class="flex items-center gap-2 text-xs flex-wrap">
                                             <span class="px-1.5 py-0.5 rounded"
                                                   :class="{
                                                       'bg-red-600 text-white': v.severity === 'critical',
@@ -85,8 +85,37 @@
                                                       'bg-gray-600 text-white': v.severity === 'info'
                                                   }"
                                                   x-text="v.severity"></span>
+                                            <!-- CVSS badge -->
+                                            <template x-if="v.cvss_score != null">
+                                                <span class="px-1.5 py-0.5 rounded font-bold"
+                                                      :class="{
+                                                          'bg-red-700 text-white': v.cvss_score >= 9.0,
+                                                          'bg-orange-700 text-white': v.cvss_score >= 7.0 && v.cvss_score < 9.0,
+                                                          'bg-yellow-700 text-white': v.cvss_score >= 4.0 && v.cvss_score < 7.0,
+                                                          'bg-blue-700 text-white': v.cvss_score < 4.0
+                                                      }"
+                                                      :title="(v.cvss_vector || '') + ' (v' + (v.cvss_version || '?') + ')'"
+                                                      x-text="'CVSS ' + v.cvss_score.toFixed(1)"></span>
+                                            </template>
+                                            <!-- EPSS bar -->
+                                            <template x-if="v.epss_score != null">
+                                                <span class="flex items-center gap-1">
+                                                    <span class="w-8 bg-gray-600 rounded-full h-1.5 inline-block">
+                                                        <span class="h-1.5 rounded-full inline-block"
+                                                              :class="v.epss_score >= 0.5 ? 'bg-red-500' : v.epss_score >= 0.1 ? 'bg-orange-500' : 'bg-cyan-500'"
+                                                              :style="'width:' + Math.max(4, v.epss_score * 100) + '%'"></span>
+                                                    </span>
+                                                    <span class="text-gray-500" x-text="(v.epss_score * 100).toFixed(1) + '%'"></span>
+                                                </span>
+                                            </template>
                                             <span class="text-gray-300" x-text="v.name"></span>
                                             <span class="text-gray-500 font-mono" x-text="v.external_id || ''"></span>
+                                            <!-- Threat intel indicator -->
+                                            <template x-if="v.threat_intel && v.threat_intel.otx_pulse_count > 0">
+                                                <span class="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 rounded"
+                                                      :title="'OTX: ' + v.threat_intel.otx_pulse_count + ' threat reports'"
+                                                      x-text="v.threat_intel.otx_pulse_count + ' TI'"></span>
+                                            </template>
                                         </div>
                                     </template>
                                 </div>
