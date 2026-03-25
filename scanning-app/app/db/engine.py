@@ -29,6 +29,11 @@ async def close_db():
         _engine = None
 
 
+def get_session_factory():
+    """Return the async session factory for use in background tasks."""
+    return _session_factory
+
+
 async def get_session() -> AsyncSession:
     """FastAPI dependency that yields an async database session."""
     async with _session_factory() as session:

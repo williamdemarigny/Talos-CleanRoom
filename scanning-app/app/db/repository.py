@@ -177,6 +177,67 @@ async def bulk_update_remediation(
     return result.rowcount
 
 
+# ── Enrichment ────────────────────────────────────────────────────
+
+async def get_vulns_pending_enrichment(
+    session: AsyncSession,
+    scan_id: Optional[str] = None,
+    limit: int = 500,
+) -> List[Vulnerability]:
+    """Get vulns with enrichment_status='pending' and a CVE external_id."""
+    q = (
+        select(Vulnerability)
+        .where(
+            and_(
+                Vulnerability.enrichment_status == "pending",
+                Vulnerability.external_id.isnot(None),
+                Vulnerability.external_id.like("CVE-%"),
+            )
+        )
+    )
+    if scan_id:
+        q = q.where(Vulnerability.scan_id == scan_id)
+    q = q.order_by(Vulnerability.id).limit(limit)
+    result = await session.execute(q)
+    return list(result.scalars().all())
+
+
+async def update_enrichment_by_cve(
+    session: AsyncSession,
+    scan_id: str,
+    cve_id: str,
+    **enrichment_data,
+) -> int:
+    """Bulk-update all vulns sharing a CVE within a scan with enrichment data."""
+    result = await session.execute(
+        update(Vulnerability)
+        .where(
+            and_(
+                Vulnerability.scan_id == scan_id,
+                Vulnerability.external_id == cve_id,
+            )
+        )
+        .values(**enrichment_data)
+    )
+    return result.rowcount
+
+
+async def get_enrichment_summary(
+    session: AsyncSession,
+    scan_id: Optional[str] = None,
+) -> dict:
+    """Count vulnerabilities by enrichment_status."""
+    q = (
+        select(Vulnerability.enrichment_status, func.count(Vulnerability.id))
+        .group_by(Vulnerability.enrichment_status)
+    )
+    if scan_id:
+        q = q.where(Vulnerability.scan_id == scan_id)
+    result = await session.execute(q)
+    counts = {row[0]: row[1] for row in result.all()}
+    return counts
+
+
 # ── IOC Findings ───────────────────────────────────────────────────
 
 async def create_ioc_finding(session: AsyncSession, **kwargs) -> IocFinding:

@@ -7,7 +7,7 @@ Alembic migrations in alembic/versions/ keep the database in sync.
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, DateTime, Integer, String, Text, Boolean, ForeignKey, Index,
+    Column, DateTime, Float, Integer, String, Text, Boolean, ForeignKey, Index,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -120,6 +120,19 @@ class Vulnerability(Base):
     remediation_status = Column(String, default="open")
     remediation_notes = Column(Text, nullable=True)
     remediation_updated_at = Column(DateTime, nullable=True)
+    # Enrichment fields (populated by EnrichmentService after scan completion)
+    cvss_score = Column(Float, nullable=True)         # CVSS base score (0.0-10.0)
+    cvss_vector = Column(String, nullable=True)       # CVSS vector string
+    cvss_version = Column(String, nullable=True)      # "2.0", "3.1", "4.0"
+    nvd_severity = Column(String, nullable=True)      # NVD-derived severity (never overwrites tool severity)
+    epss_score = Column(Float, nullable=True)         # Exploit probability (0.0-1.0)
+    epss_percentile = Column(Float, nullable=True)    # EPSS percentile (0.0-1.0)
+    cpe_matches = Column(JSONB, nullable=True)        # CPE URIs from NVD
+    weakness_ids = Column(JSONB, nullable=True)        # CWE IDs from NVD
+    threat_intel = Column(JSONB, nullable=True)        # OTX pulses, tags, adversary info
+    enrichment_status = Column(String, nullable=False, server_default="skipped")  # pending/enriched/failed/skipped
+    enrichment_source = Column(String, nullable=True)  # e.g. "nvd,epss"
+    enriched_at = Column(DateTime, nullable=True)
 
     scan = relationship("Scan", back_populates="vulnerabilities")
     host = relationship("Host", back_populates="vulnerabilities")
@@ -130,6 +143,9 @@ class Vulnerability(Base):
         Index("ix_vulns_host_id", "host_id"),
         Index("ix_vulns_remediation_status", "remediation_status"),
         Index("ix_vulns_external_id", "external_id"),
+        Index("ix_vulns_cvss_score", "cvss_score"),
+        Index("ix_vulns_epss_score", "epss_score"),
+        Index("ix_vulns_enrichment_status", "enrichment_status"),
     )
 
 

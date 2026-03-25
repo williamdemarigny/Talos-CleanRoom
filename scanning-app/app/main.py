@@ -31,9 +31,15 @@ TEMPLATES_DIR = APP_DIR.parent / "templates"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage database connection pool lifecycle."""
+    """Manage database connection pool and enrichment service lifecycle."""
     await init_db()
     yield
+    # Shutdown enrichment service HTTP client
+    try:
+        from app.services.enrichment_service import get_enrichment_service
+        await get_enrichment_service().close()
+    except Exception:
+        pass
     await close_db()
 
 

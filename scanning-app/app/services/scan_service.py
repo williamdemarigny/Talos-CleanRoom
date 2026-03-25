@@ -1241,6 +1241,19 @@ except Exception as e:
                 except Exception as db_err:
                     await self.log(None, "warn", f"Failed to persist scan completion to database: {db_err}")
 
+                # Trigger background vulnerability enrichment (NVD/EPSS)
+                try:
+                    from app.config import get_settings as _get_settings
+                    _settings = _get_settings()
+                    if _settings.enrichment_enabled and _settings.enrichment_auto_trigger:
+                        from app.services.enrichment_service import get_enrichment_service
+                        enrichment = get_enrichment_service()
+                        task = asyncio.create_task(enrichment.enrich_scan(scan.id))
+                        task.add_done_callback(enrichment._handle_task_exception)
+                        await self.log(None, "info", "Background vulnerability enrichment started")
+                except Exception as enrich_err:
+                    logger.debug("Enrichment trigger failed: %s", enrich_err)
+
         except Exception as e:
             await self.log(None, "error", f"Scan failed: {e}")
             if self.current_scan:

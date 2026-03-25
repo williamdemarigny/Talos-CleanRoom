@@ -70,9 +70,12 @@
                         <th class="text-left pb-3 w-8"><input type="checkbox" @change="toggleAll($event)" class="accent-cyan-500"></th>
                         <th class="text-left pb-3">Name</th>
                         <th class="text-left pb-3">Severity</th>
+                        <th class="text-left pb-3">CVSS</th>
+                        <th class="text-left pb-3">EPSS</th>
                         <th class="text-left pb-3">CVE</th>
                         <th class="text-left pb-3">Tool</th>
                         <th class="text-left pb-3">Status</th>
+                        <th class="text-left pb-3">Enriched</th>
                         <th class="text-left pb-3">Scan</th>
                     </tr>
                 </thead>
@@ -92,6 +95,38 @@
                                       }"
                                       x-text="v.severity"></span>
                             </td>
+                            <td class="py-3">
+                                <template x-if="v.cvss_score !== null && v.cvss_score !== undefined">
+                                    <span class="px-2 py-1 rounded text-xs font-bold"
+                                          :class="{
+                                              'bg-red-600 text-white': v.cvss_score >= 9.0,
+                                              'bg-orange-600 text-white': v.cvss_score >= 7.0 && v.cvss_score < 9.0,
+                                              'bg-yellow-600 text-white': v.cvss_score >= 4.0 && v.cvss_score < 7.0,
+                                              'bg-blue-600 text-white': v.cvss_score > 0 && v.cvss_score < 4.0,
+                                              'bg-gray-600 text-white': v.cvss_score === 0
+                                          }"
+                                          :title="(v.cvss_vector || '') + ' (v' + (v.cvss_version || '?') + ')'"
+                                          x-text="v.cvss_score.toFixed(1)"></span>
+                                </template>
+                                <template x-if="v.cvss_score === null || v.cvss_score === undefined">
+                                    <span class="text-gray-500">-</span>
+                                </template>
+                            </td>
+                            <td class="py-3">
+                                <template x-if="v.epss_score !== null && v.epss_score !== undefined">
+                                    <div class="flex items-center gap-1">
+                                        <div class="w-12 bg-gray-700 rounded-full h-1.5">
+                                            <div class="h-1.5 rounded-full"
+                                                 :class="v.epss_score >= 0.5 ? 'bg-red-500' : v.epss_score >= 0.1 ? 'bg-orange-500' : 'bg-cyan-500'"
+                                                 :style="'width:' + Math.max(4, v.epss_score * 100) + '%'"></div>
+                                        </div>
+                                        <span class="text-xs text-gray-400" x-text="(v.epss_score * 100).toFixed(1) + '%'"></span>
+                                    </div>
+                                </template>
+                                <template x-if="v.epss_score === null || v.epss_score === undefined">
+                                    <span class="text-gray-500">-</span>
+                                </template>
+                            </td>
                             <td class="py-3 text-gray-400 font-mono text-xs" x-text="v.external_id || '-'"></td>
                             <td class="py-3 text-gray-400 capitalize" x-text="v.tool_source || '-'"></td>
                             <td class="py-3">
@@ -105,13 +140,23 @@
                                       x-text="v.remediation_status"></span>
                             </td>
                             <td class="py-3">
+                                <span class="px-2 py-0.5 rounded text-xs"
+                                      :class="{
+                                          'bg-green-600/30 text-green-300': v.enrichment_status === 'enriched',
+                                          'bg-yellow-600/30 text-yellow-300': v.enrichment_status === 'pending',
+                                          'bg-red-600/30 text-red-300': v.enrichment_status === 'failed',
+                                          'bg-gray-600/30 text-gray-400': v.enrichment_status === 'skipped'
+                                      }"
+                                      x-text="v.enrichment_status || 'skipped'"></span>
+                            </td>
+                            <td class="py-3">
                                 <a :href="'/reports/scan/' + v.scan_id"
                                    class="text-cyan-400 hover:text-cyan-300 font-mono text-xs" x-text="v.scan_id"></a>
                             </td>
                         </tr>
                     </template>
                     <tr x-show="vulns.length === 0">
-                        <td colspan="7" class="py-6 text-center text-gray-500">No vulnerabilities found.</td>
+                        <td colspan="10" class="py-6 text-center text-gray-500">No vulnerabilities found.</td>
                     </tr>
                 </tbody>
             </table>
