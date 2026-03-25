@@ -75,6 +75,9 @@ function reportsVulns() {
         filterSeverity: '',
         filterRemediation: '',
         filterScanId: '',
+        filterEnrichment: '',
+        sortBy: '',
+        sortOrder: 'desc',
         offset: 0,
         pageSize: 50,
 
@@ -88,6 +91,8 @@ function reportsVulns() {
                 if (this.filterSeverity) url += `&severity=${encodeURIComponent(this.filterSeverity)}`;
                 if (this.filterRemediation) url += `&remediation_status=${encodeURIComponent(this.filterRemediation)}`;
                 if (this.filterScanId) url += `&scan_id=${encodeURIComponent(this.filterScanId)}`;
+                if (this.filterEnrichment) url += `&enrichment_status=${encodeURIComponent(this.filterEnrichment)}`;
+                if (this.sortBy) url += `&sort_by=${this.sortBy}&sort_order=${this.sortOrder}`;
                 const resp = await fetch(url);
                 const data = await resp.json();
                 this.vulns = data.vulns || [];
@@ -95,6 +100,17 @@ function reportsVulns() {
             } catch (e) {
                 console.error('Failed to fetch vulns:', e);
             }
+        },
+
+        toggleSort(field) {
+            if (this.sortBy === field) {
+                this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+            } else {
+                this.sortBy = field;
+                this.sortOrder = 'desc';
+            }
+            this.offset = 0;
+            this.fetchVulns();
         },
 
         toggleAll(event) {

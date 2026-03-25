@@ -28,6 +28,11 @@ function scanManager() {
         history: [],
         logFilter: null,
 
+        // Enrichment state
+        enrichmentStatus: 'idle',
+        enrichmentProgress: 0,
+        enrichmentTotal: 0,
+
         // UI state
         autoScroll: true,
         wsConnected: false,
@@ -188,6 +193,9 @@ function scanManager() {
                 case 'scan_tool_update':
                     this.handleToolUpdate(message.data);
                     break;
+                case 'enrichment_update':
+                    this.handleEnrichmentUpdate(message.data);
+                    break;
                 case 'pong':
                     break;
             }
@@ -222,6 +230,15 @@ function scanManager() {
                 this.fetchHistory();
                 this.stopPolling();
                 this.stopTimer();
+            }
+        },
+
+        handleEnrichmentUpdate(data) {
+            this.enrichmentStatus = data.status || 'idle';
+            this.enrichmentProgress = data.progress || 0;
+            this.enrichmentTotal = data.total || 0;
+            if (data.status === 'completed') {
+                this.enrichmentStatus = 'completed';
             }
         },
 

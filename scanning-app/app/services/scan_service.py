@@ -1186,6 +1186,30 @@ except Exception as e:
                                     )
                         except Exception as db_err:
                             await self.log(tool.value, "warn", f"Failed to log Faraday sync to database: {db_err}")
+
+                        # Prefetch CVE enrichment data into cache (fire-and-forget)
+                        try:
+                            from app.config import get_settings as _get_settings
+                            _settings = _get_settings()
+                            if _settings.enrichment_enabled and db_engine.get_session_factory() is not None:
+                                from app.services.enrichment_service import get_enrichment_service
+                                # Extract CVE IDs from just-persisted vulns
+                                async with db_engine.get_session_factory()() as _session:
+                                    from sqlalchemy import select
+                                    from app.db.models import Vulnerability
+                                    _result = await _session.execute(
+                                        select(Vulnerability.external_id).where(
+                                            Vulnerability.scan_id == scan.id,
+                                            Vulnerability.external_id.isnot(None),
+                                            Vulnerability.external_id.like("CVE-%"),
+                                        )
+                                    )
+                                    cve_ids = [r[0] for r in _result.all()]
+                                if cve_ids:
+                                    asyncio.create_task(get_enrichment_service().prefetch_cves(cve_ids))
+                        except Exception:
+                            pass  # prefetch is best-effort
+
                     elif scan.status == ScanStatus.RUNNING:
                         await self._update_tool_state(
                             tool, status=ScanStatus.FAILED,

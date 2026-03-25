@@ -40,6 +40,16 @@
             </select>
         </div>
         <div>
+            <label class="block text-sm text-gray-400 mb-1">Enrichment</label>
+            <select x-model="filterEnrichment" class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+                <option value="">All</option>
+                <option value="enriched">Enriched</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="skipped">Skipped</option>
+            </select>
+        </div>
+        <div>
             <label class="block text-sm text-gray-400 mb-1">Scan ID</label>
             <input type="text" x-model="filterScanId" placeholder="Filter by scan..."
                    class="bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
@@ -70,8 +80,14 @@
                         <th class="text-left pb-3 w-8"><input type="checkbox" @change="toggleAll($event)" class="accent-cyan-500"></th>
                         <th class="text-left pb-3">Name</th>
                         <th class="text-left pb-3">Severity</th>
-                        <th class="text-left pb-3">CVSS</th>
-                        <th class="text-left pb-3">EPSS</th>
+                        <th class="text-left pb-3 cursor-pointer select-none" @click="toggleSort('cvss_score')">
+                            CVSS
+                            <span x-show="sortBy === 'cvss_score'" x-text="sortOrder === 'desc' ? '▼' : '▲'" class="text-cyan-400 text-xs"></span>
+                        </th>
+                        <th class="text-left pb-3 cursor-pointer select-none" @click="toggleSort('epss_score')">
+                            EPSS
+                            <span x-show="sortBy === 'epss_score'" x-text="sortOrder === 'desc' ? '▼' : '▲'" class="text-cyan-400 text-xs"></span>
+                        </th>
                         <th class="text-left pb-3">CVE</th>
                         <th class="text-left pb-3">Tool</th>
                         <th class="text-left pb-3">Status</th>

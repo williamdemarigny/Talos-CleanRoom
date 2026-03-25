@@ -202,15 +202,21 @@ async def list_vulns(
     scan_id: Optional[str] = None,
     severity: Optional[str] = None,
     remediation_status: Optional[str] = None,
+    enrichment_status: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
     limit: int = 100,
     offset: int = 0,
     user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """List vulnerabilities with optional filters."""
+    """List vulnerabilities with optional filters and sorting."""
     vulns = await repo.list_vulns(
         session, scan_id=scan_id, severity=severity,
-        remediation_status=remediation_status, limit=limit, offset=offset,
+        remediation_status=remediation_status,
+        enrichment_status=enrichment_status,
+        sort_by=sort_by, sort_order=sort_order,
+        limit=limit, offset=offset,
     )
     return {"vulns": [
         {
