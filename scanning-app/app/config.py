@@ -25,6 +25,17 @@ class ScanningSettings(BaseAppSettings):
     # Faraday integration
     faraday_sync_enabled: bool = True
 
+    # Vulnerability enrichment (NVD/EPSS/OTX)
+    enrichment_enabled: bool = False
+    nvd_api_key: str = ""
+    nvd_rate_limit: float = 6.5        # seconds between requests (no key)
+    nvd_rate_limit_keyed: float = 0.7  # seconds between requests (with key)
+    epss_enabled: bool = True
+    otx_api_key: str = ""
+    otx_enabled: bool = False
+    enrichment_batch_size: int = 50
+    enrichment_auto_trigger: bool = True
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

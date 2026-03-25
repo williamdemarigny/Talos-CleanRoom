@@ -94,6 +94,13 @@ async def get_scan_detail(
                         "external_id": v.external_id,
                         "tool_source": v.tool_source,
                         "remediation_status": v.remediation_status,
+                        "cvss_score": v.cvss_score,
+                        "cvss_vector": v.cvss_vector,
+                        "cvss_version": v.cvss_version,
+                        "nvd_severity": v.nvd_severity,
+                        "epss_score": v.epss_score,
+                        "epss_percentile": v.epss_percentile,
+                        "enrichment_status": v.enrichment_status,
                     }
                     for v in h.vulnerabilities
                 ],
@@ -177,6 +184,13 @@ async def get_host_detail(
                 "tool_source": v.tool_source,
                 "remediation_status": v.remediation_status,
                 "remediation_notes": v.remediation_notes,
+                "cvss_score": v.cvss_score,
+                "cvss_vector": v.cvss_vector,
+                "cvss_version": v.cvss_version,
+                "nvd_severity": v.nvd_severity,
+                "epss_score": v.epss_score,
+                "epss_percentile": v.epss_percentile,
+                "enrichment_status": v.enrichment_status,
             }
             for v in host.vulnerabilities
         ],
@@ -208,6 +222,13 @@ async def list_vulns(
             "external_id": v.external_id,
             "tool_source": v.tool_source,
             "remediation_status": v.remediation_status,
+            "cvss_score": v.cvss_score,
+            "cvss_version": v.cvss_version,
+            "nvd_severity": v.nvd_severity,
+            "epss_score": v.epss_score,
+            "epss_percentile": v.epss_percentile,
+            "enrichment_status": v.enrichment_status,
+            "enriched_at": v.enriched_at.isoformat() if v.enriched_at else None,
         }
         for v in vulns
     ]}
@@ -278,6 +299,16 @@ async def list_ioc_findings(
         }
         for f in findings
     ]}
+
+
+@router.get("/enrichment-summary")
+async def get_enrichment_summary(
+    scan_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get enrichment status breakdown for vulnerabilities."""
+    return await repo.get_enrichment_summary(session, scan_id=scan_id)
 
 
 @router.get("/compare/{scan_a}/{scan_b}")
