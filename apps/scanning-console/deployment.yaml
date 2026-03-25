@@ -100,6 +100,20 @@ spec:
               key: admin-password-hash
         - name: HOME
           value: /tmp
+        - name: ENRICHMENT_ENABLED
+          value: "true"
+        - name: NVD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: nvd-api-key
+              optional: true
+        - name: OTX_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: otx-api-key
+              optional: true
         ports:
         - containerPort: 8000
           name: http

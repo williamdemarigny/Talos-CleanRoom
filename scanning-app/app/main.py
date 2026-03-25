@@ -16,7 +16,7 @@ from talos_common.routers.exchange import router as exchange_router
 
 from app.config import get_settings
 from app.db.engine import init_db, close_db
-from app.routers import scan, ioc_scan, reports, export
+from app.routers import scan, ioc_scan, reports, export, enrichment
 from app.middleware.security import SecurityHeadersMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 
@@ -77,6 +77,7 @@ app.include_router(scan.router, prefix="/api/scan", tags=["Scan"])
 app.include_router(ioc_scan.router, prefix="/api/ioc-scan", tags=["IOC Scan"])
 app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
 app.include_router(export.router, prefix="/api/export", tags=["Export"])
+app.include_router(enrichment.router, prefix="/api/enrichment", tags=["Enrichment"])
 
 
 # --- Page routes ---
