@@ -136,6 +136,10 @@ async def persist_vulnerability(
     **extra,
 ) -> int:
     """Create a vulnerability row and return its ID."""
+    # Set enrichment_status='pending' for CVE-bearing vulns so the
+    # enrichment service picks them up after scan completion.
+    if external_id and external_id.startswith("CVE-"):
+        extra.setdefault("enrichment_status", "pending")
     vuln = await repo.create_vulnerability(
         session,
         scan_id=scan_id,
