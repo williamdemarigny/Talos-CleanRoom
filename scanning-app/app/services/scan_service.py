@@ -54,6 +54,35 @@ OPENVAS_SEVERITY_MAP = {
 MAX_DESCRIPTION_LENGTH = 4000
 MAX_DATA_LENGTH = 8000
 
+# Nmap NSE script → CWE mapping for non-CVE enrichment
+NMAP_SCRIPT_CWE_MAP = {
+    "ssl-heartbleed": ["CWE-119"],
+    "ssl-poodle": ["CWE-310"],
+    "ssl-ccs-injection": ["CWE-310"],
+    "ssl-dh-params": ["CWE-310"],
+    "ssl-known-key": ["CWE-321"],
+    "sslv2-drown": ["CWE-310"],
+    "ssl-enum-ciphers": ["CWE-327"],
+    "ssh-auth-methods": ["CWE-287"],
+    "http-cross-domain-policy": ["CWE-942"],
+    "http-csrf": ["CWE-352"],
+    "http-dombased-xss": ["CWE-79"],
+    "http-stored-xss": ["CWE-79"],
+    "http-phpself-xss": ["CWE-79"],
+    "http-sql-injection": ["CWE-89"],
+    "http-shellshock": ["CWE-78"],
+    "http-slowloris-check": ["CWE-400"],
+    "http-vuln-cve2017-5638": ["CWE-20"],
+    "smb-vuln-ms17-010": ["CWE-20"],
+    "smb-vuln-ms08-067": ["CWE-94"],
+    "ftp-anon": ["CWE-284"],
+    "http-methods": ["CWE-749"],
+    "http-open-proxy": ["CWE-441"],
+    "dns-zone-transfer": ["CWE-200"],
+    "snmp-info": ["CWE-200"],
+    "telnet-encryption": ["CWE-319"],
+}
+
 # Scan timeout defaults (seconds)
 NMAP_TIMEOUT_QUICK = 300       # 5 min for ping sweep
 NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
@@ -3405,6 +3434,20 @@ except Exception as e:
                         # Extract CVE references from output
                         refs = re.findall(r"CVE-\d{4}-\d{4,}", script_output, re.IGNORECASE)
 
+                        # Set external_id from first CVE if available
+                        external_id = refs[0] if refs else None
+
+                        # Non-CVE enrichment: CWE mapping + enrichment status
+                        extra_fields = {}
+                        cwe_ids = NMAP_SCRIPT_CWE_MAP.get(sid_lower)
+                        if cwe_ids:
+                            extra_fields["weakness_ids"] = cwe_ids
+                        if external_id:
+                            extra_fields["enrichment_status"] = "pending"
+                        elif cwe_ids:
+                            extra_fields["enrichment_status"] = "enriched"
+                            extra_fields["enrichment_source"] = "nmap_cwe_map"
+
                         await result_store.persist_vulnerability(
                             session, scan_id=scan_id, host_id=host_id,
                             service_id=service_id,
@@ -3412,8 +3455,10 @@ except Exception as e:
                             severity=severity,
                             description=script_output[:MAX_DESCRIPTION_LENGTH] if script_output else None,
                             refs=refs or None,
+                            external_id=external_id,
                             data=script_output[:MAX_DATA_LENGTH] if script_output else None,
                             tool_source="nmap",
+                            **extra_fields,
                         )
                         vulns_created += 1
 
@@ -3533,6 +3578,53 @@ except Exception as e:
                     if oid:
                         external_id = oid
 
+                # Extract CVSS data directly from OpenVAS NVT tags
+                # (available for ALL OpenVAS findings, not just CVE-bearing ones)
+                extra_fields = {}
+                cvss_base = td.get("cvss_base")
+                cvss_vector = td.get("cvss_base_vector")
+                if cvss_base:
+                    try:
+                        score = float(cvss_base)
+                        extra_fields["cvss_score"] = score
+                        extra_fields["cvss_version"] = "2.0" if cvss_vector and cvss_vector.startswith("AV:") else "3.1"
+                        extra_fields["nvd_severity"] = (
+                            "critical" if score >= 9.0 else
+                            "high" if score >= 7.0 else
+                            "medium" if score >= 4.0 else
+                            "low" if score >= 0.1 else "none"
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                if cvss_vector:
+                    extra_fields["cvss_vector"] = cvss_vector
+
+                # Store parsed tags as structured metadata
+                tag_data = {}
+                for key in ("summary", "impact", "affected", "insight"):
+                    val = td.get(key)
+                    if val:
+                        tag_data[key] = val
+                if tag_data:
+                    extra_fields["tags"] = tag_data
+
+                # Extract CWE from tags if present
+                weakness = td.get("vuldetect")
+                cwe_ids = []
+                for tag_val in td.values():
+                    for cwe_match in re.findall(r"CWE-\d+", str(tag_val)):
+                        if cwe_match not in cwe_ids:
+                            cwe_ids.append(cwe_match)
+                if cwe_ids:
+                    extra_fields["weakness_ids"] = cwe_ids
+
+                # Mark enrichment status based on available data
+                if cves:
+                    extra_fields["enrichment_status"] = "pending"  # Will be enriched by NVD/EPSS
+                elif cvss_base:
+                    extra_fields["enrichment_status"] = "enriched"
+                    extra_fields["enrichment_source"] = "openvas_tags"
+
                 await result_store.persist_vulnerability(
                     session, scan_id=scan_id, host_id=host_id,
                     service_id=service_id,
@@ -3543,6 +3635,7 @@ except Exception as e:
                     resolution=solution or None,
                     external_id=external_id,
                     tool_source="openvas",
+                    **extra_fields,
                 )
                 vulns_created += 1
 

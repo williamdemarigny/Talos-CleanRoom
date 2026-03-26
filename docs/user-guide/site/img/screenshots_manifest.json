@@ -1,0 +1,11 @@
+{
+  "captured_at": "2026-03-26T10:05:02.267813",
+  "portal_url": "https://cleanroom.knowledgeondemand.net",
+  "deployment_url": "http://10.83.3.190:8000",
+  "scanning_url": "https://scan.knowledgeondemand.net",
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  },
+  "device_scale": 2
+}

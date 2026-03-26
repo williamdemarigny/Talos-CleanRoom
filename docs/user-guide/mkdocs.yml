@@ -1,0 +1,94 @@
+site_name: Talos CleanRoom User Guide
+site_description: How-to documentation for the Talos CleanRoom security platform
+site_url: ""
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: custom
+    accent: cyan
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.highlight
+    - search.suggest
+    - content.tooltips
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - glightbox:
+      touchNavigation: true
+      loop: false
+      effect: zoom
+      slide_effect: slide
+      width: 100%
+      height: auto
+      zoomable: true
+      draggable: true
+  - mkdocs-video:
+      is_video: true
+      video_muted: true
+      video_controls: true
+      video_autoplay: false
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Prerequisites: getting-started/prerequisites.md
+    - Logging In: getting-started/login.md
+    - Navigating the Platform: getting-started/navigation.md
+    - Viewing Credentials: getting-started/credentials.md
+    - Security Basics: getting-started/security.md
+  - Deployment Console:
+    - Dashboard: deployment/dashboard.md
+    - Configuration: deployment/configuration.md
+    - Running a Deployment: deployment/running-deployment.md
+    - Recovery & Troubleshooting: deployment/recovery.md
+    - After Deployment: deployment/post-deployment.md
+    - Viewing Logs: deployment/logs.md
+  - Scanning:
+    - Vulnerability Scanning: scanning/vulnerability-scan.md
+    - Enrichment: scanning/enrichment.md
+    - IOC Scanning: scanning/ioc-scan.md
+    - Remediation Tracking: scanning/remediation.md
+    - Exporting Results: scanning/export.md
+  - Reports:
+    - Reports Dashboard: reports/dashboard.md
+    - Scan Details: reports/scan-detail.md
+    - Hosts: reports/hosts.md
+    - Vulnerabilities: reports/vulnerabilities.md
+    - Comparing Scans: reports/compare.md
+    - Audit Log: reports/audit.md
+  - Reference:
+    - Scan Profiles: reference/scan-profiles.md
+    - Deployment Steps: reference/deployment-steps.md
+    - Understanding Results: reference/understanding-results.md
+    - Glossary: reference/glossary.md
+    - FAQ: reference/faq.md
+    - Troubleshooting: reference/troubleshooting.md

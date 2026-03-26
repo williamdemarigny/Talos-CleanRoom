@@ -1,0 +1,64 @@
+/* Match Talos CleanRoom app aesthetic */
+:root {
+  --md-primary-fg-color: #1e293b;
+  --md-primary-bg-color: #e2e8f0;
+  --md-accent-fg-color: #22d3ee;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #111827;
+  --md-default-fg-color: #f3f4f6;
+  --md-typeset-a-color: #22d3ee;
+  --md-accent-fg-color: #22d3ee;
+}
+
+/* Links — cyan to match app accent, visible on dark backgrounds */
+[data-md-color-scheme="slate"] .md-typeset a {
+  color: #22d3ee;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: #67e8f9;
+}
+
+/* Nav links — keep readable */
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: #d1d5db;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav__link:hover {
+  color: #22d3ee;
+}
+
+/* Table of contents links */
+[data-md-color-scheme="slate"] .md-sidebar__link {
+  color: #9ca3af;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar__link--active {
+  color: #22d3ee;
+}
+
+/* Screenshot styling — border for contrast on dark backgrounds */
+.md-content img {
+  border: 1px solid #374151;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+/* Admonition accent colors matching app theme */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: #f59e0b;
+}
+
+.md-typeset .admonition.danger,
+.md-typeset details.danger {
+  border-color: #ef4444;
+}
+
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #22d3ee;
+}
