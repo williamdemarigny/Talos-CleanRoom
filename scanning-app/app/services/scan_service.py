@@ -78,11 +78,14 @@ NMAP_PROFILES = {
     ScanProfile.THOROUGH: ["-sV", "-sC", "-p-", "-A"],
 }
 
-# OpenVAS scan config UUIDs (standard across all Greenbone installations)
+# OpenVAS scan config UUIDs
+# These are standard Greenbone Community Edition config IDs.
+# "Full and Deep" (698f691e) is not available in all GVM versions —
+# Thorough falls back to "Full and fast" which runs all NVTs.
 OPENVAS_SCAN_CONFIGS = {
-    ScanProfile.QUICK: "d21f6c81-2b88-4ac1-b7b4-a2a9f2ad4663",     # Host Discovery
+    ScanProfile.QUICK: "2d3f051c-55ba-11e3-bf43-406186ea4fc5",     # Host Discovery
     ScanProfile.STANDARD: "daba56c8-73ec-11df-a475-002264764cea",   # Full and Fast
-    ScanProfile.THOROUGH: "698f691e-7489-11df-9d8c-002264764cea",   # Full and Deep
+    ScanProfile.THOROUGH: "daba56c8-73ec-11df-a475-002264764cea",   # Full and Fast (Full and Deep unavailable)
 }
 
 # Greenbone XML report format UUID
