@@ -75,6 +75,7 @@ class DeploymentService(BaseServiceMixin):
     step_callback: Optional[Callable[[DeploymentStep], Awaitable[None]]] = None
     logs: List[LogEntry] = field(default_factory=list)
     credentials: dict[str, dict[str, str]] = field(default_factory=dict)
+    _cleanup_running: bool = field(default=False)
 
     def __post_init__(self):
         self._k8s_helper = KubernetesHelper(self.process_manager)
@@ -507,9 +508,10 @@ class DeploymentService(BaseServiceMixin):
         return self.current_deployment
 
     def is_running(self) -> bool:
-        """Check if deployment is currently running."""
-        return (self.current_deployment is not None and
-                self.current_deployment.status == DeploymentStatus.RUNNING)
+        """Check if deployment or cleanup is currently running."""
+        return (self._cleanup_running or
+                (self.current_deployment is not None and
+                 self.current_deployment.status == DeploymentStatus.RUNNING))
 
     async def start_deployment(
         self,
@@ -689,6 +691,14 @@ class DeploymentService(BaseServiceMixin):
         provisioned by the CSI driver but can no longer be cleaned up by K8s
         finalizers after the cluster VMs are destroyed.
         """
+        self._cleanup_running = True
+        try:
+            return await self._run_cleanup()
+        finally:
+            self._cleanup_running = False
+
+    async def _run_cleanup(self) -> bool:
+        """Internal cleanup implementation."""
         await self.log(-1, "info", "Starting cleanup process...")
         self.credentials = {}
         self.current_deployment = None

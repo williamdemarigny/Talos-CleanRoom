@@ -342,12 +342,27 @@ function deploymentMonitor() {
             if (!confirm('Are you sure you want to run cleanup? This will destroy all Terraform-managed resources.')) return;
 
             try {
+                this.status = 'running';
+                this.isRunning = true;
+                this.startPolling();
+
                 const response = await fetch('/api/deployment/cleanup', { method: 'POST' });
-                const data = await response.json();
+
+                let data;
+                try {
+                    data = await response.json();
+                } catch {
+                    // Response wasn't JSON (e.g. timeout/proxy error)
+                    alert('Cleanup request failed — the operation may still be running on the server. Check logs.');
+                    return;
+                }
+
                 if (response.ok) {
                     alert(data.message);
                     // Reset status after cleanup
                     this.status = 'idle';
+                    this.isRunning = false;
+                    this.stopPolling();
                     this.steps.forEach(s => {
                         s.status = 'pending';
                         s.started_at = null;
@@ -355,10 +370,16 @@ function deploymentMonitor() {
                         s.error_message = null;
                     });
                 } else {
-                    alert('Cleanup failed: ' + data.detail);
+                    alert('Cleanup failed: ' + (data.detail || 'Unknown error'));
+                    this.status = 'failed';
+                    this.isRunning = false;
+                    this.stopPolling();
                 }
             } catch (e) {
                 alert('Failed to run cleanup: ' + e.message);
+                this.status = 'failed';
+                this.isRunning = false;
+                this.stopPolling();
             }
         },
 
