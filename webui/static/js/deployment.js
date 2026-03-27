@@ -246,6 +246,7 @@ function deploymentMonitor() {
                     this.status = 'running';
                     this.isRunning = true;
                     this.logs = [];
+                    this._wsBase.resetLogOffset();
                     this.startTime = new Date();
                     this.startElapsedTimer();
                     this.startPolling();
@@ -436,6 +437,7 @@ function deploymentMonitor() {
 
         clearLogs() {
             this.logs = [];
+            this._wsBase.resetLogOffset();
         }
     };
 }

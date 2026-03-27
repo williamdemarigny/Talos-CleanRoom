@@ -28,7 +28,8 @@ class ProcessManager:
         cwd: Optional[Path] = None,
         env: Optional[Dict[str, str]] = None,
         on_output: Optional[Callable[[str], Awaitable[None]]] = None,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        stdin_data: Optional[str] = None
     ) -> ProcessResult:
         """
         Run a command asynchronously with output streaming.
@@ -39,6 +40,7 @@ class ProcessManager:
             env: Additional environment variables
             on_output: Async callback for each output line
             timeout: Command timeout in seconds
+            stdin_data: Data to write to stdin (if None, sends auto-confirm 'y' responses)
 
         Returns:
             ProcessResult with success status and output
@@ -62,10 +64,13 @@ class ProcessManager:
                 stdin=asyncio.subprocess.PIPE
             )
 
-            # Send 'y' responses for auto-confirm
+            # Write to stdin: either explicit data or auto-confirm 'y' responses
             if self.current_process.stdin:
                 try:
-                    self.current_process.stdin.write(b"y\n" * 10)
+                    if stdin_data is not None:
+                        self.current_process.stdin.write(stdin_data.encode('utf-8'))
+                    else:
+                        self.current_process.stdin.write(b"y\n" * 10)
                     await self.current_process.stdin.drain()
                     self.current_process.stdin.close()
                 except (BrokenPipeError, ConnectionResetError):

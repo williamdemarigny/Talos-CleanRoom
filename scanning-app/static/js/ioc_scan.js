@@ -299,6 +299,7 @@ function iocScanManager() {
                     this.status = 'mounting';
                     this.scanTarget = this.target;
                     this.logs = [];
+                    this._wsBase.resetLogOffset();
                     this.findings = [];
                     this.alertsCount = 0;
                     this.warningsCount = 0;
@@ -342,6 +343,7 @@ function iocScanManager() {
             this.noticesCount = 0;
             this.uploadedToFaraday = false;
             this.logs = [];
+            this._wsBase.resetLogOffset();
             this.expandedFinding = null;
             this.stopTimer();
             this.stopPolling();
