@@ -10,6 +10,7 @@ import talos_common
 from app.config import get_settings, Settings
 from app.routers import auth, deployment, config, websocket
 from talos_common.routers.exchange import router as exchange_router
+from talos_common.routers.oidc import router as oidc_router
 from app.auth import get_current_user_optional
 
 # Initialize talos_common with our settings getter so shared modules
@@ -36,6 +37,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(exchange_router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(oidc_router, tags=["OIDC"])
 app.include_router(deployment.router, prefix="/api/deployment", tags=["Deployment"])
 app.include_router(config.router, prefix="/api/config", tags=["Configuration"])
 app.include_router(websocket.router, tags=["WebSocket"])

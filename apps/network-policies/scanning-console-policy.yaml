@@ -6,6 +6,7 @@
 # - Egress to cleanroom-db (PostgreSQL on port 5432)
 # - Egress to tool namespaces (openvas, faraday, metasploit, loki-scanner, nmap-scanner)
 # - Egress to K8s API server (port 6443 for kubectl operations)
+# - Egress to Keycloak (OIDC token exchange, JWKS validation)
 # - Egress to external HTTPS APIs (NVD, EPSS, OTX) for vulnerability enrichment
 # =============================================================================
 ---
@@ -84,6 +85,21 @@ spec:
       ports:
         - protocol: TCP
           port: 6443
+    # Allow connection to Proxmox API (Target Lab — target VM management)
+    - to:
+        - ipBlock:
+            cidr: 10.83.2.0/24
+      ports:
+        - protocol: TCP
+          port: 8006
+    # Allow connection to Keycloak (OIDC token exchange, JWKS validation)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
     # Allow HTTPS egress to external APIs (NVD, EPSS, OTX) for vulnerability enrichment
     # Excludes private networks, cloud metadata, and CGNAT to prevent SSRF
     - to:

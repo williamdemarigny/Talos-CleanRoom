@@ -45,7 +45,7 @@ spec:
               name: portal-credentials
               key: secret-key
         - name: DEPLOYMENT_CONSOLE_URL
-          value: "https://10.83.3.190:8000"
+          value: "https://deploy.knowledgeondemand.net"
         - name: SCANNING_CONSOLE_URL
           value: "https://scan.knowledgeondemand.net"
         ports:

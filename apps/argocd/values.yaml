@@ -137,6 +137,14 @@ configs:
     timeout.reconciliation: 180s
     # Resource tracking method
     application.resourceTrackingMethod: annotation
+    # OIDC configuration for Keycloak SSO
+    url: https://argocd.knowledgeondemand.net
+    oidc.config: |
+      name: Keycloak
+      issuer: https://keycloak.knowledgeondemand.net/realms/cleanroom
+      clientID: argocd
+      clientSecret: $oidc.keycloak.clientSecret
+      requestedScopes: ["openid", "profile", "email", "groups"]
 
   # ArgoCD parameters
   params:
@@ -156,6 +164,7 @@ configs:
       p, role:admin, repositories, *, *, allow
       p, role:admin, projects, *, *, allow
       g, admin, role:admin
+      g, /admin, role:admin
 
   # ===========================================================================
   # Secret configuration

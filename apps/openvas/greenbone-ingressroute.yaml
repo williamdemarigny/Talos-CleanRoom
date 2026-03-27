@@ -18,6 +18,8 @@ spec:
         - name: greenbone
           port: 80
       middlewares:
+        - name: keycloak-forward-auth
+          namespace: traefik
         - name: secure-headers
           namespace: traefik
   tls: {}

@@ -9,6 +9,7 @@ from pathlib import Path
 import talos_common
 from talos_common.auth import get_current_user_optional
 from talos_common.routers.auth import router as auth_router
+from talos_common.routers.oidc import router as oidc_router
 
 from app.config import get_settings
 from app.routers import portal, credentials
@@ -35,6 +36,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(oidc_router, tags=["OIDC"])
 app.include_router(portal.router, prefix="/api/portal", tags=["Portal"])
 app.include_router(credentials.router, prefix="/api/credentials", tags=["Credentials"])
 
@@ -68,9 +70,11 @@ async def credentials_page(request: Request, user: dict = Depends(get_current_us
 
 @app.get("/login")
 async def login_page(request: Request):
+    settings = get_settings()
     return templates.TemplateResponse("login.html", {
         "request": request,
         "app_subtitle": "Portal",
+        "oidc_enabled": bool(settings.oidc_issuer_url),
     })
 
 

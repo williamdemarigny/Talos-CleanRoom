@@ -1,0 +1,180 @@
+{
+  "realm": "cleanroom",
+  "enabled": true,
+  "displayName": "Talos CleanRoom",
+  "displayNameHtml": "<b>Talos CleanRoom</b>",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+
+  "accessTokenLifespan": 28800,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+
+  "passwordPolicy": "length(8) and notUsername",
+
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Full administrative access to all platform services",
+        "composite": false
+      },
+      {
+        "name": "operator",
+        "description": "Can run scans, view reports, manage targets",
+        "composite": false
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only access to reports and dashboards",
+        "composite": false
+      }
+    ]
+  },
+
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Platform",
+      "lastName": "Admin",
+      "realmRoles": ["admin"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": true
+        }
+      ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "portal",
+      "name": "CleanRoom Portal",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://cleanroom.knowledgeondemand.net/auth/callback"
+      ],
+      "webOrigins": [
+        "https://cleanroom.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    },
+    {
+      "clientId": "scanning-console",
+      "name": "Scanning Console",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://scan.knowledgeondemand.net/auth/callback"
+      ],
+      "webOrigins": [
+        "https://scan.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    },
+    {
+      "clientId": "deployment-console",
+      "name": "Deployment Console",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://deploy.knowledgeondemand.net/auth/callback"
+      ],
+      "webOrigins": [
+        "https://deploy.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    },
+    {
+      "clientId": "argocd",
+      "name": "ArgoCD",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://argocd.knowledgeondemand.net/auth/callback"
+      ],
+      "webOrigins": [
+        "https://argocd.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    },
+    {
+      "clientId": "harbor",
+      "name": "Harbor Registry",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://harbor.knowledgeondemand.net/c/oidc/callback"
+      ],
+      "webOrigins": [
+        "https://harbor.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    },
+    {
+      "clientId": "traefik-forward-auth",
+      "name": "Traefik ForwardAuth (OAuth2-Proxy)",
+      "description": "Confidential client for OAuth2-Proxy covering Faraday, OpenVAS, Threat Dragon",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://faraday.knowledgeondemand.net/oauth2/callback",
+        "https://openvas.knowledgeondemand.net/oauth2/callback",
+        "https://threatdragon.knowledgeondemand.net/oauth2/callback"
+      ],
+      "webOrigins": [
+        "https://faraday.knowledgeondemand.net",
+        "https://openvas.knowledgeondemand.net",
+        "https://threatdragon.knowledgeondemand.net"
+      ],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["roles"]
+    }
+  ]
+}

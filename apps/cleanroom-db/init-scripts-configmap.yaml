@@ -1,0 +1,45 @@
+# ConfigMap containing SQL scripts run on first PostgreSQL initialization.
+# Scripts in /docker-entrypoint-initdb.d/ are executed alphabetically
+# ONLY on first startup (when PGDATA is empty).
+# For existing clusters, run the SQL manually:
+#   kubectl exec -n cleanroom-db cleanroom-db-0 -- psql -U cleanroom -c "$(cat 02-create-keycloak-db.sh)"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cleanroom-db-init-scripts
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: database
+data:
+  # Script runs as the POSTGRES_USER (cleanroom), which is a superuser
+  # created by the postgres Docker entrypoint. We create a restricted
+  # keycloak user that can ONLY access the keycloak database.
+  02-create-keycloak-db.sh: |
+    #!/bin/bash
+    set -e
+    echo "Creating Keycloak database and restricted user..."
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      -- Create non-superuser keycloak role
+      CREATE ROLE keycloak WITH LOGIN PASSWORD '${KEYCLOAK_DB_PASSWORD}';
+
+      -- Create keycloak database owned by keycloak user
+      CREATE DATABASE keycloak OWNER keycloak;
+
+      -- Revoke all access to the cleanroom database from keycloak
+      REVOKE ALL ON DATABASE cleanroom FROM keycloak;
+      REVOKE CONNECT ON DATABASE cleanroom FROM keycloak;
+
+      -- Revoke public schema access on cleanroom from keycloak
+      -- (prevents keycloak user from reading scan data)
+      \connect cleanroom
+      REVOKE ALL ON SCHEMA public FROM keycloak;
+
+      -- Grant keycloak full access to its own database
+      \connect keycloak
+      GRANT ALL ON SCHEMA public TO keycloak;
+    EOSQL
+
+    echo "Keycloak database created with restricted user (no cross-DB access)."

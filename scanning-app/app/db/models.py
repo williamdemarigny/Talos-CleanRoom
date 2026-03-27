@@ -218,6 +218,29 @@ class CveCache(Base):
     )
 
 
+class TargetVM(Base):
+    """Tracks Metasploitable3 target VMs deployed via the Target Lab."""
+    __tablename__ = "target_vms"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vmid = Column(Integer, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    template_type = Column(String, nullable=False)  # "ubuntu" | "windows"
+    ip_address = Column(String, nullable=False)
+    proxmox_node = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="deploying")  # deploying/running/stopping/destroyed/error
+    created_at = Column(DateTime, default=func.now())
+    ttl_expires_at = Column(DateTime, nullable=False)
+    created_by = Column(String, nullable=True)
+    destroyed_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_target_vms_status", "status"),
+        Index("ix_target_vms_ttl", "ttl_expires_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

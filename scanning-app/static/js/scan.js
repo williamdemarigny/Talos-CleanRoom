@@ -142,6 +142,13 @@ function scanManager() {
             this._wsBase.bind(this);
 
             this._wsBase.connectWebSocket();
+
+            // Pre-fill target from ?target= query param (e.g. from Target Lab)
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('target')) {
+                this.target = params.get('target');
+            }
+
             await this.fetchStatus();
             await this.fetchHistory();
             // Start polling if a scan is already running
