@@ -1,5 +1,6 @@
 """Deployment API router."""
 
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -256,15 +257,20 @@ async def run_cleanup(
     user: dict = Depends(get_current_user),
     service: DeploymentService = Depends(get_deployment_service)
 ):
-    """Run cleanup (terraform destroy)."""
+    """Run cleanup (terraform destroy).
+
+    Launches cleanup as a background task and returns immediately so the
+    HTTP request does not time out.  The frontend can poll /status and /logs
+    to track progress.
+    """
     if service.is_running():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot run cleanup while deployment is in progress"
         )
 
-    success = await service.cleanup()
+    asyncio.create_task(service.cleanup())
     return DeploymentResponse(
-        success=success,
-        message="Cleanup completed" if success else "Cleanup failed"
+        success=True,
+        message="Cleanup started"
     )
