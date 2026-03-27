@@ -807,8 +807,34 @@ class DeploymentService(BaseServiceMixin):
             else:
                 await self.log(-1, "warn", "Build VM destroy failed (non-fatal)")
 
-        # Step 5: Clean up stale SSH known_hosts entries
-        await self.log(-1, "info", "Step 5: Cleaning up SSH known_hosts...")
+        # Step 5: Destroy target lab VMs (Metasploitable3 targets, VMID 5000-5099)
+        await self.log(-1, "info", "Step 5: Destroying target lab VMs...")
+        try:
+            proxmox_creds = self._read_proxmox_credentials()
+            px_url = proxmox_creds.get("proxmox_api_url", "")
+            px_token = proxmox_creds.get("proxmox_api_token", "")
+            if px_url and px_token:
+                from app.services.proxmox_client import ProxmoxClient
+                px = ProxmoxClient(px_url, px_token)
+                try:
+                    nodes = await px.get_nodes()
+                    for node in nodes:
+                        for vmid in range(5000, 5100):
+                            if await px.vm_exists(node, vmid):
+                                await self.log(-1, "info", f"  Destroying target VM {vmid} on {node}")
+                                try:
+                                    await px.destroy_vm(node, vmid)
+                                except Exception as e:
+                                    await self.log(-1, "warn", f"  Failed to destroy VM {vmid}: {e}")
+                finally:
+                    await px.close()
+            else:
+                await self.log(-1, "info", "  Skipped (no Proxmox credentials)")
+        except Exception as e:
+            await self.log(-1, "warn", f"  Target lab cleanup failed: {e}")
+
+        # Step 6: Clean up stale SSH known_hosts entries
+        await self.log(-1, "info", "Step 6: Cleaning up SSH known_hosts...")
         known_hosts_files = [
             Path.home() / ".ssh" / "known_hosts",
             Path("/root/.ssh/known_hosts"),
@@ -853,9 +879,10 @@ class DeploymentService(BaseServiceMixin):
             (17, self._step_generate_secrets),
             (18, self._step_commit_push_secrets),
             (19, self._step_deploy_build_vm),
-            (20, self._step_build_push_images),
-            (21, self._step_deploy_cleanroom_apps),
-            (22, self._step_apply_network_policies),
+            (20, self._step_prepare_target_templates),
+            (21, self._step_build_push_images),
+            (22, self._step_deploy_cleanroom_apps),
+            (23, self._step_apply_network_policies),
         ]
 
     async def _run_deployment(self, resume_from_step: int = 0):
@@ -2102,11 +2129,22 @@ class DeploymentService(BaseServiceMixin):
         )
         sc_admin_hash = hash_result.output.strip() if hash_result.success else ""
 
-        await self._create_secret(step_id, "scanning-console", "scanning-console-credentials", {
+        # Read Proxmox credentials for Target Lab integration
+        proxmox_creds = self._read_proxmox_credentials()
+        proxmox_api_url = proxmox_creds.get("proxmox_api_url", "")
+        proxmox_api_token = proxmox_creds.get("proxmox_api_token", "")
+
+        sc_secret_data = {
             "secret-key": sc_secret_key,
             "database-url": db_url,
             "admin-password-hash": sc_admin_hash,
-        })
+        }
+        if proxmox_api_url:
+            sc_secret_data["proxmox-api-url"] = proxmox_api_url
+        if proxmox_api_token:
+            sc_secret_data["proxmox-api-token"] = proxmox_api_token
+        await self._create_secret(step_id, "scanning-console", "scanning-console-credentials",
+                                  sc_secret_data)
         self.credentials["scanning_console"] = {"username": "admin", "password": sc_admin_password}
 
         # Portal (shares SECRET_KEY with Scanning Console for SSO)
@@ -2158,13 +2196,18 @@ class DeploymentService(BaseServiceMixin):
         ))
 
         # Scanning Console
-        await write_sops_file("apps/scanning-console/secrets.sops.yaml", (
+        sc_sops_content = (
             "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: scanning-console-credentials\n"
             "  namespace: scanning-console\ntype: Opaque\nstringData:\n"
             f'  secret-key: "{sc_secret_key}"\n'
             f'  database-url: "{db_url}"\n'
             f'  admin-password-hash: "{sc_admin_hash}"\n'
-        ))
+        )
+        if proxmox_api_url:
+            sc_sops_content += f'  proxmox-api-url: "{proxmox_api_url}"\n'
+        if proxmox_api_token:
+            sc_sops_content += f'  proxmox-api-token: "{proxmox_api_token}"\n'
+        await write_sops_file("apps/scanning-console/secrets.sops.yaml", sc_sops_content)
 
         # Portal
         await write_sops_file("apps/portal/secrets.sops.yaml", (
@@ -2599,6 +2642,86 @@ echo "=== Setup Complete ==="
                 await self.log(step_id, "warn", f"Kubeconfig copy failed: {push_result.output[:200]}")
 
         await self.log(step_id, "info", "Build VM deployment complete")
+        return True
+
+    async def _step_prepare_target_templates(self, step_id: int) -> bool:
+        """Step 20: Prepare Metasploitable3 VM templates on Proxmox.
+
+        SSHs to a Proxmox node and runs the template preparation script
+        which downloads Vagrant boxes, converts VMDK to QCOW2, and creates
+        VM templates (VMIDs 4000, 4001). Idempotent — skips if templates exist.
+        """
+        await self.log(step_id, "info", "Preparing Metasploitable3 target VM templates...")
+
+        proxmox_creds = self._read_proxmox_credentials()
+        proxmox_ssh_password = proxmox_creds.get("proxmox_ssh_password", "")
+        if not proxmox_ssh_password:
+            await self.log(step_id, "warn", "Proxmox SSH password not available — skipping template preparation")
+            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on a Proxmox node")
+            return True  # Non-fatal, templates can be created later
+
+        # SSH to first Proxmox node
+        settings = get_settings()
+        proxmox_ip = settings.node_ips[0] if settings.node_ips else ""
+        if not proxmox_ip:
+            await self.log(step_id, "warn", "No Proxmox node IPs configured — skipping")
+            return True
+
+        # Use the management IP (VLAN 2) — derive from node IP pattern
+        # Node IPs are on VLAN 3 (10.83.3.x), Proxmox mgmt is VLAN 2 (10.83.2.x)
+        parts = proxmox_ip.split(".")
+        if len(parts) == 4:
+            mgmt_ip = f"{parts[0]}.{parts[1]}.2.{parts[3]}"
+        else:
+            mgmt_ip = proxmox_ip
+
+        ssh_prefix = [
+            "sshpass", "-p", proxmox_ssh_password,
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"root@{mgmt_ip}",
+        ]
+
+        # Check if templates already exist (idempotent)
+        check_result = await self.process_manager.run_command_simple(
+            ssh_prefix + ["qm status 4000 2>/dev/null && qm status 4001 2>/dev/null"],
+            timeout=30,
+        )
+        if check_result.success:
+            await self.log(step_id, "info", "Templates already exist (VMIDs 4000, 4001) — skipping download")
+            return True
+
+        # Copy and execute the preparation script
+        script_path = str(self.repo_root / "scripts" / "prepare-metasploitable3-templates.sh")
+
+        scp_cmd = [
+            "sshpass", "-p", proxmox_ssh_password,
+            "scp", "-o", "StrictHostKeyChecking=no",
+            script_path, f"root@{mgmt_ip}:/tmp/prepare-ms3.sh",
+        ]
+        scp_result = await self.process_manager.run_command(
+            scp_cmd,
+            on_output=self._sanitized_output_callback(step_id),
+            timeout=30,
+        )
+        if not scp_result.success:
+            await self.log(step_id, "warn", "Failed to copy template script to Proxmox node")
+            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually")
+            return True  # Non-fatal
+
+        # Execute the script (allow 20 minutes for ~6.5 GB download + conversion)
+        await self.log(step_id, "info", "Downloading and converting Metasploitable3 images (this takes 10-15 minutes)...")
+        exec_result = await self.process_manager.run_command(
+            ssh_prefix + ["bash /tmp/prepare-ms3.sh && rm -f /tmp/prepare-ms3.sh"],
+            on_output=self._sanitized_output_callback(step_id),
+            timeout=1200,  # 20 minutes
+        )
+
+        if not exec_result.success:
+            await self.log(step_id, "warn", f"Template preparation had issues: {exec_result.output[-300:]}")
+            await self.log(step_id, "info", "Target Lab may still work if templates were partially created")
+            return True  # Non-fatal — deployment can continue
+
+        await self.log(step_id, "info", "Metasploitable3 templates ready (VMIDs 4000, 4001)")
         return True
 
     async def _step_build_push_images(self, step_id: int) -> bool:

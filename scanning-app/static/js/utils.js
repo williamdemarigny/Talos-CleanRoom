@@ -57,6 +57,66 @@ function getStatusBannerClass(status) {
 }
 
 /**
+ * Generate an external URL for a vulnerability identifier.
+ * Opens in a new browser tab when used with target="_blank".
+ *
+ * Supported identifier types:
+ *   CVE-YYYY-NNNNN  → NVD (https://nvd.nist.gov/vuln/detail/CVE-...)
+ *   OID (1.3.6.1.4.1.25623.1.0.XXXXX)  → Vulners OpenVAS DB
+ *   CWE-NNN         → MITRE CWE
+ *   Any URL          → direct link
+ *
+ * @param {string} identifier - The vulnerability identifier
+ * @returns {string|null} URL to the authoritative source, or null
+ */
+function getIdentifierUrl(identifier) {
+    if (!identifier) return null;
+    identifier = identifier.trim();
+
+    // CVE → NVD
+    if (/^CVE-\d{4}-\d{4,}$/i.test(identifier)) {
+        return 'https://nvd.nist.gov/vuln/detail/' + identifier.toUpperCase();
+    }
+    // OpenVAS OID → Vulners
+    if (/^1\.3\.6\.1\.4\.1\.25623\./.test(identifier)) {
+        return 'https://vulners.com/openvas/' + identifier;
+    }
+    // CWE → MITRE
+    if (/^CWE-\d+$/i.test(identifier)) {
+        return 'https://cwe.mitre.org/data/definitions/' + identifier.replace(/^CWE-/i, '') + '.html';
+    }
+    // Already a URL
+    if (/^https?:\/\//i.test(identifier)) {
+        return identifier;
+    }
+    return null;
+}
+
+/**
+ * Get a human-readable label for an identifier type.
+ * @param {string} identifier
+ * @returns {string} e.g. "CVE", "OID", "CWE", "REF"
+ */
+function getIdentifierType(identifier) {
+    if (!identifier) return '';
+    if (/^CVE-/i.test(identifier)) return 'CVE';
+    if (/^1\.3\.6\.1\.4\.1\.25623\./.test(identifier)) return 'OID';
+    if (/^CWE-/i.test(identifier)) return 'CWE';
+    if (/^https?:\/\//i.test(identifier)) return 'URL';
+    return 'REF';
+}
+
+/**
+ * Get the CISA Known Exploited Vulnerabilities URL for a CVE.
+ * @param {string} cveId - CVE identifier
+ * @returns {string} CISA KEV search URL
+ */
+function getCisaUrl(cveId) {
+    return 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=' +
+        encodeURIComponent(cveId);
+}
+
+/**
  * Wrapper around fetch() with standardized error handling.
  * Returns a normalized result object { ok, data, error }.
  *

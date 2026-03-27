@@ -3,20 +3,27 @@
 Provides pure functions for JWT creation/validation and password hashing,
 plus FastAPI dependency factories for use in routers.
 
+Supports dual-mode JWT validation:
+- HS256 (local): Legacy tokens signed with derived jwt_signing_key
+- RS256 (Keycloak): OIDC tokens validated against Keycloak JWKS endpoint
+
 All functions accept a ``settings`` parameter (BaseAppSettings or subclass)
 rather than importing a specific config module, making them reusable
 across all three apps.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+import jwt as pyjwt
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 import talos_common
+
+logger = logging.getLogger(__name__)
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -24,8 +31,11 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT Bearer scheme
 security = HTTPBearer(auto_error=False)
 
-# JWT settings
-ALGORITHM = "HS256"
+# Local JWT settings
+LOCAL_ALGORITHM = "HS256"
+
+# Cache for JWKS client (avoids re-fetching on every request)
+_jwks_client_cache: dict = {}
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -39,29 +49,105 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(username: str, settings) -> str:
-    """Create a JWT access token.
+    """Create a local HS256 JWT access token.
 
     Uses derived ``jwt_signing_key`` (HMAC-SHA256 of secret_key with
     context "jwt-signing") to limit blast radius if the raw key leaks.
+
+    Includes ``aud: "local"`` claim to distinguish from Keycloak tokens
+    and prevent token confusion during OIDC transition.
     """
     expire = datetime.utcnow() + timedelta(hours=settings.access_token_expire_hours)
     to_encode = {
         "sub": username,
+        "aud": "local",
         "exp": expire,
         "iat": datetime.utcnow(),
     }
-    return jwt.encode(to_encode, settings.jwt_signing_key, algorithm=ALGORITHM)
+    return pyjwt.encode(to_encode, settings.jwt_signing_key, algorithm=LOCAL_ALGORITHM)
+
+
+def _get_jwks_client(issuer_url: str):
+    """Get or create a cached PyJWKClient for the given issuer."""
+    if issuer_url not in _jwks_client_cache:
+        jwks_uri = f"{issuer_url}/protocol/openid-connect/certs"
+        _jwks_client_cache[issuer_url] = pyjwt.PyJWKClient(jwks_uri)
+    return _jwks_client_cache[issuer_url]
 
 
 def decode_token(token: str, settings) -> Optional[dict]:
-    """Decode and validate a JWT token."""
+    """Decode and validate a JWT token in dual-mode.
+
+    - If token uses RS256 and ``oidc_issuer_url`` is configured:
+      Validate against Keycloak JWKS endpoint.
+    - If token uses HS256: Validate against local ``jwt_signing_key``
+      with ``audience="local"`` enforcement.
+
+    Returns dict with at minimum ``username`` and ``exp`` keys, or None.
+    """
     try:
-        payload = jwt.decode(token, settings.jwt_signing_key, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        # Inspect header to determine algorithm without full validation
+        header = pyjwt.get_unverified_header(token)
+        alg = header.get("alg")
+
+        if alg == "RS256" and settings.oidc_issuer_url:
+            # OIDC mode: validate against Keycloak JWKS
+            jwks_client = _get_jwks_client(settings.oidc_issuer_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            payload = pyjwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=settings.oidc_client_id,
+                issuer=settings.oidc_issuer_url,
+            )
+            # Map Keycloak claims to app format
+            username = payload.get("preferred_username") or payload.get("sub")
+            if username is None:
+                return None
+            return {
+                "username": username,
+                "sub": payload.get("sub"),
+                "exp": payload.get("exp"),
+                "roles": payload.get("realm_access", {}).get("roles", []),
+            }
+
+        elif alg == "HS256":
+            # Local JWT validation with audience enforcement
+            payload = pyjwt.decode(
+                token,
+                settings.jwt_signing_key,
+                algorithms=["HS256"],
+                audience="local",
+            )
+            username: str = payload.get("sub")
+            if username is None:
+                return None
+            return {"username": username, "exp": payload.get("exp")}
+
+        else:
+            # Unsupported algorithm
             return None
-        return {"username": username, "exp": payload.get("exp")}
-    except JWTError:
+
+    except pyjwt.InvalidAudienceError:
+        # Token has wrong audience — could be legacy token without aud claim.
+        # Fall back to decode without audience check for backward compatibility
+        # during the transition period. Remove this fallback in Phase 4.
+        try:
+            payload = pyjwt.decode(
+                token,
+                settings.jwt_signing_key,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+            username = payload.get("sub")
+            if username is None:
+                return None
+            return {"username": username, "exp": payload.get("exp")}
+        except Exception:
+            return None
+
+    except Exception:
         return None
 
 
@@ -80,6 +166,7 @@ async def get_current_user(
     """Get current authenticated user from JWT token.
 
     Checks Authorization header first, then falls back to access_token cookie.
+    Supports both local HS256 and Keycloak RS256 tokens.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

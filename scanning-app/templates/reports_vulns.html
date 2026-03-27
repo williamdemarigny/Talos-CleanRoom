@@ -143,7 +143,41 @@
                                     <span class="text-gray-500">-</span>
                                 </template>
                             </td>
-                            <td class="py-3 text-gray-400 font-mono text-xs" x-text="v.external_id || '-'"></td>
+                            <td class="py-3 font-mono text-xs">
+                                <!-- Clickable CVE/OID identifier -->
+                                <template x-if="v.external_id">
+                                    <span class="flex flex-col gap-0.5">
+                                        <a :href="getIdentifierUrl(v.external_id) || '#'"
+                                           x-show="getIdentifierUrl(v.external_id)"
+                                           target="_blank" rel="noopener noreferrer"
+                                           class="text-cyan-400 hover:text-cyan-300 hover:underline"
+                                           :title="getIdentifierType(v.external_id) + ': Click to view details'"
+                                           x-text="v.external_id"></a>
+                                        <span x-show="!getIdentifierUrl(v.external_id)"
+                                              class="text-gray-400" x-text="v.external_id"></span>
+                                        <!-- CISA KEV link for CVEs -->
+                                        <a x-show="/^CVE-/i.test(v.external_id)"
+                                           :href="getCisaUrl(v.external_id)"
+                                           target="_blank" rel="noopener noreferrer"
+                                           class="text-yellow-500 hover:text-yellow-400 text-[10px] hover:underline"
+                                           title="Check CISA Known Exploited Vulnerabilities">CISA KEV</a>
+                                        <!-- CWE links -->
+                                        <template x-if="v.weakness_ids && v.weakness_ids.length > 0">
+                                            <span class="flex gap-1 flex-wrap">
+                                                <template x-for="cwe in v.weakness_ids.slice(0, 3)" :key="cwe">
+                                                    <a :href="getIdentifierUrl(cwe)"
+                                                       target="_blank" rel="noopener noreferrer"
+                                                       class="text-purple-400 hover:text-purple-300 text-[10px] hover:underline"
+                                                       x-text="cwe"></a>
+                                                </template>
+                                            </span>
+                                        </template>
+                                    </span>
+                                </template>
+                                <template x-if="!v.external_id">
+                                    <span class="text-gray-500">-</span>
+                                </template>
+                            </td>
                             <td class="py-3 text-gray-400 capitalize" x-text="v.tool_source || '-'"></td>
                             <td class="py-3">
                                 <span class="px-2 py-1 rounded text-xs"

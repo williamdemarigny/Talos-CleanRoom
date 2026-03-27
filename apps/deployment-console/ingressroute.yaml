@@ -1,0 +1,25 @@
+# Deployment Console IngressRoute
+# Routes deploy.knowledgeondemand.net → LXC at 10.83.3.190:8000
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: deployment-console
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: deployment-console
+    app.kubernetes.io/component: web-ui
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`deploy.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: deployment-console
+          port: 8000
+      middlewares:
+        - name: secure-headers
+          namespace: traefik
+  tls:
+    secretName: knowledgeondemand-wildcard-tls

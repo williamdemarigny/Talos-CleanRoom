@@ -91,7 +91,8 @@ DEPLOYMENT_STEPS = [
     DeploymentStep(id=17, name="generate_secrets", description="Generate & Apply Secrets"),
     DeploymentStep(id=18, name="commit_push_secrets", description="Commit & Push Secrets"),
     DeploymentStep(id=19, name="deploy_build_vm", description="Deploy Build VM"),
-    DeploymentStep(id=20, name="build_push_images", description="Build & Push Container Images"),
-    DeploymentStep(id=21, name="deploy_cleanroom_apps", description="Deploy CleanRoom Applications"),
-    DeploymentStep(id=22, name="apply_network_policies", description="Apply Network Policies"),
+    DeploymentStep(id=20, name="prepare_target_templates", description="Prepare Target VM Templates"),
+    DeploymentStep(id=21, name="build_push_images", description="Build & Push Container Images"),
+    DeploymentStep(id=22, name="deploy_cleanroom_apps", description="Deploy CleanRoom Applications"),
+    DeploymentStep(id=23, name="apply_network_policies", description="Apply Network Policies"),
 ]

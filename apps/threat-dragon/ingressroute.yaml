@@ -18,7 +18,7 @@ spec:
         - name: threat-dragon
           port: 80
       middlewares:
-        - name: basic-auth
+        - name: keycloak-forward-auth
           namespace: traefik
         - name: secure-headers
           namespace: traefik

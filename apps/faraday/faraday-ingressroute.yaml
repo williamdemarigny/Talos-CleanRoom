@@ -18,6 +18,8 @@ spec:
         - name: faraday
           port: 5985
       middlewares:
+        - name: keycloak-forward-auth
+          namespace: traefik
         - name: secure-headers
           namespace: traefik
   tls: {}

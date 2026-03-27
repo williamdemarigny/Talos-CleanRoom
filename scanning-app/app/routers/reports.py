@@ -101,6 +101,9 @@ async def get_scan_detail(
                         "epss_score": v.epss_score,
                         "epss_percentile": v.epss_percentile,
                         "enrichment_status": v.enrichment_status,
+                        "refs": v.refs,
+                        "weakness_ids": v.weakness_ids,
+                        "threat_intel": v.threat_intel,
                     }
                     for v in h.vulnerabilities
                 ],
@@ -191,6 +194,9 @@ async def get_host_detail(
                 "epss_score": v.epss_score,
                 "epss_percentile": v.epss_percentile,
                 "enrichment_status": v.enrichment_status,
+                "refs": v.refs,
+                "weakness_ids": v.weakness_ids,
+                "threat_intel": v.threat_intel,
             }
             for v in host.vulnerabilities
         ],
@@ -238,6 +244,9 @@ async def list_vulns(
             "epss_percentile": v.epss_percentile,
             "enrichment_status": v.enrichment_status,
             "enriched_at": v.enriched_at.isoformat() if v.enriched_at else None,
+            "refs": v.refs,
+            "weakness_ids": v.weakness_ids,
+            "threat_intel": v.threat_intel,
         }
         for v in vulns
     ]}

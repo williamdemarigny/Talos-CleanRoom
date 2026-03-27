@@ -1,0 +1,610 @@
+"""Target Lab service — manages Metasploitable3 target VM lifecycle.
+
+Handles deployment, destruction, IP allocation, and TTL-based cleanup
+of ephemeral target VMs cloned from Proxmox templates.
+"""
+
+import asyncio
+import ipaddress
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from sqlalchemy import select, and_, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.db import engine as db_engine
+from app.db.models import TargetVM
+from app.services.proxmox_client import ProxmoxClient, ProxmoxError
+
+logger = logging.getLogger(__name__)
+
+# Template metadata for UI display
+TEMPLATES = {
+    "ubuntu": {
+        "name": "Metasploitable3 — Ubuntu 14.04",
+        "os": "Ubuntu 14.04 LTS",
+        "description": (
+            "Intentionally vulnerable Linux VM with exploitable services "
+            "including MySQL, Apache, phpMyAdmin, ProFTPD, Samba, UnrealIRCd, "
+            "Drupal, CUPS, SSH (weak config), and more."
+        ),
+        "services": [
+            "MySQL", "Apache (Continuum, Struts)", "PHP 5.4.5", "phpMyAdmin",
+            "ProFTPD", "Docker", "Samba", "Sinatra", "UnrealIRCd", "CUPS",
+            "Drupal", "SSH (weak config)", "knockd",
+        ],
+        "credentials": "vagrant / vagrant",
+        "specs": {"cpu": 2, "memory_mb": 4096, "disk_gb": 40},
+    },
+    "windows": {
+        "name": "Metasploitable3 — Windows Server 2008 R2",
+        "os": "Windows Server 2008 R2",
+        "description": (
+            "Intentionally vulnerable Windows VM with exploitable services "
+            "including IIS, Jenkins, Apache Tomcat, GlassFish, ElasticSearch, "
+            "WordPress, ManageEngine, WebDAV, WinRM, SNMP, and more."
+        ),
+        "services": [
+            "IIS (FTP + HTTP)", "Jenkins", "Apache Tomcat", "GlassFish",
+            "ElasticSearch", "WordPress", "ManageEngine", "Apache Axis2",
+            "WebDAV", "WinRM", "SNMP", "JMX", "MySQL", "psexec/SMB", "RDP",
+        ],
+        "credentials": "vagrant / vagrant",
+        "specs": {"cpu": 2, "memory_mb": 4096, "disk_gb": 60},
+        "max_instances": 1,  # Windows lacks cloud-init — fixed IP
+    },
+}
+
+# Active statuses (not destroyed/error)
+_ACTIVE_STATUSES = ("deploying", "running", "stopping")
+
+# Advisory lock ID for serializing VM allocation (PostgreSQL pg_advisory_lock)
+_ALLOCATION_LOCK_ID = 839271
+
+
+def _get_session_factory():
+    """Get the async session factory, raising if DB not initialized."""
+    factory = db_engine.get_session_factory()
+    if factory is None:
+        raise TargetLabError("Database not initialized.")
+    return factory
+
+
+class TargetLabError(Exception):
+    """Raised for Target Lab operation failures."""
+    pass
+
+
+class TargetLabService:
+    """Manages Metasploitable3 target VM lifecycle via Proxmox API."""
+
+    def __init__(self):
+        settings = get_settings()
+        if settings.proxmox_api_url and settings.proxmox_api_token:
+            self._client = ProxmoxClient(
+                settings.proxmox_api_url, settings.proxmox_api_token
+            )
+        else:
+            self._client = None
+        self._settings = settings
+
+    @property
+    def enabled(self) -> bool:
+        return (
+            self._settings.target_lab_enabled
+            and self._client is not None
+        )
+
+    async def close(self):
+        if self._client:
+            await self._client.close()
+
+    # ── Template info ─────────────────────────────────────────────
+
+    def get_templates(self) -> list[dict]:
+        """Return template metadata for UI display."""
+        settings = self._settings
+        result = []
+        for ttype, meta in TEMPLATES.items():
+            vmid = (
+                settings.metasploitable3_ubuntu_vmid
+                if ttype == "ubuntu"
+                else settings.metasploitable3_windows_vmid
+            )
+            result.append({
+                "type": ttype,
+                "vmid": vmid,
+                **meta,
+            })
+        return result
+
+    # ── Capacity & allocation ─────────────────────────────────────
+
+    async def get_capacity(self) -> dict:
+        """Return current capacity info."""
+        factory = _get_session_factory()
+        async with factory() as session:
+            active = await self._get_active_vms(session)
+        return {
+            "used": len(active),
+            "max": self._settings.target_vm_max_concurrent,
+            "available": max(0, self._settings.target_vm_max_concurrent - len(active)),
+        }
+
+    async def _get_active_vms(self, session: AsyncSession) -> list[TargetVM]:
+        result = await session.execute(
+            select(TargetVM).where(TargetVM.status.in_(_ACTIVE_STATUSES))
+        )
+        return list(result.scalars().all())
+
+    def _allocate_ip(self, active_vms: list[TargetVM], template_type: str) -> str:
+        """Allocate the next free IP address."""
+        settings = self._settings
+        used_ips = {vm.ip_address for vm in active_vms}
+
+        if template_type == "windows":
+            # Windows uses fixed IP at the end of the range
+            ip = str(
+                ipaddress.IPv4Address(settings.target_vm_ip_start)
+                + settings.target_vm_ip_count - 1
+            )
+            if ip in used_ips:
+                raise TargetLabError(
+                    "A Windows target VM is already running. "
+                    "Only one Windows instance is supported at a time."
+                )
+            return ip
+
+        # Ubuntu: pick first free IP from range (excluding last, reserved for Windows)
+        base = ipaddress.IPv4Address(settings.target_vm_ip_start)
+        for i in range(settings.target_vm_ip_count - 1):
+            candidate = str(base + i)
+            if candidate not in used_ips:
+                return candidate
+        raise TargetLabError("No free IP addresses available for target VMs.")
+
+    def _allocate_vmid(self, active_vms: list[TargetVM]) -> int:
+        """Allocate the next free VMID in the target range."""
+        used_vmids = {vm.vmid for vm in active_vms}
+        start = self._settings.target_vm_vmid_start
+        for i in range(100):
+            candidate = start + i
+            if candidate not in used_vmids:
+                return candidate
+        raise TargetLabError("No free VMIDs available for target VMs.")
+
+    def _validate_vmid_in_range(self, vmid: int) -> None:
+        """Validate VMID is within the target VM range (not a template or cluster VM)."""
+        start = self._settings.target_vm_vmid_start
+        end = start + 100
+        if vmid < start or vmid >= end:
+            raise TargetLabError(
+                f"VMID {vmid} is outside target VM range ({start}-{end - 1})."
+            )
+
+    async def _select_node(self) -> str:
+        """Select a Proxmox node to deploy on."""
+        settings = self._settings
+        if settings.target_vm_proxmox_node:
+            return settings.target_vm_proxmox_node
+        nodes = await self._client.get_nodes()
+        if not nodes:
+            raise TargetLabError("No online Proxmox nodes found.")
+        factory = _get_session_factory()
+        async with factory() as session:
+            active = await self._get_active_vms(session)
+        node_counts = {n: 0 for n in nodes}
+        for vm in active:
+            if vm.proxmox_node in node_counts:
+                node_counts[vm.proxmox_node] += 1
+        return min(node_counts, key=node_counts.get)
+
+    # ── Deploy ────────────────────────────────────────────────────
+
+    async def deploy_target(self, template_type: str, username: str = "admin") -> dict:
+        """Deploy a new Metasploitable3 target VM.
+
+        Uses a PostgreSQL advisory lock to prevent race conditions in
+        concurrent VMID/IP allocation.
+        """
+        if not self.enabled:
+            raise TargetLabError("Target Lab is not configured. Set PROXMOX_API_URL and PROXMOX_API_TOKEN.")
+
+        if template_type not in TEMPLATES:
+            raise TargetLabError(f"Unknown template type: {template_type}")
+
+        settings = self._settings
+        template_vmid = (
+            settings.metasploitable3_ubuntu_vmid
+            if template_type == "ubuntu"
+            else settings.metasploitable3_windows_vmid
+        )
+
+        # Validate template exists on Proxmox before allocating resources
+        node = await self._select_node()
+        if not await self._client.vm_exists(node, template_vmid):
+            raise TargetLabError(
+                f"Template VMID {template_vmid} not found on {node}. "
+                "Run scripts/prepare-metasploitable3-templates.sh on the Proxmox node first."
+            )
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            # Acquire advisory lock to serialize allocation across concurrent requests
+            await session.execute(text(f"SELECT pg_advisory_lock({_ALLOCATION_LOCK_ID})"))
+            try:
+                active = await self._get_active_vms(session)
+
+                # Check capacity
+                if len(active) >= settings.target_vm_max_concurrent:
+                    raise TargetLabError(
+                        f"Maximum concurrent target VMs reached ({settings.target_vm_max_concurrent}). "
+                        "Destroy an existing VM before deploying a new one."
+                    )
+
+                # Check Windows limit
+                if template_type == "windows":
+                    windows_active = [v for v in active if v.template_type == "windows"]
+                    max_win = TEMPLATES["windows"].get("max_instances", 1)
+                    if len(windows_active) >= max_win:
+                        raise TargetLabError(
+                            "A Windows target VM is already running. "
+                            "Only one Windows instance is supported at a time."
+                        )
+
+                # Allocate resources (safe under advisory lock)
+                vmid = self._allocate_vmid(active)
+                ip = self._allocate_ip(active, template_type)
+                name = f"ms3-{template_type}-{vmid}"
+
+                now = datetime.now(timezone.utc)
+                ttl_expires = now + timedelta(hours=settings.target_vm_ttl_hours)
+
+                # Create DB record
+                target = TargetVM(
+                    vmid=vmid,
+                    name=name,
+                    template_type=template_type,
+                    ip_address=ip,
+                    proxmox_node=node,
+                    status="deploying",
+                    created_at=now,
+                    ttl_expires_at=ttl_expires,
+                    created_by=username,
+                )
+                session.add(target)
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    raise TargetLabError(
+                        f"Resource allocation conflict (VMID {vmid}). Please retry."
+                    )
+            finally:
+                await session.execute(text(f"SELECT pg_advisory_unlock({_ALLOCATION_LOCK_ID})"))
+
+        # Deploy in background with timeout wrapper
+        task = asyncio.create_task(
+            self._deploy_vm_with_timeout(vmid, template_vmid, name, node, ip, template_type)
+        )
+        task.add_done_callback(self._task_done_callback)
+
+        return {
+            "vmid": vmid,
+            "name": name,
+            "template_type": template_type,
+            "ip_address": ip,
+            "proxmox_node": node,
+            "status": "deploying",
+            "ttl_expires_at": ttl_expires.isoformat(),
+        }
+
+    @staticmethod
+    def _task_done_callback(task: asyncio.Task):
+        """Log unhandled exceptions from background deploy tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error("Background deploy task failed: %s", exc)
+
+    async def _deploy_vm_with_timeout(self, *args):
+        """Wrap _deploy_vm with an overall timeout."""
+        try:
+            await asyncio.wait_for(self._deploy_vm(*args), timeout=600)
+        except asyncio.TimeoutError:
+            vmid = args[0]
+            logger.error("Deploy timed out for VM %d after 600s", vmid)
+            await self._update_status(vmid, "error", "Deployment timed out after 10 minutes")
+            try:
+                await self._client.destroy_vm(args[3], vmid)  # args[3] = node
+            except Exception:
+                pass
+
+    async def _deploy_vm(
+        self, vmid: int, template_vmid: int, name: str,
+        node: str, ip: str, template_type: str,
+    ):
+        """Background task: clone, configure, apply firewall, start, and wait for IP."""
+        settings = self._settings
+        try:
+            # Clone template
+            await self._client.clone_template(node, template_vmid, vmid, name)
+
+            # Apply firewall rules to isolate the vulnerable VM
+            await self._apply_vm_firewall(node, vmid)
+
+            # Configure cloud-init IP (Ubuntu only)
+            if template_type == "ubuntu":
+                await self._client.configure_vm(
+                    node, vmid, ip, settings.target_vm_gateway, settings.target_vm_netmask
+                )
+
+            # Start VM
+            await self._client.start_vm(node, vmid)
+
+            # Wait for VM to be reachable
+            detected_ip = await self._client.wait_for_ip(node, vmid, timeout=180)
+            if detected_ip and detected_ip != ip:
+                logger.info(
+                    "VM %d: expected IP %s, detected %s (using detected)",
+                    vmid, ip, detected_ip,
+                )
+                factory = _get_session_factory()
+                async with factory() as session:
+                    result = await session.execute(
+                        select(TargetVM).where(TargetVM.vmid == vmid)
+                    )
+                    target = result.scalar_one_or_none()
+                    if target:
+                        target.ip_address = detected_ip
+                        await session.commit()
+
+            # Update status to running
+            await self._update_status(vmid, "running")
+            logger.info("Target VM %d (%s) deployed at %s", vmid, name, ip)
+
+        except Exception as e:
+            logger.error("Failed to deploy target VM %d: %s", vmid, e)
+            await self._update_status(vmid, "error", str(e))
+            # Attempt cleanup
+            try:
+                await self._client.destroy_vm(node, vmid)
+            except Exception:
+                pass
+
+    async def _apply_vm_firewall(self, node: str, vmid: int):
+        """Apply Proxmox firewall rules to isolate the target VM.
+
+        Rules:
+        - Allow inbound from cluster VLAN (for scanning tools to reach the VM)
+        - Block all outbound except DNS (prevent pivot attacks from vulnerable VMs)
+        """
+        try:
+            # Enable firewall on the VM
+            await self._client._put(
+                f"/nodes/{node}/qemu/{vmid}/firewall/options",
+                data={"enable": 1, "policy_in": "ACCEPT", "policy_out": "DROP"},
+            )
+
+            # Rule 1: Allow outbound DNS (UDP 53) so services can resolve
+            await self._client._post(
+                f"/nodes/{node}/qemu/{vmid}/firewall/rules",
+                data={
+                    "type": "out", "action": "ACCEPT",
+                    "proto": "udp", "dport": "53",
+                    "comment": "Allow DNS resolution",
+                    "enable": 1,
+                },
+            )
+
+            # Rule 2: Block outbound to Proxmox management VLAN
+            await self._client._post(
+                f"/nodes/{node}/qemu/{vmid}/firewall/rules",
+                data={
+                    "type": "out", "action": "DROP",
+                    "dest": "10.83.2.0/24",
+                    "comment": "Block access to Proxmox management",
+                    "enable": 1,
+                },
+            )
+
+            # Rule 3: Block outbound to internet (0.0.0.0/0)
+            # The default policy_out=DROP handles this, but explicit rule for clarity
+            await self._client._post(
+                f"/nodes/{node}/qemu/{vmid}/firewall/rules",
+                data={
+                    "type": "out", "action": "DROP",
+                    "dest": "0.0.0.0/0",
+                    "comment": "Block internet access from vulnerable VM",
+                    "enable": 1,
+                },
+            )
+
+            logger.info("Firewall rules applied to VM %d", vmid)
+        except ProxmoxError as e:
+            logger.warning("Failed to apply firewall rules to VM %d: %s", vmid, e)
+
+    # ── Destroy ───────────────────────────────────────────────────
+
+    async def destroy_target(self, vmid: int, username: str = "admin") -> dict:
+        """Destroy a target VM."""
+        if not self.enabled:
+            raise TargetLabError("Target Lab is not configured.")
+
+        # Validate VMID is in target range (defense-in-depth)
+        self._validate_vmid_in_range(vmid)
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(
+                    and_(TargetVM.vmid == vmid, TargetVM.status.in_(_ACTIVE_STATUSES))
+                )
+            )
+            target = result.scalar_one_or_none()
+            if not target:
+                raise TargetLabError(f"No active target VM with VMID {vmid}.")
+
+            target.status = "stopping"
+            await session.commit()
+            node = target.proxmox_node
+
+        # Destroy on Proxmox (handle already-destroyed gracefully)
+        try:
+            await self._client.destroy_vm(node, vmid)
+        except ProxmoxError as e:
+            if "does not exist" in str(e).lower() or e.status_code in (404, 500):
+                logger.info("VM %d already removed from Proxmox", vmid)
+            else:
+                logger.warning("Proxmox destroy for VM %d failed: %s", vmid, e)
+
+        await self._update_status(vmid, "destroyed")
+
+        return {"vmid": vmid, "status": "destroyed"}
+
+    # ── TTL extension ─────────────────────────────────────────────
+
+    async def extend_ttl(self, vmid: int, hours: int = 4, username: str = "admin") -> dict:
+        """Extend the TTL of a running target VM."""
+        self._validate_vmid_in_range(vmid)
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(
+                    and_(TargetVM.vmid == vmid, TargetVM.status == "running")
+                )
+            )
+            target = result.scalar_one_or_none()
+            if not target:
+                raise TargetLabError(f"No running target VM with VMID {vmid}.")
+
+            target.ttl_expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+            await session.commit()
+            return self._vm_to_dict(target)
+
+    # ── List & status ─────────────────────────────────────────────
+
+    async def list_targets(self) -> list[dict]:
+        """Return all active target VMs."""
+        factory = _get_session_factory()
+        async with factory() as session:
+            active = await self._get_active_vms(session)
+            return [self._vm_to_dict(vm) for vm in active]
+
+    async def get_target(self, vmid: int) -> Optional[dict]:
+        """Get a single target VM by VMID."""
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(TargetVM.vmid == vmid)
+            )
+            target = result.scalar_one_or_none()
+            if not target:
+                return None
+            return self._vm_to_dict(target)
+
+    # ── TTL cleanup ───────────────────────────────────────────────
+
+    async def cleanup_expired(self):
+        """Destroy VMs that have exceeded their TTL."""
+        now = datetime.now(timezone.utc)
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(
+                    and_(
+                        TargetVM.status.in_(_ACTIVE_STATUSES),
+                        TargetVM.ttl_expires_at <= now,
+                    )
+                )
+            )
+            expired = list(result.scalars().all())
+
+        if not expired:
+            return
+
+        logger.info("TTL cleanup: destroying %d expired target VM(s)", len(expired))
+        for vm in expired:
+            try:
+                await self.destroy_target(vm.vmid, username="system-ttl")
+            except Exception as e:
+                logger.error("TTL cleanup failed for VM %d: %s", vm.vmid, e)
+
+    async def reconcile_orphaned(self):
+        """Mark VMs stuck in 'deploying' for too long as errors."""
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(
+                    and_(
+                        TargetVM.status == "deploying",
+                        TargetVM.created_at <= cutoff,
+                    )
+                )
+            )
+            orphaned = list(result.scalars().all())
+
+        for vm in orphaned:
+            logger.warning("Reconciling orphaned VM %d (deploying since %s)", vm.vmid, vm.created_at)
+            await self._update_status(vm.vmid, "error", "Deployment timed out (orphan reconciliation)")
+            try:
+                if self._client:
+                    await self._client.destroy_vm(vm.proxmox_node, vm.vmid)
+            except Exception:
+                pass
+
+    # ── Helpers ───────────────────────────────────────────────────
+
+    async def _update_status(
+        self, vmid: int, status: str, error: str = None
+    ):
+        factory = _get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(TargetVM).where(TargetVM.vmid == vmid)
+            )
+            target = result.scalar_one_or_none()
+            if target:
+                target.status = status
+                if error:
+                    target.error_message = error
+                if status == "destroyed":
+                    target.destroyed_at = datetime.now(timezone.utc)
+                await session.commit()
+
+    @staticmethod
+    def _vm_to_dict(vm: TargetVM) -> dict:
+        now = datetime.now(timezone.utc)
+        created = vm.created_at.replace(tzinfo=timezone.utc) if vm.created_at and vm.created_at.tzinfo is None else vm.created_at
+        ttl = vm.ttl_expires_at.replace(tzinfo=timezone.utc) if vm.ttl_expires_at and vm.ttl_expires_at.tzinfo is None else vm.ttl_expires_at
+        return {
+            "vmid": vm.vmid,
+            "name": vm.name,
+            "template_type": vm.template_type,
+            "ip_address": vm.ip_address,
+            "proxmox_node": vm.proxmox_node,
+            "status": vm.status,
+            "created_at": created.isoformat() if created else None,
+            "ttl_expires_at": ttl.isoformat() if ttl else None,
+            "ttl_remaining_seconds": max(0, int((ttl - now).total_seconds())) if ttl else 0,
+            "created_by": vm.created_by,
+            "error_message": vm.error_message,
+            "template_info": TEMPLATES.get(vm.template_type, {}),
+        }
+
+
+# ── Singleton ─────────────────────────────────────────────────────
+
+_target_lab_service: Optional[TargetLabService] = None
+
+
+def get_target_lab_service() -> TargetLabService:
+    global _target_lab_service
+    if _target_lab_service is None:
+        _target_lab_service = TargetLabService()
+    return _target_lab_service

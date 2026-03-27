@@ -1,0 +1,43 @@
+1
+00:00:00,000 --> 00:00:03,000
+Open the Portal at cleanroom.knowledgeondemand.net
+
+2
+00:00:03,354 --> 00:00:06,354
+Enter username 'admin' and password, then click Sign In
+
+3
+00:00:07,380 --> 00:00:10,380
+The Portal shows two cards: Deployment Console and Scanning Console
+
+4
+00:00:10,882 --> 00:00:13,882
+Click 'Credentials' to view service passwords
+
+5
+00:00:15,497 --> 00:00:18,497
+Each service shows its URL, username, and password
+
+6
+00:00:18,502 --> 00:00:21,502
+Click the eye icon to reveal a password
+
+7
+00:00:21,069 --> 00:00:24,069
+Navigate back to the Portal landing page
+
+8
+00:00:24,245 --> 00:00:27,245
+Click a card to navigate with automatic single sign-on
+
+9
+00:00:29,336 --> 00:00:32,336
+You are automatically logged in to the Deployment Console
+
+10
+00:00:32,339 --> 00:00:35,339
+The Dashboard shows deployment status and service credentials
+
+11
+00:00:35,343 --> 00:00:38,343
+That's the basics — you're ready to use Talos CleanRoom!

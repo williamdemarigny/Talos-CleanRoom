@@ -1,0 +1,39 @@
+1
+00:00:00,000 --> 00:00:03,000
+The Reports dashboard shows scan statistics and recent scans
+
+2
+00:00:04,554 --> 00:00:07,554
+Click 'View Details' to see a full scan breakdown
+
+3
+00:00:09,859 --> 00:00:12,859
+The scan detail shows hosts, services, and vulnerabilities
+
+4
+00:00:12,862 --> 00:00:15,862
+The Hosts page shows all discovered IP addresses
+
+5
+00:00:17,557 --> 00:00:20,557
+Filter vulnerabilities by severity, remediation status, and CVSS score
+
+6
+00:00:24,672 --> 00:00:27,672
+Each vulnerability shows its CVSS score and EPSS exploit probability
+
+7
+00:00:27,680 --> 00:00:30,680
+Compare two scans to track remediation progress over time
+
+8
+00:00:32,162 --> 00:00:35,162
+Select two scans to see new, resolved, and common findings
+
+9
+00:00:35,166 --> 00:00:38,166
+The Audit Log records all user actions for accountability
+
+10
+00:00:39,587 --> 00:00:42,587
+Every scan start, export, and enrichment trigger is logged
