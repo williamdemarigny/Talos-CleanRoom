@@ -18,7 +18,7 @@ class Settings(BaseAppSettings):
     debug: bool = False
 
     # Repository
-    repo_root: Path = Path("/repo")
+    repo_root: Path = Path("/opt/talos-cleanroom")
 
     # Deployment
     master_node: str = "10.83.3.10"

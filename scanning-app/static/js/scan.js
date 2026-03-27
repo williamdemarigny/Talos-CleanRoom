@@ -287,6 +287,7 @@ function scanManager() {
                     this.status = 'running';
                     this.scanTarget = this.target;
                     this.logs = [];
+                    this._wsBase.resetLogOffset();
                     this.toolStates = this.selectedTools.map(t => ({
                         tool: t,
                         status: 'idle',
@@ -327,6 +328,7 @@ function scanManager() {
             this.scanTarget = '';
             this.toolStates = [];
             this.logs = [];
+            this._wsBase.resetLogOffset();
             this.stopTimer();
             this.stopPolling();
             this.elapsedTime = '';

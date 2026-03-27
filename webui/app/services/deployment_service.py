@@ -2825,6 +2825,8 @@ echo "=== Setup Complete ==="
         """Step 22: Apply zero-trust network policies to all namespaces.
 
         Applied last because earlier steps need unrestricted network during setup.
+        Applies each file individually so policies for non-existent namespaces
+        are skipped rather than failing the entire step.
         """
         await self.log(step_id, "info", "Applying network policies...")
 
@@ -2833,35 +2835,101 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "warn", f"Network policies directory not found: {netpol_dir}")
             return True  # Non-fatal
 
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(netpol_dir)],
-            on_output=self._sanitized_output_callback(step_id),
+        # Discover which namespaces exist in the cluster
+        ns_result = await self.process_manager.run_command(
+            ["kubectl", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"],
         )
+        existing_namespaces = set(ns_result.output.strip().split()) if ns_result.success else set()
+        if existing_namespaces:
+            await self.log(step_id, "info", f"Found {len(existing_namespaces)} namespaces in cluster")
 
-        if result.success:
-            await self.log(step_id, "info", "Network policies applied to all namespaces")
-        else:
-            await self.log(step_id, "error", f"Failed to apply network policies: {result.output[:300]}")
+        # Collect YAML files (skip README, etc.)
+        policy_files = sorted(f for f in netpol_dir.iterdir() if f.suffix in (".yaml", ".yml"))
+        if not policy_files:
+            await self.log(step_id, "warn", "No YAML files found in network-policies directory")
+            return True
 
-        # Final deployment summary
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "==========================================")
-        await self.log(step_id, "info", "Full Platform Deployment Complete!")
-        await self.log(step_id, "info", "==========================================")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Access services at:")
-        await self.log(step_id, "info", "  - Portal:           https://cleanroom.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Scanning Console: https://scan.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - ArgoCD:           https://argocd.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - OpenVAS:          https://openvas.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Faraday:          https://faraday.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Harbor:           https://harbor.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Threat Dragon:    https://threatdragon.knowledgeondemand.net")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "View credentials: Deployment > Credentials tab")
-        await self.log(step_id, "info", "==========================================")
+        applied = 0
+        skipped = 0
+        failed = 0
+        all_success = True
 
-        return result.success
+        for policy_file in policy_files:
+            try:
+                content = policy_file.read_text()
+            except OSError as e:
+                await self.log(step_id, "error", f"Cannot read {policy_file.name}: {e}")
+                failed += 1
+                all_success = False
+                continue
+
+            # Split multi-document YAML and filter out docs targeting
+            # namespaces that don't exist yet.
+            docs = re.split(r'^---\s*$', content, flags=re.MULTILINE)
+            applicable_docs = []
+            file_skipped_ns: set[str] = set()
+
+            for doc in docs:
+                doc_stripped = doc.strip()
+                if not doc_stripped or doc_stripped.startswith('#'):
+                    continue
+                # Extract namespace from this single document
+                ns_matches = re.findall(r'^\s*namespace:\s*(\S+)', doc_stripped, re.MULTILINE)
+                doc_ns = set(ns_matches)
+                missing = doc_ns - existing_namespaces if existing_namespaces else set()
+                if missing:
+                    file_skipped_ns.update(missing)
+                else:
+                    applicable_docs.append(doc_stripped)
+
+            if file_skipped_ns:
+                await self.log(
+                    step_id, "warn",
+                    f"{policy_file.name}: skipping policies for missing namespace(s): "
+                    f"{', '.join(sorted(file_skipped_ns))}"
+                )
+
+            if not applicable_docs:
+                skipped += 1
+                continue
+
+            # Build filtered YAML and apply via stdin
+            filtered_yaml = "\n---\n".join(applicable_docs)
+            result = await self.process_manager.run_command(
+                ["kubectl", "apply", "-f", "-"],
+                stdin_data=filtered_yaml,
+                on_output=self._sanitized_output_callback(step_id),
+            )
+
+            if result.success:
+                applied += 1
+            else:
+                await self.log(step_id, "error", f"Failed to apply {policy_file.name}: {result.output[:200]}")
+                failed += 1
+                all_success = False
+
+        await self.log(step_id, "info", f"Network policies: {applied} applied, {skipped} skipped, {failed} failed")
+
+        # Final deployment summary (only on success)
+        if all_success:
+            await self.log(step_id, "info", "")
+            await self.log(step_id, "info", "==========================================")
+            await self.log(step_id, "info", "Full Platform Deployment Complete!")
+            await self.log(step_id, "info", "==========================================")
+            await self.log(step_id, "info", "")
+            await self.log(step_id, "info", "Access services at:")
+            await self.log(step_id, "info", "  - Portal:           https://cleanroom.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - Scanning Console: https://scan.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - ArgoCD:           https://argocd.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - OpenVAS:          https://openvas.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - Faraday:          https://faraday.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - Harbor:           https://harbor.knowledgeondemand.net")
+            await self.log(step_id, "info", "  - Threat Dragon:    https://threatdragon.knowledgeondemand.net")
+            await self.log(step_id, "info", "")
+            await self.log(step_id, "info", "View credentials: Deployment > Credentials tab")
+            await self.log(step_id, "info", "==========================================")
+
+        return all_success
 
 
 # Global deployment service instance

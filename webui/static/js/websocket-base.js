@@ -51,6 +51,10 @@ class WebSocketBase {
         this._pollInterval = null;
         this._pingInterval = null;
 
+        // Track how many logs have been fetched from the server (independent of
+        // the in-memory buffer which may be trimmed).
+        this._logOffset = 0;
+
         // The Alpine component reference (set via bind())
         this.component = null;
     }
@@ -105,13 +109,14 @@ class WebSocketBase {
             }
 
             // Fetch logs (only new ones beyond what we have)
-            const logResp = await fetch(`${this.pollLogsUrl}?offset=${comp.logs.length}`);
+            const logResp = await fetch(`${this.pollLogsUrl}?offset=${this._logOffset}`);
             const logData = await logResp.json();
 
             if (logData.logs && logData.logs.length > 0) {
                 for (const log of logData.logs) {
                     comp.logs.push(log);
                 }
+                this._logOffset += logData.logs.length;
                 this.scrollToBottom();
             }
 
@@ -226,6 +231,13 @@ class WebSocketBase {
     // =================================================================
     // Log Helpers
     // =================================================================
+
+    /**
+     * Reset the log poll offset (call when logs are cleared, e.g. new deployment).
+     */
+    resetLogOffset() {
+        this._logOffset = 0;
+    }
 
     /**
      * Add a log entry with deduplication and buffer management.
