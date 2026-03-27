@@ -122,10 +122,19 @@ class WebSocketBase {
 
             // Check if run finished
             const prevStatus = comp.status;
-            comp.status = statusData.status;
+            // Don't overwrite client-side statuses (e.g. 'cleaning') with
+            // server status — only update when the server reports a real
+            // deployment status or the component isn't in a client-side state.
+            const clientSideStatuses = comp._clientSideStatuses || [];
+            if (!clientSideStatuses.includes(prevStatus)) {
+                comp.status = statusData.status;
+            }
 
-            if (comp.onPollComplete && !statusData.is_running &&
-                (prevStatus === 'running' || (comp.isRunningStatus && comp.isRunningStatus(prevStatus)))) {
+            const wasRunning = prevStatus === 'running' ||
+                clientSideStatuses.includes(prevStatus) ||
+                (comp.isRunningStatus && comp.isRunningStatus(prevStatus));
+
+            if (comp.onPollComplete && !statusData.is_running && wasRunning) {
                 comp.onPollComplete();
             }
         } catch (e) {

@@ -106,7 +106,7 @@ async def get_deployment_status(
             status=DeploymentStatus.IDLE,
             current_step=0,
             deployment=None,
-            is_running=False
+            is_running=service.is_running()
         )
 
     return DeploymentStatusResponse(

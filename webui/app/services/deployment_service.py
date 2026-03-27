@@ -704,6 +704,28 @@ class DeploymentService(BaseServiceMixin):
         self.current_deployment = None
         self._clear_state()
 
+        # Step 0: Clean SSH known_hosts FIRST — must happen before any destroy
+        # so the next deployment doesn't get blocked by stale host keys.
+        await self.log(-1, "info", "Step 0: Cleaning SSH known_hosts...")
+        known_hosts_files: set[Path] = set()
+        for p in [
+            Path.home() / ".ssh" / "known_hosts",
+            Path("/root/.ssh/known_hosts"),
+            Path("/home/deploy/.ssh/known_hosts"),
+        ]:
+            if p.exists():
+                known_hosts_files.add(p.resolve())
+
+        settings = get_settings()
+        cleanup_ips = list(self.node_ips) + [settings.build_vm_ip.split("/")[0]]
+        for kh_path in known_hosts_files:
+            for ip in cleanup_ips:
+                await self.process_manager.run_command_simple(
+                    ["ssh-keygen", "-f", str(kh_path), "-R", ip],
+                    timeout=5,
+                )
+            await self.log(-1, "info", f"  Cleaned {kh_path}")
+
         # Step 1: Reset Talos nodes to wipe ephemeral state (prevents IPAM exhaustion)
         await self.log(-1, "info", "Step 1: Resetting Talos nodes to wipe ephemeral state...")
 
@@ -854,22 +876,6 @@ class DeploymentService(BaseServiceMixin):
                 await self.log(-1, "info", "  Skipped (no Proxmox credentials)")
         except Exception as e:
             await self.log(-1, "warn", f"  Target lab cleanup failed: {e}")
-
-        # Step 6: Clean up stale SSH known_hosts entries
-        await self.log(-1, "info", "Step 6: Cleaning up SSH known_hosts...")
-        known_hosts_files = [
-            Path.home() / ".ssh" / "known_hosts",
-            Path("/root/.ssh/known_hosts"),
-        ]
-        cleanup_ips = list(self.node_ips) + [get_settings().build_vm_ip.split("/")[0]]
-        for kh_path in known_hosts_files:
-            if kh_path.exists():
-                for ip in cleanup_ips:
-                    await self.process_manager.run_command_simple(
-                        ["ssh-keygen", "-f", str(kh_path), "-R", ip],
-                        timeout=5,
-                    )
-                await self.log(-1, "info", f"  Cleaned {kh_path}")
 
         await self.log(-1, "info", "Cleanup completed")
         return result.success

@@ -19,6 +19,9 @@ function deploymentMonitor() {
         // Shared helpers instance (polling, scroll, log dedup)
         _wsBase: null,
 
+        // Client-side statuses that should not be overwritten by server polls
+        _clientSideStatuses: ['cleaning'],
+
         // Step definitions — must match DEPLOYMENT_STEPS in app/models/deployment.py
         stepDefinitions: [
             { id: 0, name: 'validate_git', description: 'Validate Git Repository' },
@@ -50,6 +53,7 @@ function deploymentMonitor() {
         get statusText() {
             switch (this.status) {
                 case 'running': return 'Deployment in Progress';
+                case 'cleaning': return 'Cleanup in Progress';
                 case 'completed': return 'Deployment Completed';
                 case 'failed': return 'Deployment Failed';
                 case 'aborted': return 'Deployment Aborted';
@@ -60,6 +64,7 @@ function deploymentMonitor() {
         get statusBannerClass() {
             switch (this.status) {
                 case 'running': return 'bg-yellow-900/30 border border-yellow-700 text-yellow-300';
+                case 'cleaning': return 'bg-orange-900/30 border border-orange-700 text-orange-300';
                 case 'completed': return 'bg-green-900/30 border border-green-700 text-green-300';
                 case 'failed': return 'bg-red-900/30 border border-red-700 text-red-300';
                 case 'aborted': return 'bg-orange-900/30 border border-orange-700 text-orange-300';
@@ -124,8 +129,19 @@ function deploymentMonitor() {
 
         // Called by WebSocketBase when polling detects the run finished
         onPollComplete() {
+            const wasCleaning = this.status === 'cleaning';
             this.stopPolling();
             this.stopElapsedTimer();
+            if (wasCleaning) {
+                this.status = 'idle';
+                this.isRunning = false;
+                this.steps.forEach(s => {
+                    s.status = 'pending';
+                    s.started_at = null;
+                    s.completed_at = null;
+                    s.error_message = null;
+                });
+            }
         },
 
         // =================================================================
@@ -213,7 +229,14 @@ function deploymentMonitor() {
             try {
                 const response = await fetch('/api/deployment/status');
                 const data = await response.json();
-                this.status = data.status;
+
+                // Detect cleanup: is_running but no deployment (status=idle)
+                if (data.is_running && data.status === 'idle' && !data.deployment) {
+                    this.status = 'cleaning';
+                } else {
+                    this.status = data.status;
+                }
+
                 this.currentStep = data.current_step;
                 this.isRunning = data.is_running;
 
@@ -342,44 +365,30 @@ function deploymentMonitor() {
             if (!confirm('Are you sure you want to run cleanup? This will destroy all Terraform-managed resources.')) return;
 
             try {
-                this.status = 'running';
-                this.isRunning = true;
-                this.startPolling();
-
                 const response = await fetch('/api/deployment/cleanup', { method: 'POST' });
 
                 let data;
                 try {
                     data = await response.json();
                 } catch {
-                    // Response wasn't JSON (e.g. timeout/proxy error)
-                    alert('Cleanup request failed — the operation may still be running on the server. Check logs.');
+                    alert('Cleanup request failed — check server logs.');
                     return;
                 }
 
                 if (response.ok) {
-                    alert(data.message);
-                    // Reset status after cleanup
-                    this.status = 'idle';
-                    this.isRunning = false;
-                    this.stopPolling();
-                    this.steps.forEach(s => {
-                        s.status = 'pending';
-                        s.started_at = null;
-                        s.completed_at = null;
-                        s.error_message = null;
-                    });
+                    // Cleanup launched in background — switch to cleaning state
+                    this.status = 'cleaning';
+                    this.isRunning = true;
+                    this.logs = [];
+                    this._wsBase.resetLogOffset();
+                    this.startTime = new Date();
+                    this.startElapsedTimer();
+                    this.startPolling();
                 } else {
                     alert('Cleanup failed: ' + (data.detail || 'Unknown error'));
-                    this.status = 'failed';
-                    this.isRunning = false;
-                    this.stopPolling();
                 }
             } catch (e) {
                 alert('Failed to run cleanup: ' + e.message);
-                this.status = 'failed';
-                this.isRunning = false;
-                this.stopPolling();
             }
         },
 
