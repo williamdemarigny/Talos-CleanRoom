@@ -814,20 +814,32 @@ class DeploymentService(BaseServiceMixin):
             px_url = proxmox_creds.get("proxmox_api_url", "")
             px_token = proxmox_creds.get("proxmox_api_token", "")
             if px_url and px_token:
-                from app.services.proxmox_client import ProxmoxClient
-                px = ProxmoxClient(px_url, px_token)
-                try:
-                    nodes = await px.get_nodes()
+                import httpx
+                headers = {"Authorization": f"PVEAPIToken={px_token}"}
+                base = px_url.rstrip("/") + "/api2/json"
+                async with httpx.AsyncClient(verify=False, timeout=30.0, headers=headers) as client:
+                    # Get online nodes
+                    nodes_resp = await client.get(f"{base}/nodes")
+                    nodes = [n["node"] for n in nodes_resp.json().get("data", [])
+                             if isinstance(n, dict) and n.get("status") == "online"]
                     for node in nodes:
-                        for vmid in range(5000, 5100):
-                            if await px.vm_exists(node, vmid):
+                        # List VMs on this node
+                        vms_resp = await client.get(f"{base}/nodes/{node}/qemu")
+                        for vm in vms_resp.json().get("data", []):
+                            vmid = vm.get("vmid", 0)
+                            if 5000 <= vmid < 5100:
                                 await self.log(-1, "info", f"  Destroying target VM {vmid} on {node}")
                                 try:
-                                    await px.destroy_vm(node, vmid)
+                                    await client.post(f"{base}/nodes/{node}/qemu/{vmid}/status/stop",
+                                                      data={"forceStop": 1})
+                                    import asyncio
+                                    await asyncio.sleep(3)
+                                    await client.delete(
+                                        f"{base}/nodes/{node}/qemu/{vmid}",
+                                        params={"destroy-unreferenced-disks": 1, "purge": 1},
+                                    )
                                 except Exception as e:
                                     await self.log(-1, "warn", f"  Failed to destroy VM {vmid}: {e}")
-                finally:
-                    await px.close()
             else:
                 await self.log(-1, "info", "  Skipped (no Proxmox credentials)")
         except Exception as e:
