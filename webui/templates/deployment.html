@@ -14,7 +14,7 @@
             <button
                 @click="runCleanup"
                 :disabled="isRunning"
-                x-show="status !== 'running'"
+                x-show="status !== 'running' && status !== 'cleaning'"
                 class="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
                 Run Cleanup
@@ -29,14 +29,14 @@
             <button
                 @click="startDeployment"
                 :disabled="isRunning"
-                x-show="status !== 'running'"
+                x-show="status !== 'running' && status !== 'cleaning'"
                 class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
                 Start Deployment
             </button>
             <button
                 @click="abortDeployment"
-                x-show="isRunning"
+                x-show="status === 'running'"
                 class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
             >
                 Abort
@@ -56,6 +56,19 @@
             <div class="text-sm" x-show="elapsedTime">
                 Elapsed: <span x-text="elapsedTime"></span>
             </div>
+        </div>
+    </div>
+
+    <!-- Cleanup Progress Banner -->
+    <div x-show="status === 'cleaning'" class="mb-6 p-6 bg-orange-900/30 border border-orange-700 rounded-lg">
+        <div class="flex items-center mb-3">
+            {{ spinner() }}
+            <h3 class="text-lg font-bold text-orange-300 ml-3">Cleanup in Progress</h3>
+        </div>
+        <p class="text-orange-200 mb-2">Destroying infrastructure and cleaning up resources. This may take several minutes.</p>
+        <div class="text-sm text-orange-200/70 space-y-1">
+            <p>Steps: Reset Talos nodes, Terraform destroy, Ceph RBD cleanup, Build VM destroy, SSH cleanup</p>
+            <p>Monitor progress in the Live Log Stream below.</p>
         </div>
     </div>
 
@@ -96,8 +109,8 @@
         <p class="text-sm text-green-200/70 mt-3">Default credentials: admin / admin (change before production use)</p>
     </div>
 
-    <!-- Progress Steps -->
-    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+    <!-- Progress Steps (hidden during cleanup) -->
+    <div x-show="status !== 'cleaning'" class="bg-gray-800 rounded-lg p-6 mb-6">
         <h2 class="text-lg font-medium text-white mb-4">Deployment Steps</h2>
         <div class="space-y-3">
             <template x-for="step in steps" :key="step.id">
