@@ -8,7 +8,7 @@ This file provides backward-compatible imports so existing code
 from talos_common.auth import (  # noqa: F401
     pwd_context,
     security,
-    ALGORITHM,
+    LOCAL_ALGORITHM as ALGORITHM,
     verify_password,
     get_password_hash,
     create_access_token,
