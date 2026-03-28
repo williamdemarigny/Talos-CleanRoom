@@ -34,6 +34,7 @@ class BaseAppSettings(BaseSettings):
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_path: str = "/auth/callback"
+    oidc_redirect_host: str = ""   # e.g. "scan.knowledgeondemand.net" — set per-app via env
     oidc_scopes: str = "openid profile email"
 
     # Known default hash — used to detect first-login and prompt password change

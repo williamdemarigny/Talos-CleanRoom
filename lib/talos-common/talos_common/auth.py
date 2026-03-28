@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import jwt as pyjwt
+from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
@@ -71,7 +72,7 @@ def _get_jwks_client(issuer_url: str):
     """Get or create a cached PyJWKClient for the given issuer."""
     if issuer_url not in _jwks_client_cache:
         jwks_uri = f"{issuer_url}/protocol/openid-connect/certs"
-        _jwks_client_cache[issuer_url] = pyjwt.PyJWKClient(jwks_uri)
+        _jwks_client_cache[issuer_url] = PyJWKClient(jwks_uri)
     return _jwks_client_cache[issuer_url]
 
 
@@ -199,3 +200,43 @@ async def get_current_user_optional(
         return await get_current_user(request, credentials, settings)
     except HTTPException:
         return None
+
+
+def require_role(role: str):
+    """FastAPI dependency that requires the current user to have a specific realm role.
+
+    Usage in routers::
+
+        @router.post("/admin-action")
+        async def admin_action(user: dict = Depends(require_role("admin"))):
+            ...
+
+    For local HS256 tokens (no roles), the ``admin`` role is implicitly
+    granted since local auth is single-user admin-only. This ensures
+    backward compatibility during the OIDC transition.
+
+    Raises HTTP 403 if the user lacks the required role.
+    """
+    async def _dependency(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials = Depends(security),
+        settings=Depends(talos_common.get_settings),
+    ) -> dict:
+        user = await get_current_user(request, credentials, settings)
+
+        # Local HS256 tokens don't carry roles — the single admin user
+        # implicitly has all roles. Once OIDC-only mode is enforced
+        # (Phase 4), this fallback can be removed.
+        user_roles = user.get("roles", [])
+        if not user_roles:
+            # Legacy local token — grant implicit admin
+            return user
+
+        if role not in user_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{role}' required",
+            )
+        return user
+
+    return _dependency

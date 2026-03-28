@@ -134,9 +134,11 @@ async def index(request: Request, user: dict = Depends(get_current_user_optional
 
 @app.get("/login")
 async def login_page(request: Request):
+    settings = get_settings()
     return templates.TemplateResponse("login.html", {
         "request": request,
         "app_subtitle": "Scanning Console",
+        "oidc_enabled": bool(settings.oidc_issuer_url),
     })
 
 

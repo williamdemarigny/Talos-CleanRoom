@@ -8,6 +8,7 @@ Provides functions for the OpenID Connect authorization code flow:
 5. Userinfo: Fetch user profile from Keycloak
 """
 
+import base64
 import hashlib
 import logging
 import secrets
@@ -44,15 +45,13 @@ def generate_pkce_pair() -> tuple[str, str]:
     """
     code_verifier = secrets.token_urlsafe(43)
     digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-    code_challenge = secrets.token_urlsafe(32)  # placeholder
-    # Proper S256 challenge
-    import base64
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return code_verifier, code_challenge
 
 
 async def build_authorization_url(
     settings,
+    redirect_uri: str,
     state: str,
     nonce: str,
     code_challenge: str,
@@ -61,6 +60,7 @@ async def build_authorization_url(
 
     Args:
         settings: App settings with oidc_* fields
+        redirect_uri: Callback URL (built by the router from the request)
         state: CSRF protection state parameter
         nonce: Nonce for ID token validation
         code_challenge: PKCE S256 code challenge
@@ -70,10 +70,6 @@ async def build_authorization_url(
     """
     config = await get_oidc_config(settings.oidc_issuer_url)
     auth_endpoint = config["authorization_endpoint"]
-
-    redirect_uri = f"https://{settings.oidc_redirect_host}{settings.oidc_redirect_path}"
-    if hasattr(settings, "oidc_redirect_uri") and settings.oidc_redirect_uri:
-        redirect_uri = settings.oidc_redirect_uri
 
     params = {
         "response_type": "code",
@@ -127,11 +123,16 @@ async def exchange_code_for_tokens(
         return response.json()
 
 
-async def get_end_session_url(settings, id_token_hint: str = None) -> str:
+async def get_end_session_url(
+    settings,
+    post_logout_redirect_uri: str,
+    id_token_hint: str = None,
+) -> str:
     """Build the Keycloak end-session (logout) URL.
 
     Args:
         settings: App settings with oidc_* fields
+        post_logout_redirect_uri: Where to redirect after logout
         id_token_hint: Optional ID token for session identification
 
     Returns:
@@ -140,15 +141,8 @@ async def get_end_session_url(settings, id_token_hint: str = None) -> str:
     config = await get_oidc_config(settings.oidc_issuer_url)
     logout_endpoint = config.get("end_session_endpoint", "")
 
-    params = {}
+    params = {"post_logout_redirect_uri": post_logout_redirect_uri}
     if id_token_hint:
         params["id_token_hint"] = id_token_hint
 
-    redirect_uri = f"https://{settings.oidc_redirect_host}{settings.oidc_redirect_path}"
-    if hasattr(settings, "oidc_redirect_uri") and settings.oidc_redirect_uri:
-        redirect_uri = settings.oidc_redirect_uri.rsplit("/auth/callback", 1)[0] + "/login"
-    params["post_logout_redirect_uri"] = redirect_uri
-
-    if params:
-        return f"{logout_endpoint}?{urlencode(params)}"
-    return logout_endpoint
+    return f"{logout_endpoint}?{urlencode(params)}"
