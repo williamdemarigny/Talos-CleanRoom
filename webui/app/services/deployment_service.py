@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Optional, Callable, Awaitable, List
 from dataclasses import dataclass, field
 
+import httpx
+
 from app.config import get_settings
 from app.models.deployment import (
     DeploymentState, DeploymentStatus, DeploymentStep, StepStatus,
@@ -694,6 +696,10 @@ class DeploymentService(BaseServiceMixin):
         self._cleanup_running = True
         try:
             return await self._run_cleanup()
+        except Exception as e:
+            logging.exception("Cleanup failed with unhandled exception")
+            await self.log(-1, "error", f"Cleanup crashed: {e}")
+            return False
         finally:
             self._cleanup_running = False
 
@@ -771,114 +777,278 @@ class DeploymentService(BaseServiceMixin):
         # Brief pause to allow reset operations to complete
         await asyncio.sleep(5)
 
-        # Step 2: Terraform destroy
-        await self.log(-1, "info", "Step 2: Running Terraform destroy...")
-
-        result = await self.process_manager.run_command(
-            ["terraform", "destroy", "-auto-approve"],
-            cwd=self.terraform_dir,
-            on_output=lambda line: self.log(-1, "info", line)
-        )
-
-        if result.success:
-            await self.log(-1, "info", "Cluster Terraform destroy completed")
-        else:
-            await self.log(-1, "error", "Cluster Terraform destroy failed")
-
-        # Step 3: Clean up orphaned Ceph RBD images from the kubernetes pool
-        # When K8s VMs are destroyed, CSI-provisioned RBD volumes become orphaned
-        # because the K8s PV finalizers can no longer run. Clean them up via SSH
-        # to a Proxmox node which has direct access to the Ceph cluster.
-        await self.log(-1, "info", "Step 3: Cleaning up orphaned Ceph RBD volumes...")
+        # --- Proxmox API helper for validation ---
         proxmox_creds = self._read_proxmox_credentials()
+        px_url = proxmox_creds.get("proxmox_api_url", "")
+        px_token = proxmox_creds.get("proxmox_api_token", "")
         proxmox_ssh_pw = proxmox_creds.get("proxmox_ssh_password", "")
         settings = get_settings()
 
-        if proxmox_ssh_pw:
-            ceph_cleanup_cmd = (
-                "rbd ls -p kubernetes 2>/dev/null | grep '^csi-vol-' | "
-                "while read img; do "
-                "rbd snap purge kubernetes/$img 2>/dev/null; "
-                "rbd rm kubernetes/$img 2>/dev/null && "
-                "echo \"Removed: $img\"; "
-                "done; "
-                "echo \"CSI volume cleanup complete\""
-            )
-            ceph_result = await self.process_manager.run_command(
-                ["sshpass", "-p", proxmox_ssh_pw,
-                 "ssh", "-o", "StrictHostKeyChecking=no",
-                 f"{settings.proxmox_ssh_user}@{settings.proxmox_host}",
-                 ceph_cleanup_cmd],
-                on_output=lambda line: self.log(-1, "info", line),
-                timeout=600,  # 10 minutes — may have hundreds of images
-            )
-            if ceph_result.success:
-                await self.log(-1, "info", "Ceph RBD cleanup completed")
-            else:
-                await self.log(-1, "warn", "Ceph RBD cleanup failed (non-fatal) — orphaned volumes may remain")
-        else:
-            await self.log(-1, "warn", "Skipping Ceph cleanup — no Proxmox SSH password available")
+        async def _proxmox_list_vms() -> list[dict]:
+            """List all VMs/CTs across all Proxmox nodes via API."""
+            if not px_url or not px_token:
+                return []
+            try:
 
-        # Step 4: Destroy Build VM (if it was deployed)
-        build_lxc_dir = self.repo_root / "terraform" / "build-lxc"
-        build_tfvars = build_lxc_dir / "terraform.tfvars"
-        if build_tfvars.exists():
-            await self.log(-1, "info", "Step 4: Destroying Build VM...")
-            build_result = await self.process_manager.run_command(
-                ["terraform", "destroy", "-auto-approve"],
-                cwd=build_lxc_dir,
-                on_output=lambda line: self.log(-1, "info", line),
-            )
-            if build_result.success:
-                await self.log(-1, "info", "Build VM destroyed")
-                # Clean up generated tfvars
-                try:
-                    build_tfvars.unlink()
-                except OSError:
-                    pass
-            else:
-                await self.log(-1, "warn", "Build VM destroy failed (non-fatal)")
-
-        # Step 5: Destroy target lab VMs (Metasploitable3 targets, VMID 5000-5099)
-        await self.log(-1, "info", "Step 5: Destroying target lab VMs...")
-        try:
-            proxmox_creds = self._read_proxmox_credentials()
-            px_url = proxmox_creds.get("proxmox_api_url", "")
-            px_token = proxmox_creds.get("proxmox_api_token", "")
-            if px_url and px_token:
-                import httpx
                 headers = {"Authorization": f"PVEAPIToken={px_token}"}
                 base = px_url.rstrip("/") + "/api2/json"
+                all_resources: list[dict] = []
                 async with httpx.AsyncClient(verify=False, timeout=30.0, headers=headers) as client:
-                    # Get online nodes
                     nodes_resp = await client.get(f"{base}/nodes")
                     nodes = [n["node"] for n in nodes_resp.json().get("data", [])
                              if isinstance(n, dict) and n.get("status") == "online"]
                     for node in nodes:
-                        # List VMs on this node
-                        vms_resp = await client.get(f"{base}/nodes/{node}/qemu")
-                        for vm in vms_resp.json().get("data", []):
-                            vmid = vm.get("vmid", 0)
-                            if 5000 <= vmid < 5100:
-                                await self.log(-1, "info", f"  Destroying target VM {vmid} on {node}")
-                                try:
-                                    await client.post(f"{base}/nodes/{node}/qemu/{vmid}/status/stop",
-                                                      data={"forceStop": 1})
-                                    import asyncio
-                                    await asyncio.sleep(3)
-                                    await client.delete(
-                                        f"{base}/nodes/{node}/qemu/{vmid}",
-                                        params={"destroy-unreferenced-disks": 1, "purge": 1},
-                                    )
-                                except Exception as e:
-                                    await self.log(-1, "warn", f"  Failed to destroy VM {vmid}: {e}")
+                        for rtype in ("qemu", "lxc"):
+                            resp = await client.get(f"{base}/nodes/{node}/{rtype}")
+                            for r in resp.json().get("data", []):
+                                r["_node"] = node
+                                r["_type"] = rtype
+                                all_resources.append(r)
+                return all_resources
+            except Exception as e:
+                await self.log(-1, "warn", f"  Proxmox API query failed: {e}")
+                return []
+
+        async def _proxmox_destroy_vm(vmid: int, node: str, rtype: str = "qemu") -> bool:
+            """Stop and destroy a VM/CT via Proxmox API."""
+            if not px_url or not px_token:
+                return False
+            try:
+
+                headers = {"Authorization": f"PVEAPIToken={px_token}"}
+                base = px_url.rstrip("/") + "/api2/json"
+                async with httpx.AsyncClient(verify=False, timeout=30.0, headers=headers) as client:
+                    # Stop first
+                    await client.post(f"{base}/nodes/{node}/{rtype}/{vmid}/status/stop",
+                                      data={"forceStop": 1})
+                    await asyncio.sleep(5)
+                    # Destroy
+                    params = {"purge": 1}
+                    if rtype == "qemu":
+                        params["destroy-unreferenced-disks"] = 1
+                    await client.delete(f"{base}/nodes/{node}/{rtype}/{vmid}", params=params)
+                    return True
+            except Exception as e:
+                await self.log(-1, "warn", f"  Proxmox API destroy {rtype}/{vmid} failed: {e}")
+                return False
+
+        # Known VMIDs managed by this platform
+        cluster_vmids = {2000, 3001, 3002, 3003}  # master + 3 workers
+        build_vm_vmid = settings.build_vm_vmid      # 201
+
+        # Step 2: Terraform destroy (cluster VMs)
+        await self.log(-1, "info", "Step 2: Destroying cluster VMs via Terraform...")
+        tf_success = False
+        try:
+            tf_dir = self.terraform_dir
+            state_check = await self.process_manager.run_command_simple(
+                ["terraform", "state", "list"], cwd=tf_dir, timeout=30,
+            )
+            if state_check.success and state_check.output.strip():
+                resource_count = len(state_check.output.strip().splitlines())
+                await self.log(-1, "info", f"  Terraform state has {resource_count} resources")
+
+                result = await self.process_manager.run_command(
+                    ["terraform", "destroy", "-auto-approve"],
+                    cwd=tf_dir,
+                    on_output=self._sanitized_output_callback(-1),
+                    timeout=600,
+                )
+                tf_success = result.success
+                if result.success:
+                    await self.log(-1, "info", "  Terraform destroy completed")
+                else:
+                    await self.log(-1, "error", f"  Terraform destroy failed (rc={result.return_code})")
             else:
-                await self.log(-1, "info", "  Skipped (no Proxmox credentials)")
+                await self.log(-1, "info", "  No Terraform state — skipping")
+                tf_success = True
+        except Exception as e:
+            await self.log(-1, "error", f"  Terraform destroy exception: {e}")
+
+        # Validate: check if cluster VMs are actually gone
+        await self.log(-1, "info", "  Validating cluster VMs removed...")
+        remaining_vms = await _proxmox_list_vms()
+        remaining_cluster = [v for v in remaining_vms
+                             if v.get("vmid") in cluster_vmids]
+        if remaining_cluster:
+            await self.log(-1, "warn",
+                           f"  {len(remaining_cluster)} cluster VM(s) still exist — "
+                           "force-destroying via Proxmox API...")
+            for vm in remaining_cluster:
+                vmid = vm["vmid"]
+                node = vm["_node"]
+                rtype = vm["_type"]
+                await self.log(-1, "info", f"    Destroying {rtype} {vmid} on {node}")
+                await _proxmox_destroy_vm(vmid, node, rtype)
+                await asyncio.sleep(2)
+
+            # Re-validate
+            await asyncio.sleep(5)
+            remaining_vms = await _proxmox_list_vms()
+            still_there = [v for v in remaining_vms if v.get("vmid") in cluster_vmids]
+            if still_there:
+                vmids = [v["vmid"] for v in still_there]
+                await self.log(-1, "error", f"  FAILED to remove cluster VMs: {vmids}")
+            else:
+                await self.log(-1, "info", "  All cluster VMs confirmed removed")
+                tf_success = True
+        else:
+            await self.log(-1, "info", "  All cluster VMs confirmed removed")
+
+        # Step 3: Destroy Build VM
+        await self.log(-1, "info", "Step 3: Destroying Build VM...")
+        try:
+            build_lxc_dir = self.repo_root / "terraform" / "build-lxc"
+            build_tfvars = build_lxc_dir / "terraform.tfvars"
+            if build_tfvars.exists():
+                build_result = await self.process_manager.run_command(
+                    ["terraform", "destroy", "-auto-approve"],
+                    cwd=build_lxc_dir,
+                    on_output=self._sanitized_output_callback(-1),
+                    timeout=300,
+                )
+                if build_result.success:
+                    await self.log(-1, "info", "  Terraform destroy completed")
+                    try:
+                        build_tfvars.unlink()
+                    except OSError:
+                        pass
+                else:
+                    await self.log(-1, "warn", f"  Terraform destroy failed — trying Proxmox API")
+            else:
+                await self.log(-1, "info", "  No terraform.tfvars — checking Proxmox directly")
+        except Exception as e:
+            await self.log(-1, "warn", f"  Terraform exception: {e}")
+
+        # Validate: check if Build VM is gone
+        remaining_vms = await _proxmox_list_vms()
+        build_vm_remaining = [v for v in remaining_vms if v.get("vmid") == build_vm_vmid]
+        if build_vm_remaining:
+            vm = build_vm_remaining[0]
+            await self.log(-1, "warn", f"  Build VM {build_vm_vmid} still exists — force-destroying...")
+            await _proxmox_destroy_vm(build_vm_vmid, vm["_node"], vm["_type"])
+            await asyncio.sleep(5)
+            # Re-validate
+            remaining_vms = await _proxmox_list_vms()
+            if any(v.get("vmid") == build_vm_vmid for v in remaining_vms):
+                await self.log(-1, "error", f"  FAILED to remove Build VM {build_vm_vmid}")
+            else:
+                await self.log(-1, "info", "  Build VM confirmed removed")
+        else:
+            await self.log(-1, "info", "  Build VM confirmed removed")
+
+        # Step 4: Clean up orphaned Ceph RBD images
+        await self.log(-1, "info", "Step 4: Cleaning up orphaned Ceph RBD volumes...")
+        try:
+            if proxmox_ssh_pw:
+                ceph_cleanup_cmd = (
+                    "rbd ls -p kubernetes 2>/dev/null | grep '^csi-vol-' | "
+                    "while read img; do "
+                    "rbd snap purge kubernetes/$img 2>/dev/null; "
+                    "rbd rm kubernetes/$img 2>/dev/null && "
+                    "echo \"Removed: $img\"; "
+                    "done; "
+                    "echo \"CSI volume cleanup complete\""
+                )
+                ceph_result = await self.process_manager.run_command(
+                    ["sshpass", "-p", proxmox_ssh_pw,
+                     "ssh", "-o", "StrictHostKeyChecking=no",
+                     f"{settings.proxmox_ssh_user}@{settings.proxmox_host}",
+                     ceph_cleanup_cmd],
+                    on_output=self._sanitized_output_callback(-1),
+                    timeout=600,
+                )
+                # Validate: check if any csi-vol remain
+                verify_cmd = "rbd ls -p kubernetes 2>/dev/null | grep -c '^csi-vol-' || echo 0"
+                verify_result = await self.process_manager.run_command_simple(
+                    ["sshpass", "-p", proxmox_ssh_pw,
+                     "ssh", "-o", "StrictHostKeyChecking=no",
+                     f"{settings.proxmox_ssh_user}@{settings.proxmox_host}",
+                     verify_cmd],
+                    timeout=30,
+                )
+                remaining_count = 0
+                try:
+                    remaining_count = int(verify_result.output.strip())
+                except (ValueError, AttributeError):
+                    pass
+                if remaining_count > 0:
+                    await self.log(-1, "warn", f"  {remaining_count} CSI volumes still remain in Ceph")
+                else:
+                    await self.log(-1, "info", "  All CSI volumes confirmed removed")
+            else:
+                await self.log(-1, "warn", "  Skipping — no Proxmox SSH password available")
+        except Exception as e:
+            await self.log(-1, "warn", f"  Ceph cleanup exception: {e}")
+
+        # Step 5: Destroy target lab VMs (Metasploitable3, VMID 5000-5099)
+        await self.log(-1, "info", "Step 5: Destroying target lab VMs...")
+        try:
+            remaining_vms = await _proxmox_list_vms()
+            lab_vms = [v for v in remaining_vms if 5000 <= v.get("vmid", 0) < 5100]
+            if lab_vms:
+                for vm in lab_vms:
+                    vmid = vm["vmid"]
+                    node = vm["_node"]
+                    rtype = vm["_type"]
+                    await self.log(-1, "info", f"  Destroying {rtype} {vmid} on {node}")
+                    await _proxmox_destroy_vm(vmid, node, rtype)
+                    await asyncio.sleep(2)
+                await self.log(-1, "info", f"  Destroyed {len(lab_vms)} target VMs")
+            else:
+                await self.log(-1, "info", "  No target lab VMs found")
         except Exception as e:
             await self.log(-1, "warn", f"  Target lab cleanup failed: {e}")
 
-        await self.log(-1, "info", "Cleanup completed")
-        return result.success
+        # Step 6: Clean generated configs and kubeconfig
+        await self.log(-1, "info", "Step 6: Cleaning generated configs...")
+        try:
+            clusterconfig_dir = self.talos_dir / "clusterconfig"
+            if clusterconfig_dir.exists():
+                shutil.rmtree(clusterconfig_dir, ignore_errors=True)
+                await self.log(-1, "info", "  Removed clusterconfig directory")
+            kubeconfig = Path.home() / ".kube" / "config"
+            if kubeconfig.exists():
+                kubeconfig.unlink()
+                await self.log(-1, "info", "  Removed kubeconfig")
+        except Exception as e:
+            await self.log(-1, "warn", f"  Config cleanup failed: {e}")
+
+        # === Final Validation ===
+        await self.log(-1, "info", "")
+        await self.log(-1, "info", "=== Final Validation ===")
+        all_clean = True
+
+        # Check VMs
+        remaining_vms = await _proxmox_list_vms()
+        managed_vmids = cluster_vmids | {build_vm_vmid} | set(range(5000, 5100))
+        leftover = [v for v in remaining_vms if v.get("vmid") in managed_vmids]
+        if leftover:
+            vmid_list = [f"{v['_type']}/{v['vmid']}" for v in leftover]
+            await self.log(-1, "error", f"  VMs still present: {', '.join(vmid_list)}")
+            all_clean = False
+        else:
+            await self.log(-1, "info", "  VMs: all removed")
+
+        # Check Terraform state
+        for label, tf_d in [("cluster", self.terraform_dir),
+                            ("build-lxc", self.repo_root / "terraform" / "build-lxc")]:
+            state = await self.process_manager.run_command_simple(
+                ["terraform", "state", "list"], cwd=tf_d, timeout=15,
+            )
+            if state.success and state.output.strip():
+                await self.log(-1, "warn", f"  Terraform {label}: state not empty")
+            else:
+                await self.log(-1, "info", f"  Terraform {label}: clean")
+
+        if all_clean:
+            await self.log(-1, "info", "")
+            await self.log(-1, "info", "Cleanup completed — all resources removed")
+        else:
+            await self.log(-1, "warn", "")
+            await self.log(-1, "warn", "Cleanup completed with warnings — some resources may remain")
+
+        return all_clean
 
     def _get_step_methods(self):
         """Return the ordered list of (step_id, method) tuples.
