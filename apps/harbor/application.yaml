@@ -73,6 +73,29 @@ spec:
           chartmuseum:
             enabled: false
 
+          # ============================================================
+          # OIDC Authentication via Keycloak
+          # ============================================================
+          # NOTE: Harbor OIDC is configured via Harbor admin UI or API
+          # after initial deployment. These Helm values set the initial
+          # auth mode. To enable OIDC:
+          #   1. Log into Harbor admin UI
+          #   2. Go to Configuration > Authentication
+          #   3. Set Auth Mode to "OIDC"
+          #   4. Configure:
+          #      - OIDC Provider: Keycloak
+          #      - OIDC Endpoint: https://keycloak.knowledgeondemand.net/realms/cleanroom
+          #      - OIDC Client ID: harbor
+          #      - OIDC Client Secret: <from Keycloak>
+          #      - OIDC Scope: openid,profile,email
+          #      - Automatic onboarding: checked
+          #      - Username Claim: preferred_username
+          #      - Group Claim: groups
+          #
+          # The goharbor Helm chart does not expose OIDC settings as
+          # first-class Helm values — configuration must be done post-deploy.
+          # ============================================================
+
           # Component resource limits
           core:
             resources:

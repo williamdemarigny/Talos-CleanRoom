@@ -69,6 +69,14 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
+    # Allow connection to Keycloak (OIDC token validation, JWKS)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
     # Allow internal namespace communication
     - to:
         - namespaceSelector:

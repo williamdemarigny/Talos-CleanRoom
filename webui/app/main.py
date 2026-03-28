@@ -58,7 +58,11 @@ async def index(request: Request, user: dict = Depends(get_current_user_optional
 @app.get("/login")
 async def login_page(request: Request):
     """Render the login page."""
-    return templates.TemplateResponse("login.html", {"request": request})
+    settings = get_settings()
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "oidc_enabled": bool(settings.oidc_issuer_url),
+    })
 
 
 @app.get("/config")

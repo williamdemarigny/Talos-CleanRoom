@@ -33,6 +33,22 @@ router = APIRouter(tags=["OIDC"])
 OIDC_STATE_COOKIE = "__Host-oidc_state"
 
 
+def _build_callback_uri(request: Request) -> str:
+    """Build the OIDC callback URI from the current request.
+
+    Uses the request's host and scheme (respecting X-Forwarded-* headers
+    from Traefik) to construct the callback URL. This avoids needing a
+    separate oidc_redirect_host config field per app.
+    """
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.hostname)
+    port = request.url.port
+    # Don't include port for standard HTTPS
+    if port and port != 443 and scheme == "https":
+        return f"{scheme}://{host}:{port}/auth/callback"
+    return f"{scheme}://{host}/auth/callback"
+
+
 @router.get("/auth/login")
 async def oidc_login(
     request: Request,
@@ -55,8 +71,13 @@ async def oidc_login(
     state_mgr = OIDCStateManager(settings.fernet_key)
     encrypted_state = state_mgr.encrypt_state(state, nonce, code_verifier)
 
+    # Build callback URI from request
+    callback_uri = _build_callback_uri(request)
+
     # Build authorization URL
-    auth_url = await build_authorization_url(settings, state, nonce, code_challenge)
+    auth_url = await build_authorization_url(
+        settings, callback_uri, state, nonce, code_challenge,
+    )
 
     # Set encrypted state cookie and redirect
     response = RedirectResponse(url=auth_url, status_code=302)
@@ -114,10 +135,7 @@ async def oidc_callback(
         return RedirectResponse(url="/login?error=state_mismatch", status_code=302)
 
     # Build redirect URI (must match what was sent in authorization request)
-    redirect_uri = str(request.url_for("oidc_callback"))
-    # Ensure HTTPS
-    if redirect_uri.startswith("http://"):
-        redirect_uri = redirect_uri.replace("http://", "https://", 1)
+    redirect_uri = _build_callback_uri(request)
 
     # Exchange authorization code for tokens
     tokens = await exchange_code_for_tokens(
@@ -163,13 +181,21 @@ async def oidc_logout(
     then Keycloak redirects back to the login page.
     """
     if not settings.oidc_issuer_url:
-        return RedirectResponse(url="/login", status_code=302)
+        # OIDC not configured — clear cookies and redirect to local login
+        response = RedirectResponse(url="/login", status_code=302)
+        response.delete_cookie(key="access_token")
+        return response
+
+    # Build post-logout redirect URI (login page of this app)
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.hostname)
+    post_logout_uri = f"{scheme}://{host}/login"
 
     # Get the ID token hint if available (for single logout)
     id_token_hint = request.cookies.get("id_token")
 
     # Build logout URL
-    logout_url = await get_end_session_url(settings, id_token_hint)
+    logout_url = await get_end_session_url(settings, post_logout_uri, id_token_hint)
 
     # Clear local cookies and redirect to Keycloak logout
     response = RedirectResponse(url=logout_url, status_code=302)
