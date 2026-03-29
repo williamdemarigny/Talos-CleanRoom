@@ -3070,11 +3070,21 @@ echo "=== Setup Complete ==="
         await self.log(step_id, "info", "Deploying authentication services...")
 
         # --- 1. Deploy ArgoCD apps ---
+        # keycloak Helm chart + keycloak-manifests IngressRoute (split to avoid multi-source)
         for app in ["deployment-console", "keycloak", "oauth2-proxy"]:
             if not await self._deploy_argocd_app(app, step_id):
                 await self.log(step_id, "warn", f"Failed to deploy {app}")
                 if app == "keycloak":
                     return False  # Keycloak is required
+
+        # Deploy keycloak IngressRoute separately (application-manifests.yaml)
+        manifests_yaml = self.projects_dir / "keycloak" / "application-manifests.yaml"
+        result = await self.process_manager.run_command(
+            ["kubectl", "apply", "-f", str(manifests_yaml)],
+            on_output=self._sanitized_output_callback(step_id),
+        )
+        if not result.success:
+            await self.log(step_id, "warn", "Failed to deploy keycloak-manifests (IngressRoute)")
 
         await self._wait_for_argocd_sync("deployment-console", step_id)
 

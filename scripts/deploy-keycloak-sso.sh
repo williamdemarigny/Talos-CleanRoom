@@ -119,7 +119,10 @@ kubectl apply -f "$REPO_ROOT/apps/deployment-console/application.yaml"
 log_info "Applied deployment-console ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/keycloak/application.yaml"
-log_info "Applied keycloak ArgoCD app"
+log_info "Applied keycloak Helm ArgoCD app"
+
+kubectl apply -f "$REPO_ROOT/apps/keycloak/application-manifests.yaml"
+log_info "Applied keycloak IngressRoute ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/oauth2-proxy/application.yaml"
 log_info "Applied oauth2-proxy ArgoCD app"
