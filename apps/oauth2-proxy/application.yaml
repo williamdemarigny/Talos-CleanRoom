@@ -34,6 +34,7 @@ spec:
           cookie-samesite: lax
           skip-provider-button: "true"
           upstream: static://200
+          ssl-insecure-skip-verify: "true"
 
         resources:
           requests:
