@@ -94,5 +94,6 @@ DEPLOYMENT_STEPS = [
     DeploymentStep(id=20, name="prepare_target_templates", description="Prepare Target VM Templates"),
     DeploymentStep(id=21, name="build_push_images", description="Build & Push Container Images"),
     DeploymentStep(id=22, name="deploy_cleanroom_apps", description="Deploy CleanRoom Applications"),
-    DeploymentStep(id=23, name="apply_network_policies", description="Apply Network Policies"),
+    DeploymentStep(id=23, name="deploy_auth_services", description="Deploy Keycloak SSO & Auth Services"),
+    DeploymentStep(id=24, name="apply_network_policies", description="Apply Network Policies"),
 ]

@@ -1080,7 +1080,8 @@ class DeploymentService(BaseServiceMixin):
             (20, self._step_prepare_target_templates),
             (21, self._step_build_push_images),
             (22, self._step_deploy_cleanroom_apps),
-            (23, self._step_apply_network_policies),
+            (23, self._step_deploy_auth_services),
+            (24, self._step_apply_network_policies),
         ]
 
     async def _run_deployment(self, resume_from_step: int = 0):
@@ -2352,6 +2353,29 @@ class DeploymentService(BaseServiceMixin):
         })
         self.credentials["portal"] = {"username": "admin", "password": "admin", "note": "Default"}
 
+        # Keycloak SSO
+        await self.k8s.ensure_namespace("keycloak")
+        kc_admin_password = self._generate_password(24)
+        kc_db_password = self._generate_password(32)
+        await self._create_secret(step_id, "cleanroom-db", "keycloak-db-credentials",
+                                  {"postgres-password": kc_db_password})
+        await self._create_secret(step_id, "keycloak", "keycloak-credentials",
+                                  {"admin-password": kc_admin_password})
+        await self._create_secret(step_id, "keycloak", "keycloak-db-credentials",
+                                  {"postgres-password": kc_db_password})
+        self.credentials["keycloak"] = {"username": "admin", "password": kc_admin_password}
+
+        # OAuth2-Proxy (ForwardAuth for Faraday/OpenVAS/Threat Dragon)
+        await self.k8s.ensure_namespace("oauth2-proxy")
+        oauth2_cookie_secret = self._generate_password(32)
+        await self._create_secret(step_id, "oauth2-proxy", "oauth2-proxy-credentials", {
+            "client-secret": "configure-after-keycloak-realm-import",
+            "cookie-secret": oauth2_cookie_secret,
+        })
+
+        # Deployment Console namespace (for ExternalName service + IngressRoute)
+        await self.k8s.ensure_namespace("deployment-console")
+
         # Threat Dragon (keys for Threat Dragon — step 14 doesn't create secrets)
         await self.k8s.ensure_namespace("threat-dragon")
         td_enc = self._generate_password(32)
@@ -2423,6 +2447,31 @@ class DeploymentService(BaseServiceMixin):
             f'  jwt-refresh-signing-key: "{td_refresh}"\n'
         ))
 
+        # Keycloak DB credentials (in cleanroom-db namespace)
+        await write_sops_file("apps/cleanroom-db/keycloak-db-credentials.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: keycloak-db-credentials\n"
+            "  namespace: cleanroom-db\ntype: Opaque\nstringData:\n"
+            f'  postgres-password: "{kc_db_password}"\n'
+        ))
+
+        # Keycloak credentials (admin + DB password in keycloak namespace)
+        await write_sops_file("apps/keycloak/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: keycloak-credentials\n"
+            "  namespace: keycloak\ntype: Opaque\nstringData:\n"
+            f'  admin-password: "{kc_admin_password}"\n'
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: keycloak-db-credentials\n"
+            "  namespace: keycloak\ntype: Opaque\nstringData:\n"
+            f'  postgres-password: "{kc_db_password}"\n'
+        ))
+
+        # OAuth2-Proxy credentials
+        await write_sops_file("apps/oauth2-proxy/secrets.sops.yaml", (
+            "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth2-proxy-credentials\n"
+            "  namespace: oauth2-proxy\ntype: Opaque\nstringData:\n"
+            f'  client-secret: "configure-after-keycloak-realm-import"\n'
+            f'  cookie-secret: "{oauth2_cookie_secret}"\n'
+        ))
+
         # --- 3. Generate credential vault for Portal ---
         await self.log(step_id, "info", "Generating credential vault for Portal...")
 
@@ -2431,6 +2480,7 @@ class DeploymentService(BaseServiceMixin):
         traefik_pw = self.credentials.get("traefik", {}).get("password", "admin")
 
         vault_yaml = (
+            f'- service: Keycloak SSO\n  url: https://keycloak.knowledgeondemand.net\n  username: admin\n  password: "{kc_admin_password}"\n'
             f'- service: ArgoCD\n  url: https://argocd.knowledgeondemand.net\n  username: admin\n  password: "admin"\n'
             f'- service: OpenVAS\n  url: https://openvas.knowledgeondemand.net\n  username: admin\n  password: "{openvas_pw}"\n'
             f'- service: Faraday\n  url: https://faraday.knowledgeondemand.net\n  username: admin\n  password: "{faraday_pw}"\n'
@@ -3007,8 +3057,204 @@ echo "=== Setup Complete ==="
 
         return True
 
+    async def _step_deploy_auth_services(self, step_id: int) -> bool:
+        """Step 23: Deploy Keycloak SSO, OAuth2-Proxy, and Deployment Console routing.
+
+        Fully automated:
+        1. Deploy ArgoCD apps (deployment-console, keycloak, oauth2-proxy)
+        2. Wait for Keycloak to be ready
+        3. Import realm with pre-generated client secrets via Keycloak REST API
+        4. Patch portal/scanning-console/argocd/oauth2-proxy secrets with OIDC credentials
+        5. Restart pods to pick up OIDC config
+        """
+        await self.log(step_id, "info", "Deploying authentication services...")
+
+        # --- 1. Deploy ArgoCD apps ---
+        for app in ["deployment-console", "keycloak", "oauth2-proxy"]:
+            if not await self._deploy_argocd_app(app, step_id):
+                await self.log(step_id, "warn", f"Failed to deploy {app}")
+                if app == "keycloak":
+                    return False  # Keycloak is required
+
+        await self._wait_for_argocd_sync("deployment-console", step_id)
+
+        # --- 2. Wait for Keycloak to be ready ---
+        await self.log(step_id, "info", "Waiting for Keycloak to be ready...")
+        if not await self._wait_for_argocd_sync("keycloak", step_id):
+            await self.log(step_id, "error", "Keycloak failed to sync")
+            return False
+
+        # Poll until Keycloak health endpoint responds
+        kc_ready = await self.poll_until(
+            check_fn=lambda: self.process_manager.run_command_simple(
+                ["kubectl", "-n", "keycloak", "exec",
+                 "deploy/keycloak", "--",
+                 "curl", "-sf", "http://localhost:8080/health/ready"],
+                timeout=10,
+            ),
+            description="Keycloak health check",
+            max_attempts=36,  # 6 minutes
+            interval=10,
+            step_id=step_id,
+        )
+        if not kc_ready:
+            await self.log(step_id, "error", "Keycloak not healthy after 6 minutes")
+            return False
+
+        # --- 3. Import realm with pre-generated client secrets ---
+        await self.log(step_id, "info", "Importing Keycloak realm configuration...")
+
+        # Generate OIDC client secrets
+        client_secrets = {
+            "__SECRET_PORTAL__": self._generate_password(32),
+            "__SECRET_SCANNING_CONSOLE__": self._generate_password(32),
+            "__SECRET_DEPLOYMENT_CONSOLE__": self._generate_password(32),
+            "__SECRET_ARGOCD__": self._generate_password(32),
+            "__SECRET_HARBOR__": self._generate_password(32),
+            "__SECRET_FORWARD_AUTH__": self._generate_password(32),
+        }
+
+        # Read realm template and substitute secrets
+        realm_template_path = self.repo_root / "apps" / "keycloak" / "realm-config.json"
+        realm_json = realm_template_path.read_text()
+        for placeholder, secret in client_secrets.items():
+            realm_json = realm_json.replace(placeholder, secret)
+
+        # Write templated realm to a temp file inside the Keycloak pod
+        import base64 as b64mod
+        realm_b64 = b64mod.b64encode(realm_json.encode()).decode()
+
+        # Copy realm JSON into the pod and import via kcadm.sh
+        kc_admin_pw = self.credentials.get("keycloak", {}).get("password", "admin")
+
+        # Write realm JSON to pod
+        write_result = await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
+             "bash", "-c", f"echo '{realm_b64}' | base64 -d > /tmp/realm.json"],
+            timeout=15,
+        )
+        if not write_result.success:
+            await self.log(step_id, "error", "Failed to write realm config to Keycloak pod")
+            return False
+
+        # Authenticate to Keycloak admin CLI
+        auth_result = await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
+             "/opt/bitnami/keycloak/bin/kcadm.sh", "config", "credentials",
+             "--server", "http://localhost:8080",
+             "--realm", "master",
+             "--user", "admin",
+             "--password", kc_admin_pw],
+            timeout=30,
+        )
+        if not auth_result.success:
+            await self.log(step_id, "error", f"Keycloak admin auth failed: {auth_result.output[:200]}")
+            return False
+
+        # Import the realm
+        import_result = await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
+             "/opt/bitnami/keycloak/bin/kcadm.sh", "create", "realms",
+             "-f", "/tmp/realm.json"],
+            timeout=30,
+        )
+        if not import_result.success:
+            # Realm may already exist — try partial import instead
+            await self.log(step_id, "info", "Realm may exist, attempting partial import...")
+            import_result = await self.process_manager.run_command_simple(
+                ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
+                 "/opt/bitnami/keycloak/bin/kcadm.sh", "create", "partialImport",
+                 "-r", "cleanroom", "-f", "/tmp/realm.json",
+                 "-s", "ifResourceExists=OVERWRITE"],
+                timeout=30,
+            )
+            if not import_result.success:
+                await self.log(step_id, "warn", f"Realm import issue: {import_result.output[:200]}")
+
+        await self.log(step_id, "info", "Keycloak realm 'cleanroom' imported successfully")
+
+        # Store client secrets in credentials
+        self.credentials["keycloak_oidc"] = {
+            "portal": client_secrets["__SECRET_PORTAL__"],
+            "scanning_console": client_secrets["__SECRET_SCANNING_CONSOLE__"],
+            "deployment_console": client_secrets["__SECRET_DEPLOYMENT_CONSOLE__"],
+            "argocd": client_secrets["__SECRET_ARGOCD__"],
+            "harbor": client_secrets["__SECRET_HARBOR__"],
+            "forward_auth": client_secrets["__SECRET_FORWARD_AUTH__"],
+        }
+        self._save_state()
+
+        # --- 4. Patch app secrets with OIDC credentials ---
+        await self.log(step_id, "info", "Configuring OIDC credentials in application secrets...")
+
+        issuer_url = "https://keycloak.knowledgeondemand.net/realms/cleanroom"
+
+        # Portal
+        await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "portal", "patch", "secret", "portal-credentials",
+             "--type", "merge", "-p",
+             f'{{"stringData":{{"oidc-issuer-url":"{issuer_url}",'
+             f'"oidc-client-id":"portal",'
+             f'"oidc-client-secret":"{client_secrets["__SECRET_PORTAL__"]}"}}}}'],
+            timeout=10,
+        )
+        await self.log(step_id, "info", "  Portal OIDC credentials configured")
+
+        # Scanning Console
+        await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "scanning-console", "patch", "secret", "scanning-console-credentials",
+             "--type", "merge", "-p",
+             f'{{"stringData":{{"oidc-issuer-url":"{issuer_url}",'
+             f'"oidc-client-id":"scanning-console",'
+             f'"oidc-client-secret":"{client_secrets["__SECRET_SCANNING_CONSOLE__"]}"}}}}'],
+            timeout=10,
+        )
+        await self.log(step_id, "info", "  Scanning Console OIDC credentials configured")
+
+        # ArgoCD
+        await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret",
+             "--type", "merge", "-p",
+             f'{{"stringData":{{"oidc.keycloak.clientSecret":"{client_secrets["__SECRET_ARGOCD__"]}"}}}}'],
+            timeout=10,
+        )
+        await self.log(step_id, "info", "  ArgoCD OIDC credentials configured")
+
+        # OAuth2-Proxy
+        await self.process_manager.run_command_simple(
+            ["kubectl", "-n", "oauth2-proxy", "patch", "secret", "oauth2-proxy-credentials",
+             "--type", "merge", "-p",
+             f'{{"stringData":{{"client-secret":"{client_secrets["__SECRET_FORWARD_AUTH__"]}"}}}}'],
+            timeout=10,
+        )
+        await self.log(step_id, "info", "  OAuth2-Proxy credentials configured")
+
+        # --- 5. Restart pods to pick up OIDC config ---
+        await self.log(step_id, "info", "Restarting applications to enable OIDC...")
+
+        for ns, deploy in [("portal", "portal"), ("scanning-console", "scanning-console"),
+                           ("oauth2-proxy", "oauth2-proxy")]:
+            await self.process_manager.run_command_simple(
+                ["kubectl", "-n", ns, "rollout", "restart", f"deployment/{deploy}"],
+                timeout=10,
+            )
+
+        # Wait for OAuth2-Proxy to sync
+        await self._wait_for_argocd_sync("oauth2-proxy", step_id)
+
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "Authentication services fully deployed and configured:")
+        await self.log(step_id, "info", "  - Keycloak SSO:       https://keycloak.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - Deployment Console: https://deploy.knowledgeondemand.net")
+        await self.log(step_id, "info", "  - OAuth2-Proxy:       Internal (ForwardAuth middleware)")
+        await self.log(step_id, "info", "")
+        await self.log(step_id, "info", "SSO is now active. Users can log in via 'Sign in with Keycloak SSO'.")
+        await self.log(step_id, "info", f"Keycloak admin: admin / {kc_admin_pw}")
+
+        return True
+
     async def _step_apply_network_policies(self, step_id: int) -> bool:
-        """Step 22: Apply zero-trust network policies to all namespaces.
+        """Step 24: Apply zero-trust network policies to all namespaces.
 
         Applied last because earlier steps need unrestricted network during setup.
         Applies each file individually so policies for non-existent namespaces
