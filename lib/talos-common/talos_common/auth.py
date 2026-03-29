@@ -72,7 +72,13 @@ def _get_jwks_client(issuer_url: str):
     """Get or create a cached PyJWKClient for the given issuer."""
     if issuer_url not in _jwks_client_cache:
         jwks_uri = f"{issuer_url}/protocol/openid-connect/certs"
-        _jwks_client_cache[issuer_url] = PyJWKClient(jwks_uri)
+        # ssl_context=False skips TLS verification (staging certs)
+        # Switch to default (True) after moving to letsencrypt-prod
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        _jwks_client_cache[issuer_url] = PyJWKClient(jwks_uri, ssl_context=ctx)
     return _jwks_client_cache[issuer_url]
 
 

@@ -29,7 +29,7 @@ async def get_oidc_config(issuer_url: str) -> dict:
         return _oidc_config_cache[issuer_url]
 
     well_known_url = f"{issuer_url}/.well-known/openid-configuration"
-    async with httpx.AsyncClient(verify=True, timeout=10.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
         response = await client.get(well_known_url)
         response.raise_for_status()
         config = response.json()
@@ -115,7 +115,7 @@ async def exchange_code_for_tokens(
         "code_verifier": code_verifier,
     }
 
-    async with httpx.AsyncClient(verify=True, timeout=10.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
         response = await client.post(token_endpoint, data=data)
         if response.status_code != 200:
             logger.error("Token exchange failed: %s %s", response.status_code, response.text)

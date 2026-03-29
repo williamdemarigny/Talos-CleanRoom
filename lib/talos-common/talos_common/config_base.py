@@ -36,6 +36,7 @@ class BaseAppSettings(BaseSettings):
     oidc_redirect_path: str = "/auth/callback"
     oidc_redirect_host: str = ""   # e.g. "scan.knowledgeondemand.net" — set per-app via env
     oidc_scopes: str = "openid profile email"
+    oidc_verify_ssl: bool = False  # Set True after switching to letsencrypt-prod
 
     # Known default hash — used to detect first-login and prompt password change
     _DEFAULT_PASSWORD_HASH: str = (
