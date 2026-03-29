@@ -3089,19 +3089,19 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "error", "Keycloak failed to sync")
             return False
 
-        # Poll until Keycloak health endpoint responds (timeout=360s, check every 10s)
+        # Poll until Keycloak responds via Traefik (timeout=360s, check every 10s)
+        await self.log(step_id, "info", "Waiting for Keycloak to respond via Traefik...")
         kc_ready = await self.poll_until(
             check_fn=lambda: self.process_manager.run_command_simple(
-                ["kubectl", "-n", "keycloak", "exec",
-                 "deploy/keycloak", "--",
-                 "curl", "-sf", "http://localhost:9000/health/ready"],
+                ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                 "https://keycloak.knowledgeondemand.net/realms/master"],
                 timeout=10,
             ),
             timeout=360,
             interval=10,
         )
         if not kc_ready:
-            await self.log(step_id, "error", "Keycloak not healthy after 6 minutes")
+            await self.log(step_id, "error", "Keycloak not reachable via Traefik after 6 minutes")
             return False
 
         # --- 3. Import realm with pre-generated client secrets ---
@@ -3128,83 +3128,62 @@ echo "=== Setup Complete ==="
         kc_admin_pw = self.credentials.get("keycloak", {}).get("password", "admin")
         kc_base = "http://keycloak.keycloak.svc.cluster.local"
 
-        # Step A: Get admin access token (with retries — Keycloak may still be warming up)
+        # Step A: Get admin access token via Traefik (with retries — Keycloak/Traefik may still be warming up)
         await self.log(step_id, "info", "Authenticating to Keycloak admin API...")
         import json as jsonmod
+        import asyncio
+        import tempfile, os
+
+        kc_url = "https://keycloak.knowledgeondemand.net"
         admin_token = None
-        for attempt in range(12):  # 2 minutes of retries
+
+        for attempt in range(18):  # 3 minutes of retries
             token_result = await self.process_manager.run_command_simple(
-                ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
-                 "curl", "-sf", "-X", "POST",
-                 "http://localhost:8080/realms/master/protocol/openid-connect/token",
+                ["curl", "-sk", "-X", "POST",
+                 f"{kc_url}/realms/master/protocol/openid-connect/token",
                  "-d", f"grant_type=password&client_id=admin-cli&username=admin&password={kc_admin_pw}"],
                 timeout=15,
             )
-            if token_result.success:
+            if token_result.success and token_result.output.strip().startswith("{"):
                 try:
                     token_data = jsonmod.loads(token_result.output)
-                    admin_token = token_data["access_token"]
-                    break
+                    admin_token = token_data.get("access_token")
+                    if admin_token:
+                        break
                 except (jsonmod.JSONDecodeError, KeyError):
                     pass
-            await self.log(step_id, "info", f"  Keycloak API not ready, retrying ({attempt + 1}/12)...")
-            import asyncio
+            await self.log(step_id, "info", f"  Keycloak not ready via Traefik, retrying ({attempt + 1}/18)...")
             await asyncio.sleep(10)
 
         if not admin_token:
-            await self.log(step_id, "error", f"Keycloak admin auth failed after 12 attempts: {token_result.output[:200]}")
+            await self.log(step_id, "error",
+                           f"Keycloak admin auth failed after 18 attempts. Last response: {token_result.output[:300]}")
             return False
 
         await self.log(step_id, "info", "Authenticated to Keycloak admin API")
 
-        # Step B: Import realm via REST API (using kubectl exec + curl to localhost)
+        # Step B: Import realm via REST API from LXC
         await self.log(step_id, "info", "Importing realm via REST API...")
-        import tempfile, os
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(realm_json)
+            realm_tmp = f.name
 
-        # Write realm JSON to temp file, base64 encode, pipe into pod
-        import base64 as b64mod
-        realm_b64 = b64mod.b64encode(realm_json.encode()).decode()
-
-        # Use kubectl exec with sh (not bash) to decode and POST in one command
         import_result = await self.process_manager.run_command_simple(
-            ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
-             "sh", "-c",
-             f"echo '{realm_b64}' | base64 -d | "
-             f"curl -sf -X POST http://localhost:8080/admin/realms "
-             f"-H 'Authorization: Bearer {admin_token}' "
-             f"-H 'Content-Type: application/json' "
-             f"-d @- -w '%{{http_code}}' -o /dev/null"],
+            ["curl", "-sk", "-X", "POST",
+             f"{kc_url}/admin/realms",
+             "-H", f"Authorization: Bearer {admin_token}",
+             "-H", "Content-Type: application/json",
+             "-d", f"@{realm_tmp}",
+             "-w", "%{http_code}", "-o", "/dev/null"],
             timeout=30,
         )
+        os.unlink(realm_tmp)
 
         http_code = import_result.output.strip() if import_result.success else ""
         if http_code == "201":
             await self.log(step_id, "info", "Realm 'cleanroom' created successfully")
         elif http_code == "409":
             await self.log(step_id, "info", "Realm 'cleanroom' already exists — skipping import")
-        elif not import_result.success:
-            # curl may not exist in the image — fall back to calling from LXC via service DNS
-            await self.log(step_id, "info", "kubectl exec failed, trying via K8s service DNS...")
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                f.write(realm_json)
-                realm_tmp = f.name
-            import_result = await self.process_manager.run_command_simple(
-                ["curl", "-sk", "-X", "POST",
-                 "https://keycloak.knowledgeondemand.net/admin/realms",
-                 "-H", f"Authorization: Bearer {admin_token}",
-                 "-H", "Content-Type: application/json",
-                 "-d", f"@{realm_tmp}",
-                 "-w", "%{http_code}", "-o", "/dev/null"],
-                timeout=30,
-            )
-            os.unlink(realm_tmp)
-            http_code = import_result.output.strip() if import_result.success else ""
-            if http_code == "201":
-                await self.log(step_id, "info", "Realm 'cleanroom' created successfully")
-            elif http_code == "409":
-                await self.log(step_id, "info", "Realm 'cleanroom' already exists — skipping import")
-            else:
-                await self.log(step_id, "warn", f"Realm import returned HTTP {http_code} — may need manual config")
         else:
             await self.log(step_id, "warn", f"Realm import returned HTTP {http_code} — may need manual config")
 
