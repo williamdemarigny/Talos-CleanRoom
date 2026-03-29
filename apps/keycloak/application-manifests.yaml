@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak-manifests
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+  annotations:
+    # Wave 2: Same as keycloak Helm app
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
+    targetRevision: refactor/restructure
+    path: apps/keycloak
+    directory:
+      recurse: false
+      # Only pick up the IngressRoute and namespace — exclude Helm app, secrets, templates, realm config
+      exclude: '{application.yaml,application-manifests.yaml,*.sops.yaml,*.template,realm-config.json}'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keycloak
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
