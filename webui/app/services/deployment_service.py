@@ -3132,8 +3132,7 @@ echo "=== Setup Complete ==="
         token_result = await self.process_manager.run_command_simple(
             ["curl", "-sk", "-X", "POST",
              "https://keycloak.knowledgeondemand.net/realms/master/protocol/openid-connect/token",
-             "-d", "grant_type=client_credentials&client_id=admin-cli"
-                   f"&grant_type=password&username=admin&password={kc_admin_pw}"],
+             "-d", f"grant_type=password&client_id=admin-cli&username=admin&password={kc_admin_pw}"],
             timeout=15,
         )
         if not token_result.success:
