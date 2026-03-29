@@ -22,7 +22,7 @@
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 28800,
 
-  "passwordPolicy": "length(8) and notUsername",
+  "passwordPolicy": "",
 
   "roles": {
     "realm": [
