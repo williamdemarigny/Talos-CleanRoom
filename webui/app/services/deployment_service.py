@@ -2369,6 +2369,7 @@ class DeploymentService(BaseServiceMixin):
         await self.k8s.ensure_namespace("oauth2-proxy")
         oauth2_cookie_secret = self._generate_password(32)
         await self._create_secret(step_id, "oauth2-proxy", "oauth2-proxy-credentials", {
+            "client-id": "traefik-forward-auth",
             "client-secret": "configure-after-keycloak-realm-import",
             "cookie-secret": oauth2_cookie_secret,
         })
@@ -2468,6 +2469,7 @@ class DeploymentService(BaseServiceMixin):
         await write_sops_file("apps/oauth2-proxy/secrets.sops.yaml", (
             "---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth2-proxy-credentials\n"
             "  namespace: oauth2-proxy\ntype: Opaque\nstringData:\n"
+            f'  client-id: "traefik-forward-auth"\n'
             f'  client-secret: "configure-after-keycloak-realm-import"\n'
             f'  cookie-secret: "{oauth2_cookie_secret}"\n'
         ))

@@ -72,6 +72,7 @@ log_info "Created keycloak-db-credentials in keycloak"
 
 # OAuth2-Proxy credentials
 kubectl -n oauth2-proxy create secret generic oauth2-proxy-credentials \
+    --from-literal=client-id="traefik-forward-auth" \
     --from-literal=client-secret="configure-after-keycloak-realm-import" \
     --from-literal=cookie-secret="$OAUTH2_COOKIE_SECRET" \
     --dry-run=client -o yaml | kubectl apply -f -
