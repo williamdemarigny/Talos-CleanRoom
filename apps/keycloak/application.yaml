@@ -11,90 +11,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://charts.bitnami.com/bitnami
-    chart: keycloak
-    targetRevision: 24.4.0
-    helm:
-      valuesObject:
-        # ============================================================
-        # Authentication
-        # ============================================================
-        auth:
-          adminUser: admin
-          existingSecret: keycloak-credentials
-          passwordSecretKey: admin-password
-
-        # ============================================================
-        # External PostgreSQL (shared cleanroom-db, keycloak user)
-        # ============================================================
-        postgresql:
-          enabled: false
-        externalDatabase:
-          host: cleanroom-db.cleanroom-db.svc.cluster.local
-          port: 5432
-          user: keycloak
-          database: keycloak
-          existingSecret: keycloak-db-credentials
-          existingSecretPasswordKey: postgres-password
-
-        # ============================================================
-        # Proxy & Networking
-        # ============================================================
-        proxy: edge  # Traefik handles TLS termination
-        httpRelativePath: /
-
-        # ============================================================
-        # Resources
-        # ============================================================
-        resources:
-          requests:
-            cpu: 250m
-            memory: 512Mi
-          limits:
-            cpu: "1"
-            memory: 1Gi
-
-        # ============================================================
-        # Init containers: wait for cleanroom-db readiness
-        # ============================================================
-        initContainers:
-          - name: wait-for-db
-            image: postgres:17-alpine
-            command:
-              - sh
-              - -c
-              - |
-                echo "Waiting for cleanroom-db to be ready..."
-                until pg_isready -h cleanroom-db.cleanroom-db.svc.cluster.local -p 5432 -U keycloak -d keycloak; do
-                  echo "  Database not ready, retrying in 5s..."
-                  sleep 5
-                done
-                echo "Database is ready."
-            resources:
-              requests:
-                memory: "32Mi"
-                cpu: "25m"
-              limits:
-                memory: "64Mi"
-                cpu: "100m"
-
-        # ============================================================
-        # Replicas & Production settings
-        # ============================================================
-        replicaCount: 1
-        production: true
-
-        # ============================================================
-        # Keycloak configuration
-        # ============================================================
-        extraEnvVars:
-          - name: KC_HOSTNAME
-            value: keycloak.knowledgeondemand.net
-          - name: KC_HOSTNAME_STRICT
-            value: "false"
-          - name: KC_PROXY_HEADERS
-            value: xforwarded
-
+    repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
+    targetRevision: refactor/restructure
+    path: apps/keycloak
+    directory:
+      recurse: false
+      exclude: '{application.yaml,application-manifests.yaml,*.sops.yaml,*.template,realm-config.json}'
   destination:
     server: https://kubernetes.default.svc
     namespace: keycloak
