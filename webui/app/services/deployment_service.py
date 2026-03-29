@@ -2997,6 +2997,20 @@ echo "=== Setup Complete ==="
             f"{ssh_user}@{container_ip}",
         ]
 
+        # Update the Build VM's git repo to latest before building
+        await self.log(step_id, "info", "Updating Build VM git repository...")
+        git_result = await self.process_manager.run_command(
+            ssh_cmd_prefix + [
+                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/refactor/restructure"
+            ],
+            on_output=self._sanitized_output_callback(step_id),
+            timeout=60,
+        )
+        if not git_result.success:
+            await self.log(step_id, "error", f"Failed to update Build VM repo: {git_result.output[:200]}")
+            return False
+        await self.log(step_id, "info", "Build VM repo updated to latest")
+
         # Build scripts and their paths in the repo
         build_scripts = [
             ("LOKI-RS Scanner", "/opt/talos-cleanroom/apps/loki/build-and-push.sh"),
