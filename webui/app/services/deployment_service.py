@@ -3089,7 +3089,7 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "error", "Keycloak failed to sync")
             return False
 
-        # Poll until Keycloak health endpoint responds
+        # Poll until Keycloak health endpoint responds (timeout=360s, check every 10s)
         kc_ready = await self.poll_until(
             check_fn=lambda: self.process_manager.run_command_simple(
                 ["kubectl", "-n", "keycloak", "exec",
@@ -3097,10 +3097,8 @@ echo "=== Setup Complete ==="
                  "curl", "-sf", "http://localhost:9000/health/ready"],
                 timeout=10,
             ),
-            description="Keycloak health check",
-            max_attempts=36,  # 6 minutes
+            timeout=360,
             interval=10,
-            step_id=step_id,
         )
         if not kc_ready:
             await self.log(step_id, "error", "Keycloak not healthy after 6 minutes")
