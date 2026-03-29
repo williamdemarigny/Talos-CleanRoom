@@ -120,10 +120,7 @@ kubectl apply -f "$REPO_ROOT/apps/deployment-console/application.yaml"
 log_info "Applied deployment-console ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/keycloak/application.yaml"
-log_info "Applied keycloak Helm ArgoCD app"
-
-kubectl apply -f "$REPO_ROOT/apps/keycloak/application-manifests.yaml"
-log_info "Applied keycloak IngressRoute ArgoCD app"
+log_info "Applied keycloak ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/oauth2-proxy/application.yaml"
 log_info "Applied oauth2-proxy ArgoCD app"
@@ -174,7 +171,7 @@ log_info "Realm config written to Keycloak pod"
 
 # Authenticate with Keycloak admin CLI
 kubectl -n keycloak exec deploy/keycloak -- \
-    /opt/bitnami/keycloak/bin/kcadm.sh config credentials \
+    /opt/keycloak/bin/kcadm.sh config credentials \
     --server http://localhost:8080 \
     --realm master \
     --user admin \
@@ -183,13 +180,13 @@ log_info "Authenticated to Keycloak admin API"
 
 # Import the realm
 if kubectl -n keycloak exec deploy/keycloak -- \
-    /opt/bitnami/keycloak/bin/kcadm.sh create realms \
+    /opt/keycloak/bin/kcadm.sh create realms \
     -f /tmp/realm.json 2>/dev/null; then
     log_info "Realm 'cleanroom' created successfully"
 else
     log_warn "Realm may already exist, attempting partial import..."
     kubectl -n keycloak exec deploy/keycloak -- \
-        /opt/bitnami/keycloak/bin/kcadm.sh create partialImport \
+        /opt/keycloak/bin/kcadm.sh create partialImport \
         -r cleanroom -f /tmp/realm.json \
         -s ifResourceExists=OVERWRITE 2>/dev/null || log_warn "Partial import had warnings"
 fi

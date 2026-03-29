@@ -425,7 +425,6 @@ if should_run_step 12; then
     # Keycloak SSO (depends on CleanRoom DB)
     print_info "Deploying Keycloak SSO..."
     kubectl apply -f apps/keycloak/application.yaml || print_warning "Failed to deploy Keycloak"
-    kubectl apply -f apps/keycloak/application-manifests.yaml || print_warning "Failed to deploy Keycloak IngressRoute"
 
     # OAuth2-Proxy (depends on Keycloak)
     print_info "Deploying OAuth2-Proxy (ForwardAuth)..."

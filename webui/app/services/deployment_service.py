@@ -3079,14 +3079,7 @@ echo "=== Setup Complete ==="
                 if app == "keycloak":
                     return False  # Keycloak is required
 
-        # Deploy keycloak IngressRoute separately (application-manifests.yaml)
-        manifests_yaml = self.projects_dir / "keycloak" / "application-manifests.yaml"
-        result = await self.process_manager.run_command(
-            ["kubectl", "apply", "-f", str(manifests_yaml)],
-            on_output=self._sanitized_output_callback(step_id),
-        )
-        if not result.success:
-            await self.log(step_id, "warn", "Failed to deploy keycloak-manifests (IngressRoute)")
+        # Keycloak now uses raw manifests (single-source app), no separate manifests app needed
 
         await self._wait_for_argocd_sync("deployment-console", step_id)
 
@@ -3101,7 +3094,7 @@ echo "=== Setup Complete ==="
             check_fn=lambda: self.process_manager.run_command_simple(
                 ["kubectl", "-n", "keycloak", "exec",
                  "deploy/keycloak", "--",
-                 "curl", "-sf", "http://localhost:8080/health/ready"],
+                 "curl", "-sf", "http://localhost:9000/health/ready"],
                 timeout=10,
             ),
             description="Keycloak health check",
@@ -3152,7 +3145,7 @@ echo "=== Setup Complete ==="
         # Authenticate to Keycloak admin CLI
         auth_result = await self.process_manager.run_command_simple(
             ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
-             "/opt/bitnami/keycloak/bin/kcadm.sh", "config", "credentials",
+             "/opt/keycloak/bin/kcadm.sh", "config", "credentials",
              "--server", "http://localhost:8080",
              "--realm", "master",
              "--user", "admin",
@@ -3166,7 +3159,7 @@ echo "=== Setup Complete ==="
         # Import the realm
         import_result = await self.process_manager.run_command_simple(
             ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
-             "/opt/bitnami/keycloak/bin/kcadm.sh", "create", "realms",
+             "/opt/keycloak/bin/kcadm.sh", "create", "realms",
              "-f", "/tmp/realm.json"],
             timeout=30,
         )
@@ -3175,7 +3168,7 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "info", "Realm may exist, attempting partial import...")
             import_result = await self.process_manager.run_command_simple(
                 ["kubectl", "-n", "keycloak", "exec", "deploy/keycloak", "--",
-                 "/opt/bitnami/keycloak/bin/kcadm.sh", "create", "partialImport",
+                 "/opt/keycloak/bin/kcadm.sh", "create", "partialImport",
                  "-r", "cleanroom", "-f", "/tmp/realm.json",
                  "-s", "ifResourceExists=OVERWRITE"],
                 timeout=30,
