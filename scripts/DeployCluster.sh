@@ -418,8 +418,21 @@ if should_run_step 12; then
     print_info "Deploying Portal..."
     kubectl apply -f apps/portal/application.yaml || print_warning "Failed to deploy Portal"
 
+    # Deployment Console (ExternalName service → LXC, no pods)
+    print_info "Deploying Deployment Console routing..."
+    kubectl apply -f apps/deployment-console/application.yaml || print_warning "Failed to deploy Deployment Console"
+
+    # Keycloak SSO (depends on CleanRoom DB)
+    print_info "Deploying Keycloak SSO..."
+    kubectl apply -f apps/keycloak/application.yaml || print_warning "Failed to deploy Keycloak"
+
+    # OAuth2-Proxy (depends on Keycloak)
+    print_info "Deploying OAuth2-Proxy (ForwardAuth)..."
+    kubectl apply -f apps/oauth2-proxy/application.yaml || print_warning "Failed to deploy OAuth2-Proxy"
+
     print_success "Platform apps deployed"
     print_warning "Scanning Console and Portal require images in Harbor to start."
+    print_warning "Keycloak and OAuth2-Proxy require SOPS-encrypted secrets — see apps/keycloak/*.template"
     print_warning "See DEPLOYMENT.md steps 12-13 for Build VM and image builds."
 fi
 

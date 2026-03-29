@@ -66,6 +66,7 @@
     {
       "clientId": "portal",
       "name": "CleanRoom Portal",
+      "secret": "__SECRET_PORTAL__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -84,6 +85,7 @@
     {
       "clientId": "scanning-console",
       "name": "Scanning Console",
+      "secret": "__SECRET_SCANNING_CONSOLE__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -102,6 +104,7 @@
     {
       "clientId": "deployment-console",
       "name": "Deployment Console",
+      "secret": "__SECRET_DEPLOYMENT_CONSOLE__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -120,6 +123,7 @@
     {
       "clientId": "argocd",
       "name": "ArgoCD",
+      "secret": "__SECRET_ARGOCD__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -138,6 +142,7 @@
     {
       "clientId": "harbor",
       "name": "Harbor Registry",
+      "secret": "__SECRET_HARBOR__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
@@ -157,6 +162,7 @@
       "clientId": "traefik-forward-auth",
       "name": "Traefik ForwardAuth (OAuth2-Proxy)",
       "description": "Confidential client for OAuth2-Proxy covering Faraday, OpenVAS, Threat Dragon",
+      "secret": "__SECRET_FORWARD_AUTH__",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
