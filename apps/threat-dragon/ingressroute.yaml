@@ -1,7 +1,7 @@
 # Threat Dragon IngressRoute
 # Access via: https://threatdragon.knowledgeondemand.net
 #
-# TLS: Uses wildcard certificate from default TLSStore
+# Auth: Keycloak via OAuth2-Proxy (cookie-based routing)
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -12,25 +12,37 @@ spec:
   entryPoints:
     - websecure
   routes:
-    # OAuth2-Proxy sign-in/callback routes (must be BEFORE the catch-all)
+    # OAuth2-Proxy endpoints (sign-in, callback, etc.)
     - match: Host(`threatdragon.knowledgeondemand.net`) && PathPrefix(`/oauth2/`)
       kind: Rule
+      priority: 100
       services:
         - name: oauth2-proxy
           namespace: oauth2-proxy
           port: 80
-    # Main application route with ForwardAuth
-    - match: Host(`threatdragon.knowledgeondemand.net`)
+    # Authenticated users (have the OAuth2 cookie) → ForwardAuth → backend
+    - match: Host(`threatdragon.knowledgeondemand.net`) && HeadersRegexp(`Cookie`, `_oauth2_proxy=`)
       kind: Rule
+      priority: 90
       services:
         - name: threat-dragon
           port: 80
       middlewares:
-        - name: oauth2-errors
-          namespace: traefik
         - name: keycloak-forward-auth
           namespace: traefik
         - name: secure-headers
           namespace: traefik
+    # Unauthenticated users (no cookie) → redirect to sign-in
+    - match: Host(`threatdragon.knowledgeondemand.net`)
+      kind: Rule
+      priority: 80
+      services:
+        - name: oauth2-proxy
+          namespace: oauth2-proxy
+          port: 80
+      middlewares:
+        - name: oauth2-signin-redirect
+          namespace: traefik
+        - name: secure-headers
+          namespace: traefik
   tls: {}
-  # Uses default TLSStore with knowledgeondemand-wildcard-tls certificate
