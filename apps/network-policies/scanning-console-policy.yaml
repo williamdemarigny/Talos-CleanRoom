@@ -100,6 +100,15 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    # Allow connection to Traefik (OIDC issuer URL https://keycloak.knowledgeondemand.net
+    # resolves to Traefik LB IP — needed for OIDC discovery, token exchange, JWKS fetch)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 443
     # Allow HTTPS egress to external APIs (NVD, EPSS, OTX) for vulnerability enrichment
     # Excludes private networks, cloud metadata, and CGNAT to prevent SSRF
     - to:

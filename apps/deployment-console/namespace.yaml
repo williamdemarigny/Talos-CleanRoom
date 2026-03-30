@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: deployment-console
   labels:
+    kubernetes.io/metadata.name: deployment-console
     app.kubernetes.io/name: deployment-console
     app.kubernetes.io/component: web-ui
     pod-security.kubernetes.io/enforce: baseline

@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: openvas
   labels:
+    kubernetes.io/metadata.name: openvas
     app.kubernetes.io/name: openvas
     app.kubernetes.io/component: vulnerability-scanner
     # OpenVAS requires privileged access for vulnerability scanning

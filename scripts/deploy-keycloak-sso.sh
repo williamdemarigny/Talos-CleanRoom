@@ -143,6 +143,21 @@ for ((i=1; i<=60; i++)); do
 done
 echo ""
 
+# Verify Keycloak HTTP port is actually responding (readiness probe may pass before HTTP is fully ready)
+log_info "Verifying Keycloak HTTP port is responsive..."
+for ((i=1; i<=30; i++)); do
+    if kubectl -n keycloak exec deploy/keycloak -- curl -sf http://localhost:8080/realms/master > /dev/null 2>&1; then
+        log_info "Keycloak HTTP port responding"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        log_error "Keycloak HTTP port did not respond after 1 minute"
+        exit 1
+    fi
+    echo -ne "\r  Verifying HTTP port ($i/30)..."
+    sleep 2
+done
+
 # =============================================================================
 # Step 6: Generate OIDC client secrets and import realm
 # =============================================================================
@@ -155,14 +170,15 @@ SECRET_ARGOCD=$(generate_password 32)
 SECRET_HARBOR=$(generate_password 32)
 SECRET_FORWARD_AUTH=$(generate_password 32)
 
-# Template the realm config with generated secrets
+# Template the realm config with generated secrets (use | delimiter to avoid
+# conflicts with base64 characters like / and + in generated passwords)
 REALM_JSON=$(cat "$REPO_ROOT/apps/keycloak/realm-config.json" \
-    | sed "s/__SECRET_PORTAL__/$SECRET_PORTAL/g" \
-    | sed "s/__SECRET_SCANNING_CONSOLE__/$SECRET_SCANNING/g" \
-    | sed "s/__SECRET_DEPLOYMENT_CONSOLE__/$SECRET_DEPLOY/g" \
-    | sed "s/__SECRET_ARGOCD__/$SECRET_ARGOCD/g" \
-    | sed "s/__SECRET_HARBOR__/$SECRET_HARBOR/g" \
-    | sed "s/__SECRET_FORWARD_AUTH__/$SECRET_FORWARD_AUTH/g")
+    | sed "s|__SECRET_PORTAL__|$SECRET_PORTAL|g" \
+    | sed "s|__SECRET_SCANNING_CONSOLE__|$SECRET_SCANNING|g" \
+    | sed "s|__SECRET_DEPLOYMENT_CONSOLE__|$SECRET_DEPLOY|g" \
+    | sed "s|__SECRET_ARGOCD__|$SECRET_ARGOCD|g" \
+    | sed "s|__SECRET_HARBOR__|$SECRET_HARBOR|g" \
+    | sed "s|__SECRET_FORWARD_AUTH__|$SECRET_FORWARD_AUTH|g")
 
 # Write realm JSON into the Keycloak pod
 echo "$REALM_JSON" | base64 | kubectl -n keycloak exec -i deploy/keycloak -- \
@@ -198,25 +214,36 @@ print_step "7" "Configuring OIDC credentials in application secrets"
 
 ISSUER_URL="https://keycloak.knowledgeondemand.net/realms/cleanroom"
 
+# Helper: verify secret exists before patching
+patch_secret_safe() {
+    local ns="$1" secret="$2" json_patch="$3" label="$4"
+    if ! kubectl -n "$ns" get secret "$secret" &>/dev/null; then
+        log_warn "Secret $secret not found in $ns — creating it"
+        kubectl -n "$ns" create secret generic "$secret" --dry-run=client -o yaml | kubectl apply -f -
+    fi
+    kubectl -n "$ns" patch secret "$secret" --type merge -p "$json_patch"
+    log_info "$label OIDC configured"
+}
+
 # Portal
-kubectl -n portal patch secret portal-credentials --type merge -p \
-    "{\"stringData\":{\"oidc-issuer-url\":\"$ISSUER_URL\",\"oidc-client-id\":\"portal\",\"oidc-client-secret\":\"$SECRET_PORTAL\"}}" 2>/dev/null
-log_info "Portal OIDC configured"
+patch_secret_safe portal portal-credentials \
+    "{\"stringData\":{\"oidc-issuer-url\":\"$ISSUER_URL\",\"oidc-client-id\":\"portal\",\"oidc-client-secret\":\"$SECRET_PORTAL\"}}" \
+    "Portal"
 
 # Scanning Console
-kubectl -n scanning-console patch secret scanning-console-credentials --type merge -p \
-    "{\"stringData\":{\"oidc-issuer-url\":\"$ISSUER_URL\",\"oidc-client-id\":\"scanning-console\",\"oidc-client-secret\":\"$SECRET_SCANNING\"}}" 2>/dev/null
-log_info "Scanning Console OIDC configured"
+patch_secret_safe scanning-console scanning-console-credentials \
+    "{\"stringData\":{\"oidc-issuer-url\":\"$ISSUER_URL\",\"oidc-client-id\":\"scanning-console\",\"oidc-client-secret\":\"$SECRET_SCANNING\"}}" \
+    "Scanning Console"
 
 # ArgoCD
-kubectl -n argocd patch secret argocd-secret --type merge -p \
-    "{\"stringData\":{\"oidc.keycloak.clientSecret\":\"$SECRET_ARGOCD\"}}" 2>/dev/null
-log_info "ArgoCD OIDC configured"
+patch_secret_safe argocd argocd-secret \
+    "{\"stringData\":{\"oidc.keycloak.clientSecret\":\"$SECRET_ARGOCD\"}}" \
+    "ArgoCD"
 
 # OAuth2-Proxy
-kubectl -n oauth2-proxy patch secret oauth2-proxy-credentials --type merge -p \
-    "{\"stringData\":{\"client-secret\":\"$SECRET_FORWARD_AUTH\"}}" 2>/dev/null
-log_info "OAuth2-Proxy credentials configured"
+patch_secret_safe oauth2-proxy oauth2-proxy-credentials \
+    "{\"stringData\":{\"client-secret\":\"$SECRET_FORWARD_AUTH\"}}" \
+    "OAuth2-Proxy"
 
 # =============================================================================
 # Step 8: Restart apps to pick up OIDC config
@@ -252,7 +279,7 @@ echo "  - Faraday:          https://faraday.knowledgeondemand.net (ForwardAuth)"
 echo "  - OpenVAS:          https://openvas.knowledgeondemand.net (ForwardAuth)"
 echo "  - Threat Dragon:    https://threatdragon.knowledgeondemand.net (ForwardAuth)"
 echo ""
-echo "Realm admin user: admin (temporary password — will be prompted to change)"
+echo "Realm admin user: admin / admin (non-temporary, change after first login)"
 echo ""
 echo "Verify: Open https://cleanroom.knowledgeondemand.net/login"
 echo "        You should see 'Sign in with Keycloak SSO' button"

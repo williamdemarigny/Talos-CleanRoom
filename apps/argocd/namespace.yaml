@@ -3,5 +3,6 @@ kind: Namespace
 metadata:
   name: argocd
   labels:
+    kubernetes.io/metadata.name: argocd
     app.kubernetes.io/name: argocd
     app.kubernetes.io/component: namespace

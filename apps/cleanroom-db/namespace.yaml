@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: cleanroom-db
   labels:
+    kubernetes.io/metadata.name: cleanroom-db
     app.kubernetes.io/name: cleanroom-db
     app.kubernetes.io/component: database
     # Pod Security Standards: restricted (database only, no special privileges)
