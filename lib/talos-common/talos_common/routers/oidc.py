@@ -177,6 +177,7 @@ async def oidc_callback(
         httponly=True,
         secure=is_https,
         samesite="lax",
+        path="/",
     )
 
     # Store ID token for single-logout support (Keycloak end_session_endpoint)
@@ -188,6 +189,7 @@ async def oidc_callback(
             httponly=True,
             secure=is_https,
             samesite="lax",
+            path="/",
         )
 
     # Clear the OIDC state cookie
@@ -224,6 +226,7 @@ async def oidc_logout(
 
     # Clear local cookies and redirect to Keycloak logout
     response = RedirectResponse(url=logout_url, status_code=302)
-    response.delete_cookie(key="access_token", secure=True, samesite="lax")
-    response.delete_cookie(key="id_token", secure=True, samesite="lax")
+    response.delete_cookie(key="access_token", secure=True, samesite="lax", path="/")
+    response.delete_cookie(key="id_token", secure=True, samesite="lax", path="/")
+    response.delete_cookie(key=OIDC_STATE_COOKIE, secure=True, samesite="lax", path="/")
     return response

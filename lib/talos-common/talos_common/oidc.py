@@ -25,11 +25,15 @@ _oidc_config_cache: dict = {}
 _OIDC_CACHE_TTL = 3600  # Re-fetch discovery document every hour
 
 
-async def get_oidc_config(issuer_url: str) -> dict:
+async def get_oidc_config(issuer_url: str, verify_ssl: bool = False) -> dict:
     """Fetch and cache the OIDC discovery document (.well-known/openid-configuration).
 
     Cached for 1 hour to avoid hitting Keycloak on every request while
     still picking up endpoint changes (e.g., after Keycloak upgrade).
+
+    Args:
+        issuer_url: Keycloak realm URL (e.g., https://keycloak.example.com/realms/myrealm)
+        verify_ssl: Whether to verify TLS certificates (from settings.oidc_verify_ssl)
     """
     if issuer_url in _oidc_config_cache:
         config, fetched_at = _oidc_config_cache[issuer_url]
@@ -37,7 +41,7 @@ async def get_oidc_config(issuer_url: str) -> dict:
             return config
 
     well_known_url = f"{issuer_url}/.well-known/openid-configuration"
-    async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+    async with httpx.AsyncClient(verify=verify_ssl, timeout=15.0) as client:
         response = await client.get(well_known_url)
         response.raise_for_status()
         config = response.json()
@@ -76,7 +80,8 @@ async def build_authorization_url(
     Returns:
         Full authorization URL to redirect the user to.
     """
-    config = await get_oidc_config(settings.oidc_issuer_url)
+    verify_ssl = getattr(settings, "oidc_verify_ssl", False)
+    config = await get_oidc_config(settings.oidc_issuer_url, verify_ssl=verify_ssl)
     auth_endpoint = config["authorization_endpoint"]
 
     params = {
@@ -111,7 +116,8 @@ async def exchange_code_for_tokens(
         Token response dict with access_token, id_token, refresh_token, etc.
         Returns None on failure.
     """
-    config = await get_oidc_config(settings.oidc_issuer_url)
+    verify_ssl = getattr(settings, "oidc_verify_ssl", False)
+    config = await get_oidc_config(settings.oidc_issuer_url, verify_ssl=verify_ssl)
     token_endpoint = config["token_endpoint"]
 
     data = {
@@ -123,7 +129,7 @@ async def exchange_code_for_tokens(
         "code_verifier": code_verifier,
     }
 
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+    async with httpx.AsyncClient(verify=verify_ssl, timeout=15.0) as client:
         response = await client.post(token_endpoint, data=data)
         if response.status_code != 200:
             logger.error("Token exchange failed: %s %s", response.status_code, response.text)
@@ -146,7 +152,8 @@ async def get_end_session_url(
     Returns:
         Logout URL to redirect the user to.
     """
-    config = await get_oidc_config(settings.oidc_issuer_url)
+    verify_ssl = getattr(settings, "oidc_verify_ssl", False)
+    config = await get_oidc_config(settings.oidc_issuer_url, verify_ssl=verify_ssl)
     logout_endpoint = config.get("end_session_endpoint", "")
 
     params = {"post_logout_redirect_uri": post_logout_redirect_uri}
