@@ -29,6 +29,8 @@ spec:
       middlewares:
         - name: keycloak-forward-auth
           namespace: traefik
+        - name: oauth2-errors
+          namespace: traefik
         - name: secure-headers
           namespace: traefik
   tls: {}

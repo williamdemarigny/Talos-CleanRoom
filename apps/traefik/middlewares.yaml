@@ -98,6 +98,9 @@ spec:
 # Keycloak ForwardAuth middleware — delegates authentication to OAuth2-Proxy
 # which validates against Keycloak OIDC. Used for services without native OIDC
 # support (Faraday, OpenVAS, Threat Dragon).
+#
+# OAuth2-Proxy /oauth2/auth returns 202 if authenticated, 401 if not.
+# On 401, Traefik uses the errors middleware to redirect to the sign-in page.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -111,6 +114,22 @@ spec:
       - X-Auth-Request-User
       - X-Auth-Request-Email
       - X-Auth-Request-Access-Token
+---
+# Error handler that redirects 401 responses to OAuth2-Proxy sign-in
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth2-errors
+  namespace: traefik
+spec:
+  errors:
+    status:
+      - "401"
+    service:
+      name: oauth2-proxy
+      namespace: oauth2-proxy
+      port: 80
+    query: "/oauth2/sign_in?rd={url}"
 ---
 # Chain middleware - combines multiple middlewares
 apiVersion: traefik.io/v1alpha1
