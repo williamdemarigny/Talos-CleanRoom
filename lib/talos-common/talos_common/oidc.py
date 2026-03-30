@@ -12,6 +12,7 @@ import base64
 import hashlib
 import logging
 import secrets
+import time
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -19,22 +20,29 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Cache for OIDC discovery document
+# Cache for OIDC discovery document: {issuer_url: (config_dict, timestamp)}
 _oidc_config_cache: dict = {}
+_OIDC_CACHE_TTL = 3600  # Re-fetch discovery document every hour
 
 
 async def get_oidc_config(issuer_url: str) -> dict:
-    """Fetch and cache the OIDC discovery document (.well-known/openid-configuration)."""
+    """Fetch and cache the OIDC discovery document (.well-known/openid-configuration).
+
+    Cached for 1 hour to avoid hitting Keycloak on every request while
+    still picking up endpoint changes (e.g., after Keycloak upgrade).
+    """
     if issuer_url in _oidc_config_cache:
-        return _oidc_config_cache[issuer_url]
+        config, fetched_at = _oidc_config_cache[issuer_url]
+        if time.time() - fetched_at < _OIDC_CACHE_TTL:
+            return config
 
     well_known_url = f"{issuer_url}/.well-known/openid-configuration"
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
         response = await client.get(well_known_url)
         response.raise_for_status()
         config = response.json()
 
-    _oidc_config_cache[issuer_url] = config
+    _oidc_config_cache[issuer_url] = (config, time.time())
     return config
 
 

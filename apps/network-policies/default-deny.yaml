@@ -186,3 +186,33 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+---
+# Deployment Console namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Harbor namespace - deny all ingress/egress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: harbor
+  labels:
+    app.kubernetes.io/name: network-policy
+    app.kubernetes.io/component: security
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
