@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: faraday
   labels:
+    kubernetes.io/metadata.name: faraday
     app.kubernetes.io/name: faraday
     app.kubernetes.io/component: security-platform
     # Pod Security Standards: baseline (web application, no special privileges needed)

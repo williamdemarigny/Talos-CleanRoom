@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: keycloak
   labels:
+    kubernetes.io/metadata.name: keycloak
     app.kubernetes.io/name: keycloak
     app.kubernetes.io/component: identity
     pod-security.kubernetes.io/enforce: baseline

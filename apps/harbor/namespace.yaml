@@ -3,5 +3,6 @@ kind: Namespace
 metadata:
   name: harbor
   labels:
+    kubernetes.io/metadata.name: harbor
     app.kubernetes.io/name: harbor
     app.kubernetes.io/part-of: talos-cleanroom

@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: portal
   labels:
+    kubernetes.io/metadata.name: portal
     app.kubernetes.io/name: portal
     app.kubernetes.io/component: web-portal
     # Pod Security Standards: baseline (web application, no special privileges)

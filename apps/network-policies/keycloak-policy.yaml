@@ -130,7 +130,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Allow to Keycloak (OIDC token validation)
+    # Allow to Keycloak (OIDC token validation — direct pod-to-pod)
     - to:
         - namespaceSelector:
             matchLabels:
@@ -138,3 +138,11 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    # Allow to Traefik (OIDC issuer URL resolves to Traefik LB IP)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 443

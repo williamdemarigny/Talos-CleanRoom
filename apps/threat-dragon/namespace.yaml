@@ -4,6 +4,7 @@ kind: Namespace
 metadata:
   name: threat-dragon
   labels:
+    kubernetes.io/metadata.name: threat-dragon
     app.kubernetes.io/name: threat-dragon
     app.kubernetes.io/component: threat-modeling
     # Pod Security Standards: restricted (simple web application, no privileges)

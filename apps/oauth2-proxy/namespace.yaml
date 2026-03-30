@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: oauth2-proxy
   labels:
+    kubernetes.io/metadata.name: oauth2-proxy
     app.kubernetes.io/name: oauth2-proxy
     app.kubernetes.io/component: identity
     pod-security.kubernetes.io/enforce: baseline

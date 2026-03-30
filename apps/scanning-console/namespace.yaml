@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: scanning-console
   labels:
+    kubernetes.io/metadata.name: scanning-console
     app.kubernetes.io/name: scanning-console
     app.kubernetes.io/component: security-console
     # Pod Security Standards: baseline (web application, no special privileges)
@@ -19,6 +20,7 @@ kind: Namespace
 metadata:
   name: nmap-scanner
   labels:
+    kubernetes.io/metadata.name: nmap-scanner
     app.kubernetes.io/name: nmap-scanner
     app.kubernetes.io/managed-by: scanning-console
 ---
@@ -27,5 +29,6 @@ kind: Namespace
 metadata:
   name: loki-scanner
   labels:
+    kubernetes.io/metadata.name: loki-scanner
     app.kubernetes.io/name: loki-scanner
     app.kubernetes.io/managed-by: scanning-console

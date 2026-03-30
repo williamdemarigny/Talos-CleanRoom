@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: metasploit
   labels:
+    kubernetes.io/metadata.name: metasploit
     app.kubernetes.io/name: metasploit
     app.kubernetes.io/component: penetration-testing
     # Metasploit requires privileged access for network scanning capabilities

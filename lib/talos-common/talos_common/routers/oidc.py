@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["OIDC"])
 
-# Cookie name for OIDC flow state (separate from access_token cookie)
-OIDC_STATE_COOKIE = "__Host-oidc_state"
+# Cookie name for OIDC flow state (separate from access_token cookie).
+# Uses __Secure- prefix which requires Secure flag but is less strict
+# than __Host- (which also requires Path=/ and no Domain attribute).
+OIDC_STATE_COOKIE = "__Secure-oidc_state"
 
 
 def _build_callback_uri(request: Request) -> str:
@@ -62,34 +64,40 @@ async def oidc_login(
     if not settings.oidc_issuer_url:
         return RedirectResponse(url="/login", status_code=302)
 
-    # Generate PKCE pair and state/nonce
-    code_verifier, code_challenge = generate_pkce_pair()
-    state = secrets.token_urlsafe(32)
-    nonce = secrets.token_urlsafe(32)
+    try:
+        # Generate PKCE pair and state/nonce
+        code_verifier, code_challenge = generate_pkce_pair()
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
 
-    # Encrypt state into cookie
-    state_mgr = OIDCStateManager(settings.fernet_key)
-    encrypted_state = state_mgr.encrypt_state(state, nonce, code_verifier)
+        # Encrypt state into cookie
+        state_mgr = OIDCStateManager(settings.fernet_key)
+        encrypted_state = state_mgr.encrypt_state(state, nonce, code_verifier)
 
-    # Build callback URI from request
-    callback_uri = _build_callback_uri(request)
+        # Build callback URI from request
+        callback_uri = _build_callback_uri(request)
 
-    # Build authorization URL
-    auth_url = await build_authorization_url(
-        settings, callback_uri, state, nonce, code_challenge,
-    )
+        # Build authorization URL
+        auth_url = await build_authorization_url(
+            settings, callback_uri, state, nonce, code_challenge,
+        )
 
-    # Set encrypted state cookie and redirect
-    response = RedirectResponse(url=auth_url, status_code=302)
-    response.set_cookie(
-        key=OIDC_STATE_COOKIE,
-        value=encrypted_state,
-        max_age=600,  # 10 minutes
-        httponly=True,
-        secure=True,
-        samesite="lax",
-    )
-    return response
+        # Set encrypted state cookie and redirect
+        response = RedirectResponse(url=auth_url, status_code=302)
+        response.set_cookie(
+            key=OIDC_STATE_COOKIE,
+            value=encrypted_state,
+            max_age=600,  # 10 minutes
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/",
+        )
+        return response
+
+    except Exception:
+        logger.exception("Failed to initiate OIDC login")
+        return RedirectResponse(url="/login?error=oidc_unavailable", status_code=302)
 
 
 @router.get("/auth/callback")
@@ -104,7 +112,7 @@ async def oidc_callback(
     """Handle the OIDC callback from Keycloak.
 
     Validates the state parameter, exchanges the authorization code
-    for tokens, and sets the access_token cookie.
+    for tokens, and sets the access_token and id_token cookies.
     """
     if not settings.oidc_issuer_url:
         return RedirectResponse(url="/login", status_code=302)
@@ -138,24 +146,29 @@ async def oidc_callback(
     redirect_uri = _build_callback_uri(request)
 
     # Exchange authorization code for tokens
-    tokens = await exchange_code_for_tokens(
-        settings,
-        code=code,
-        code_verifier=saved_state["code_verifier"],
-        redirect_uri=redirect_uri,
-    )
+    try:
+        tokens = await exchange_code_for_tokens(
+            settings,
+            code=code,
+            code_verifier=saved_state["code_verifier"],
+            redirect_uri=redirect_uri,
+        )
+    except Exception:
+        logger.exception("OIDC token exchange raised an exception")
+        tokens = None
 
     if not tokens or "access_token" not in tokens:
         logger.error("OIDC token exchange failed")
         return RedirectResponse(url="/login?error=token_exchange", status_code=302)
 
-    # Set access token cookie and redirect to home
-    access_token = tokens["access_token"]
+    # Determine HTTPS for secure cookies
     is_https = (
         request.url.scheme == "https"
         or request.headers.get("x-forwarded-proto") == "https"
     )
 
+    # Set access token cookie and redirect to home
+    access_token = tokens["access_token"]
     response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(
         key="access_token",
@@ -165,8 +178,20 @@ async def oidc_callback(
         secure=is_https,
         samesite="lax",
     )
+
+    # Store ID token for single-logout support (Keycloak end_session_endpoint)
+    if "id_token" in tokens:
+        response.set_cookie(
+            key="id_token",
+            value=tokens["id_token"],
+            max_age=settings.access_token_expire_hours * 3600,
+            httponly=True,
+            secure=is_https,
+            samesite="lax",
+        )
+
     # Clear the OIDC state cookie
-    response.delete_cookie(key=OIDC_STATE_COOKIE)
+    response.delete_cookie(key=OIDC_STATE_COOKIE, secure=True, samesite="lax", path="/")
     return response
 
 

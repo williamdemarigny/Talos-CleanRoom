@@ -33,7 +33,7 @@ spec:
           - -c
           - |
             echo "Waiting for cleanroom-db to be ready..."
-            until pg_isready -h cleanroom-db.cleanroom-db.svc.cluster.local -p 5432 -U keycloak -d keycloak; do
+            until pg_isready -h cleanroom-db.cleanroom-db.svc.cluster.local -p 5432 -U cleanroom; do
               echo "  Database not ready, retrying in 5s..."
               sleep 5
             done
