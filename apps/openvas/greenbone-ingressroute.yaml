@@ -1,10 +1,5 @@
 # OpenVAS/Greenbone IngressRoute
 # Access via: https://openvas.knowledgeondemand.net
-#
-# Auth: Keycloak via OAuth2-Proxy
-# Strategy: Two routes based on cookie presence:
-#   1. Users WITH _oauth2_proxy cookie → ForwardAuth validates → backend
-#   2. Users WITHOUT cookie → redirect to OAuth2-Proxy sign-in
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -15,37 +10,12 @@ spec:
   entryPoints:
     - websecure
   routes:
-    # OAuth2-Proxy endpoints (sign-in, callback, etc.)
-    - match: Host(`openvas.knowledgeondemand.net`) && PathPrefix(`/oauth2/`)
+    - match: Host(`openvas.knowledgeondemand.net`)
       kind: Rule
-      priority: 100
-      services:
-        - name: oauth2-proxy
-          namespace: oauth2-proxy
-          port: 80
-    # Authenticated users (have the OAuth2 cookie) → ForwardAuth → backend
-    - match: Host(`openvas.knowledgeondemand.net`) && HeadersRegexp(`Cookie`, `_oauth2_proxy=`)
-      kind: Rule
-      priority: 90
       services:
         - name: greenbone
           port: 80
       middlewares:
-        - name: keycloak-forward-auth
-          namespace: traefik
-        - name: secure-headers
-          namespace: traefik
-    # Unauthenticated users (no cookie) → redirect to sign-in
-    - match: Host(`openvas.knowledgeondemand.net`)
-      kind: Rule
-      priority: 80
-      services:
-        - name: oauth2-proxy
-          namespace: oauth2-proxy
-          port: 80
-      middlewares:
-        - name: oauth2-signin-redirect
-          namespace: traefik
         - name: secure-headers
           namespace: traefik
   tls: {}

@@ -48,25 +48,6 @@ spec:
           value: "https://deploy.knowledgeondemand.net"
         - name: SCANNING_CONSOLE_URL
           value: "https://scan.knowledgeondemand.net"
-        # OIDC / Keycloak SSO (optional — empty values disable OIDC)
-        - name: OIDC_ISSUER_URL
-          valueFrom:
-            secretKeyRef:
-              name: portal-credentials
-              key: oidc-issuer-url
-              optional: true
-        - name: OIDC_CLIENT_ID
-          valueFrom:
-            secretKeyRef:
-              name: portal-credentials
-              key: oidc-client-id
-              optional: true
-        - name: OIDC_CLIENT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: portal-credentials
-              key: oidc-client-secret
-              optional: true
         ports:
         - containerPort: 8000
           name: http

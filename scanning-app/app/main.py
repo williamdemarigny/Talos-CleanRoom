@@ -15,7 +15,6 @@ import talos_common
 from talos_common.auth import get_current_user_optional
 from talos_common.routers.auth import router as auth_router
 from talos_common.routers.exchange import router as exchange_router
-from talos_common.routers.oidc import router as oidc_router
 
 from app.config import get_settings
 from app.db.engine import init_db, close_db
@@ -114,7 +113,6 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(exchange_router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(oidc_router, tags=["OIDC"])
 app.include_router(scan.router, prefix="/api/scan", tags=["Scan"])
 app.include_router(ioc_scan.router, prefix="/api/ioc-scan", tags=["IOC Scan"])
 app.include_router(reports.router, prefix="/api/reports", tags=["Reports"])
@@ -134,11 +132,9 @@ async def index(request: Request, user: dict = Depends(get_current_user_optional
 
 @app.get("/login")
 async def login_page(request: Request):
-    settings = get_settings()
     return templates.TemplateResponse("login.html", {
         "request": request,
         "app_subtitle": "Scanning Console",
-        "oidc_enabled": bool(settings.oidc_issuer_url),
     })
 
 

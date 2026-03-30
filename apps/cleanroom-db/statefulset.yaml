@@ -1,6 +1,5 @@
 # CleanRoom Database - PostgreSQL 17
 # Shared database for scanning-console (scan results, audit logs)
-# and Keycloak SSO (identity provider)
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -75,12 +74,6 @@ spec:
           value: "cleanroom"
         - name: PGDATA
           value: "/var/lib/postgresql/data/pgdata"
-        # Keycloak DB password — used by init script in /docker-entrypoint-initdb.d/
-        - name: KEYCLOAK_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: keycloak-db-credentials
-              key: postgres-password
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data

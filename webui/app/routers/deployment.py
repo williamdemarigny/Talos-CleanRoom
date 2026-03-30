@@ -44,11 +44,7 @@ class ServiceCredential(BaseModel):
 
 
 class CredentialsResponse(BaseModel):
-    """Response for service credentials.
-
-    Credentials may be ServiceCredential dicts (username/password) or
-    arbitrary dicts (e.g., keycloak_oidc stores client secrets per app).
-    """
+    """Response for service credentials."""
     credentials: dict[str, Any]
 
 

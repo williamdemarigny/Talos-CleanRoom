@@ -15,7 +15,6 @@ from starlette.responses import JSONResponse, Response
 # Rate limit rules: (path_prefix, key_type, max_tokens, refill_per_second)
 RATE_LIMITS: list[tuple[str, str, int, float]] = [
     ("/api/auth/login", "ip", 5, 5 / 60),              # 5 per minute per IP
-    ("/auth/callback", "ip", 20, 20 / 60),             # 20 per minute per IP (OIDC callback)
     ("/api/auth/redeem-code", "ip", 10, 10 / 60),     # 10 per minute per IP (code exchange)
     ("/api/scan/start", "user", 10, 10 / 60),           # 10 per minute per user
     ("/api/ioc-scan/start", "user", 10, 10 / 60),       # 10 per minute per user

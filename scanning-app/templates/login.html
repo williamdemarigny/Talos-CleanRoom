@@ -18,21 +18,7 @@
             <h2 class="mt-2 text-center text-xl text-gray-400">{{ app_subtitle | default("Deployment Web UI") }}</h2>
         </div>
 
-        {% if oidc_enabled | default(false) %}
-        <div class="mt-8">
-            <a href="/auth/login"
-               class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                Sign in with Keycloak SSO
-            </a>
-            <div class="mt-4 flex items-center">
-                <div class="flex-grow border-t border-gray-700"></div>
-                <span class="mx-4 text-sm text-gray-500">or use local credentials</span>
-                <div class="flex-grow border-t border-gray-700"></div>
-            </div>
-        </div>
-        {% endif %}
-
-        <form class="{% if oidc_enabled | default(false) %}mt-4{% else %}mt-8{% endif %} space-y-6" @submit.prevent="login">
+        <form class="mt-8 space-y-6" @submit.prevent="login">
             <div class="bg-gray-800 rounded-lg p-6 space-y-4">
                 <!-- Error Message -->
                 <div x-show="error" x-cloak class="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded">

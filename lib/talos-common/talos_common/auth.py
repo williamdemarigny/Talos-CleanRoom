@@ -3,10 +3,6 @@
 Provides pure functions for JWT creation/validation and password hashing,
 plus FastAPI dependency factories for use in routers.
 
-Supports dual-mode JWT validation:
-- HS256 (local): Legacy tokens signed with derived jwt_signing_key
-- RS256 (Keycloak): OIDC tokens validated against Keycloak JWKS endpoint
-
 All functions accept a ``settings`` parameter (BaseAppSettings or subclass)
 rather than importing a specific config module, making them reusable
 across all three apps.
@@ -17,7 +13,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import jwt as pyjwt
-from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from passlib.context import CryptContext
@@ -35,9 +30,6 @@ security = HTTPBearer(auto_error=False)
 # Local JWT settings
 LOCAL_ALGORITHM = "HS256"
 
-# Cache for JWKS client (avoids re-fetching on every request)
-_jwks_client_cache: dict = {}
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash."""
@@ -54,9 +46,6 @@ def create_access_token(username: str, settings) -> str:
 
     Uses derived ``jwt_signing_key`` (HMAC-SHA256 of secret_key with
     context "jwt-signing") to limit blast radius if the raw key leaks.
-
-    Includes ``aud: "local"`` claim to distinguish from Keycloak tokens
-    and prevent token confusion during OIDC transition.
     """
     expire = datetime.utcnow() + timedelta(hours=settings.access_token_expire_hours)
     to_encode = {
@@ -68,95 +57,26 @@ def create_access_token(username: str, settings) -> str:
     return pyjwt.encode(to_encode, settings.jwt_signing_key, algorithm=LOCAL_ALGORITHM)
 
 
-def _get_jwks_client(issuer_url: str, verify_ssl: bool = False):
-    """Get or create a cached PyJWKClient for the given issuer."""
-    cache_key = (issuer_url, verify_ssl)
-    if cache_key not in _jwks_client_cache:
-        jwks_uri = f"{issuer_url}/protocol/openid-connect/certs"
-        ssl_ctx = None
-        if not verify_ssl:
-            import ssl
-            ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-        _jwks_client_cache[cache_key] = PyJWKClient(jwks_uri, ssl_context=ssl_ctx)
-    return _jwks_client_cache[cache_key]
-
-
 def decode_token(token: str, settings) -> Optional[dict]:
-    """Decode and validate a JWT token in dual-mode.
+    """Decode and validate a local HS256 JWT token.
 
-    - If token uses RS256 and ``oidc_issuer_url`` is configured:
-      Validate against Keycloak JWKS endpoint.
-    - If token uses HS256: Validate against local ``jwt_signing_key``
-      with ``audience="local"`` enforcement.
-
-    Returns dict with at minimum ``username`` and ``exp`` keys, or None.
+    Returns dict with ``username`` and ``exp`` keys, or None.
     """
     try:
-        # Inspect header to determine algorithm without full validation
-        header = pyjwt.get_unverified_header(token)
-        alg = header.get("alg")
-
-        if alg == "RS256" and settings.oidc_issuer_url:
-            # OIDC mode: validate against Keycloak JWKS
-            verify_ssl = getattr(settings, "oidc_verify_ssl", False)
-            jwks_client = _get_jwks_client(settings.oidc_issuer_url, verify_ssl=verify_ssl)
-            signing_key = jwks_client.get_signing_key_from_jwt(token)
-            # Keycloak access tokens may not include the client_id in the
-            # aud claim unless an audience mapper is configured.  Validate
-            # signature + issuer + expiry first, then check audience
-            # separately so we can log a clear message on mismatch.
-            payload = pyjwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256"],
-                issuer=settings.oidc_issuer_url,
-                options={"verify_aud": False},
-            )
-            # Verify audience: accept if client_id OR "account" is present
-            token_aud = payload.get("aud", [])
-            if isinstance(token_aud, str):
-                token_aud = [token_aud]
-            expected = settings.oidc_client_id
-            if expected not in token_aud and "account" not in token_aud:
-                logger.warning(
-                    "OIDC token audience mismatch: expected %r or 'account', got %r",
-                    expected, token_aud,
-                )
-                return None
-            # Map Keycloak claims to app format
-            username = payload.get("preferred_username") or payload.get("sub")
-            if username is None:
-                return None
-            return {
-                "username": username,
-                "sub": payload.get("sub"),
-                "exp": payload.get("exp"),
-                "roles": payload.get("realm_access", {}).get("roles", []),
-            }
-
-        elif alg == "HS256":
-            # Local JWT validation with audience enforcement
-            payload = pyjwt.decode(
-                token,
-                settings.jwt_signing_key,
-                algorithms=["HS256"],
-                audience="local",
-            )
-            username: str = payload.get("sub")
-            if username is None:
-                return None
-            return {"username": username, "exp": payload.get("exp")}
-
-        else:
-            # Unsupported algorithm
+        payload = pyjwt.decode(
+            token,
+            settings.jwt_signing_key,
+            algorithms=["HS256"],
+            audience="local",
+        )
+        username: str = payload.get("sub")
+        if username is None:
             return None
+        return {"username": username, "exp": payload.get("exp")}
 
     except pyjwt.InvalidAudienceError:
-        # Token has wrong audience — could be legacy token without aud claim.
         # Fall back to decode without audience check for backward compatibility
-        # during the transition period. Remove this fallback in Phase 4.
+        # with tokens issued before the aud claim was added.
         try:
             payload = pyjwt.decode(
                 token,
@@ -190,7 +110,6 @@ async def get_current_user(
     """Get current authenticated user from JWT token.
 
     Checks Authorization header first, then falls back to access_token cookie.
-    Supports both local HS256 and Keycloak RS256 tokens.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -223,43 +142,3 @@ async def get_current_user_optional(
         return await get_current_user(request, credentials, settings)
     except HTTPException:
         return None
-
-
-def require_role(role: str):
-    """FastAPI dependency that requires the current user to have a specific realm role.
-
-    Usage in routers::
-
-        @router.post("/admin-action")
-        async def admin_action(user: dict = Depends(require_role("admin"))):
-            ...
-
-    For local HS256 tokens (no roles), the ``admin`` role is implicitly
-    granted since local auth is single-user admin-only. This ensures
-    backward compatibility during the OIDC transition.
-
-    Raises HTTP 403 if the user lacks the required role.
-    """
-    async def _dependency(
-        request: Request,
-        credentials: HTTPAuthorizationCredentials = Depends(security),
-        settings=Depends(talos_common.get_settings),
-    ) -> dict:
-        user = await get_current_user(request, credentials, settings)
-
-        # Local HS256 tokens don't carry roles — the single admin user
-        # implicitly has all roles. Once OIDC-only mode is enforced
-        # (Phase 4), this fallback can be removed.
-        user_roles = user.get("roles", [])
-        if not user_roles:
-            # Legacy local token — grant implicit admin
-            return user
-
-        if role not in user_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{role}' required",
-            )
-        return user
-
-    return _dependency
