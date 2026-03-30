@@ -12,6 +12,14 @@ spec:
   entryPoints:
     - websecure
   routes:
+    # OAuth2-Proxy sign-in/callback routes (must be BEFORE the catch-all)
+    - match: Host(`faraday.knowledgeondemand.net`) && PathPrefix(`/oauth2/`)
+      kind: Rule
+      services:
+        - name: oauth2-proxy
+          namespace: oauth2-proxy
+          port: 80
+    # Main application route with ForwardAuth
     - match: Host(`faraday.knowledgeondemand.net`)
       kind: Rule
       services:
