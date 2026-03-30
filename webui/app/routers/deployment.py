@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from app.auth import get_current_user
 from app.services.deployment_service import get_deployment_service, DeploymentService
@@ -38,14 +38,18 @@ class LogsResponse(BaseModel):
 
 class ServiceCredential(BaseModel):
     """A single service's credentials."""
-    username: str
-    password: str
+    username: Optional[str] = None
+    password: Optional[str] = None
     note: Optional[str] = None
 
 
 class CredentialsResponse(BaseModel):
-    """Response for service credentials."""
-    credentials: dict[str, ServiceCredential]
+    """Response for service credentials.
+
+    Credentials may be ServiceCredential dicts (username/password) or
+    arbitrary dicts (e.g., keycloak_oidc stores client secrets per app).
+    """
+    credentials: dict[str, Any]
 
 
 @router.post("/start", response_model=DeploymentResponse)
