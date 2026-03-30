@@ -139,12 +139,13 @@ configs:
     application.resourceTrackingMethod: annotation
     # OIDC configuration for Keycloak SSO
     url: https://argocd.knowledgeondemand.net
+    oidc.tls.insecure.skip.verify: "true"
     oidc.config: |
       name: Keycloak
       issuer: https://keycloak.knowledgeondemand.net/realms/cleanroom
       clientID: argocd
       clientSecret: $oidc.keycloak.clientSecret
-      requestedScopes: ["openid", "profile", "email", "groups"]
+      requestedScopes: ["openid", "profile", "email", "roles"]
 
   # ArgoCD parameters
   params:
