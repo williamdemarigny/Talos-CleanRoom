@@ -81,9 +81,10 @@ cat > /etc/docker/daemon.json <<'DOCKER_EOF'
 }
 DOCKER_EOF
 
-# Enable and start Docker
+# Enable and restart Docker (restart required — apt install auto-starts Docker
+# before daemon.json is written, so 'start' would be a no-op)
 systemctl enable docker
-systemctl start docker
+systemctl restart docker
 
 # Verify Docker
 docker --version
