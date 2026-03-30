@@ -17,11 +17,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Source logging helpers
+# Source logging helpers (provides print_info, print_warning, print_error, print_step)
 source "$REPO_ROOT/lib/functions.sh"
 
 # =============================================================================
-# Generate passwords
+# Generate passwords (alphanumeric only — safe for sed, SQL, JSON)
 # =============================================================================
 generate_password() {
     local length=${1:-32}
@@ -40,35 +40,35 @@ echo ""
 # =============================================================================
 # Step 1: Create namespaces
 # =============================================================================
-print_step "1" "Creating namespaces"
+print_step "1 — Creating namespaces"
 
 for ns in keycloak oauth2-proxy deployment-console; do
     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null
-    log_info "Namespace $ns ready"
+    print_info "Namespace $ns ready"
 done
 
 # =============================================================================
 # Step 2: Create K8s secrets
 # =============================================================================
-print_step "2" "Creating K8s secrets"
+print_step "2 — Creating K8s secrets"
 
 # Keycloak DB credentials in cleanroom-db namespace
 kubectl -n cleanroom-db create secret generic keycloak-db-credentials \
     --from-literal=postgres-password="$KC_DB_PASSWORD" \
     --dry-run=client -o yaml | kubectl apply -f -
-log_info "Created keycloak-db-credentials in cleanroom-db"
+print_info "Created keycloak-db-credentials in cleanroom-db"
 
 # Keycloak credentials in keycloak namespace
 kubectl -n keycloak create secret generic keycloak-credentials \
     --from-literal=admin-password="$KC_ADMIN_PASSWORD" \
     --dry-run=client -o yaml | kubectl apply -f -
-log_info "Created keycloak-credentials in keycloak"
+print_info "Created keycloak-credentials in keycloak"
 
 # Keycloak DB credentials in keycloak namespace (same password)
 kubectl -n keycloak create secret generic keycloak-db-credentials \
     --from-literal=postgres-password="$KC_DB_PASSWORD" \
     --dry-run=client -o yaml | kubectl apply -f -
-log_info "Created keycloak-db-credentials in keycloak"
+print_info "Created keycloak-db-credentials in keycloak"
 
 # OAuth2-Proxy credentials
 kubectl -n oauth2-proxy create secret generic oauth2-proxy-credentials \
@@ -76,27 +76,27 @@ kubectl -n oauth2-proxy create secret generic oauth2-proxy-credentials \
     --from-literal=client-secret="configure-after-keycloak-realm-import" \
     --from-literal=cookie-secret="$OAUTH2_COOKIE_SECRET" \
     --dry-run=client -o yaml | kubectl apply -f -
-log_info "Created oauth2-proxy-credentials in oauth2-proxy"
+print_info "Created oauth2-proxy-credentials in oauth2-proxy"
 
 # =============================================================================
 # Step 3: Initialize Keycloak database in cleanroom-db
 # =============================================================================
-print_step "3" "Initializing Keycloak database"
+print_step "3 — Initializing Keycloak database"
 
 # Check if keycloak database already exists
 DB_EXISTS=$(kubectl -n cleanroom-db exec statefulset/cleanroom-db -- \
     psql -U cleanroom -tAc "SELECT 1 FROM pg_database WHERE datname='keycloak'" 2>/dev/null || echo "")
 
 if [ "$DB_EXISTS" = "1" ]; then
-    log_info "Keycloak database already exists — skipping creation"
+    print_info "Keycloak database already exists — skipping creation"
 else
-    log_info "Creating keycloak database and user..."
+    print_info "Creating keycloak database and user..."
     kubectl -n cleanroom-db exec statefulset/cleanroom-db -- psql -U cleanroom -c "
         CREATE ROLE keycloak WITH LOGIN PASSWORD '$KC_DB_PASSWORD';
         CREATE DATABASE keycloak OWNER keycloak;
         REVOKE ALL ON DATABASE cleanroom FROM keycloak;
         REVOKE CONNECT ON DATABASE cleanroom FROM keycloak;
-    " 2>/dev/null || log_warn "Database creation had warnings (may already exist)"
+    " 2>/dev/null || print_warning "Database creation had warnings (may already exist)"
 
     # Restrict keycloak user from cleanroom schema
     kubectl -n cleanroom-db exec statefulset/cleanroom-db -- psql -U cleanroom -d cleanroom -c "
@@ -108,34 +108,35 @@ else
         GRANT ALL ON SCHEMA public TO keycloak;
     " 2>/dev/null || true
 
-    log_info "Keycloak database created with restricted user"
+    print_info "Keycloak database created with restricted user"
 fi
 
 # =============================================================================
 # Step 4: Deploy ArgoCD applications
 # =============================================================================
-print_step "4" "Deploying ArgoCD applications"
+print_step "4 — Deploying ArgoCD applications"
 
 kubectl apply -f "$REPO_ROOT/apps/deployment-console/application.yaml"
-log_info "Applied deployment-console ArgoCD app"
+print_info "Applied deployment-console ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/keycloak/application.yaml"
-log_info "Applied keycloak ArgoCD app"
+print_info "Applied keycloak ArgoCD app"
 
 kubectl apply -f "$REPO_ROOT/apps/oauth2-proxy/application.yaml"
-log_info "Applied oauth2-proxy ArgoCD app"
+print_info "Applied oauth2-proxy ArgoCD app"
 
 # =============================================================================
 # Step 5: Wait for Keycloak to start
 # =============================================================================
-print_step "5" "Waiting for Keycloak to start"
+print_step "5 — Waiting for Keycloak to start"
 
-log_info "Waiting for Keycloak pod to be ready (this may take 2-5 minutes)..."
+print_info "Waiting for Keycloak pod to be ready (this may take 2-5 minutes)..."
+READY="false"
 for ((i=1; i<=60; i++)); do
     POD_STATUS=$(kubectl -n keycloak get pods -l app.kubernetes.io/name=keycloak -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "NotFound")
     READY=$(kubectl -n keycloak get pods -l app.kubernetes.io/name=keycloak -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
     if [ "$READY" = "true" ]; then
-        log_info "Keycloak pod is ready!"
+        print_info "Keycloak pod is ready!"
         break
     fi
     echo -ne "\r  Waiting for Keycloak ($i/60) — Status: $POD_STATUS..."
@@ -143,15 +144,20 @@ for ((i=1; i<=60; i++)); do
 done
 echo ""
 
+if [ "$READY" != "true" ]; then
+    print_error "Keycloak pod never became ready after 10 minutes"
+    exit 1
+fi
+
 # Verify Keycloak HTTP port is actually responding (readiness probe may pass before HTTP is fully ready)
-log_info "Verifying Keycloak HTTP port is responsive..."
+print_info "Verifying Keycloak HTTP port is responsive..."
 for ((i=1; i<=30; i++)); do
     if kubectl -n keycloak exec deploy/keycloak -- curl -sf http://localhost:8080/realms/master > /dev/null 2>&1; then
-        log_info "Keycloak HTTP port responding"
+        print_info "Keycloak HTTP port responding"
         break
     fi
     if [ "$i" -eq 30 ]; then
-        log_error "Keycloak HTTP port did not respond after 1 minute"
+        print_error "Keycloak HTTP port did not respond after 1 minute"
         exit 1
     fi
     echo -ne "\r  Verifying HTTP port ($i/30)..."
@@ -161,7 +167,7 @@ done
 # =============================================================================
 # Step 6: Generate OIDC client secrets and import realm
 # =============================================================================
-print_step "6" "Importing Keycloak realm with OIDC client secrets"
+print_step "6 — Importing Keycloak realm with OIDC client secrets"
 
 SECRET_PORTAL=$(generate_password 32)
 SECRET_SCANNING=$(generate_password 32)
@@ -183,34 +189,37 @@ REALM_JSON=$(cat "$REPO_ROOT/apps/keycloak/realm-config.json" \
 # Write realm JSON into the Keycloak pod
 echo "$REALM_JSON" | base64 | kubectl -n keycloak exec -i deploy/keycloak -- \
     bash -c 'base64 -d > /tmp/realm.json'
-log_info "Realm config written to Keycloak pod"
+print_info "Realm config written to Keycloak pod"
 
 # Authenticate with Keycloak admin CLI
-kubectl -n keycloak exec deploy/keycloak -- \
+if ! kubectl -n keycloak exec deploy/keycloak -- \
     /opt/keycloak/bin/kcadm.sh config credentials \
     --server http://localhost:8080 \
     --realm master \
     --user admin \
-    --password "$KC_ADMIN_PASSWORD" 2>/dev/null
-log_info "Authenticated to Keycloak admin API"
+    --password "$KC_ADMIN_PASSWORD" 2>/dev/null; then
+    print_error "Failed to authenticate to Keycloak admin API"
+    exit 1
+fi
+print_info "Authenticated to Keycloak admin API"
 
 # Import the realm
 if kubectl -n keycloak exec deploy/keycloak -- \
     /opt/keycloak/bin/kcadm.sh create realms \
     -f /tmp/realm.json 2>/dev/null; then
-    log_info "Realm 'cleanroom' created successfully"
+    print_info "Realm 'cleanroom' created successfully"
 else
-    log_warn "Realm may already exist, attempting partial import..."
+    print_warning "Realm may already exist, attempting partial import..."
     kubectl -n keycloak exec deploy/keycloak -- \
         /opt/keycloak/bin/kcadm.sh create partialImport \
         -r cleanroom -f /tmp/realm.json \
-        -s ifResourceExists=OVERWRITE 2>/dev/null || log_warn "Partial import had warnings"
+        -s ifResourceExists=OVERWRITE 2>/dev/null || print_warning "Partial import had warnings"
 fi
 
 # =============================================================================
 # Step 7: Distribute OIDC client secrets to app secrets
 # =============================================================================
-print_step "7" "Configuring OIDC credentials in application secrets"
+print_step "7 — Configuring OIDC credentials in application secrets"
 
 ISSUER_URL="https://keycloak.knowledgeondemand.net/realms/cleanroom"
 
@@ -218,11 +227,14 @@ ISSUER_URL="https://keycloak.knowledgeondemand.net/realms/cleanroom"
 patch_secret_safe() {
     local ns="$1" secret="$2" json_patch="$3" label="$4"
     if ! kubectl -n "$ns" get secret "$secret" &>/dev/null; then
-        log_warn "Secret $secret not found in $ns — creating it"
-        kubectl -n "$ns" create secret generic "$secret" --dry-run=client -o yaml | kubectl apply -f -
+        print_warning "Secret $secret not found in $ns — creating it"
+        kubectl -n "$ns" create secret generic "$secret" --dry-run=client -o yaml | kubectl apply -f - || {
+            print_error "Failed to create secret $secret in $ns"
+            return 1
+        }
     fi
     kubectl -n "$ns" patch secret "$secret" --type merge -p "$json_patch"
-    log_info "$label OIDC configured"
+    print_info "$label OIDC configured"
 }
 
 # Portal
@@ -248,13 +260,13 @@ patch_secret_safe oauth2-proxy oauth2-proxy-credentials \
 # =============================================================================
 # Step 8: Restart apps to pick up OIDC config
 # =============================================================================
-print_step "8" "Restarting applications to enable OIDC"
+print_step "8 — Restarting applications to enable OIDC"
 
 for ns_deploy in "portal/portal" "scanning-console/scanning-console" "oauth2-proxy/oauth2-proxy"; do
     ns="${ns_deploy%%/*}"
     deploy="${ns_deploy##*/}"
     kubectl -n "$ns" rollout restart "deployment/$deploy" 2>/dev/null || true
-    log_info "Restarted $deploy in $ns"
+    print_info "Restarted $deploy in $ns"
 done
 
 # =============================================================================
