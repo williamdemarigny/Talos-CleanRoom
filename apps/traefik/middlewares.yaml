@@ -115,21 +115,18 @@ spec:
       - X-Auth-Request-Email
       - X-Auth-Request-Access-Token
 ---
-# Error handler that redirects 401 responses to OAuth2-Proxy sign-in
+# OAuth2 sign-in redirect — sends unauthenticated users (no cookie)
+# to the OAuth2-Proxy sign-in endpoint which starts the Keycloak flow
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: oauth2-errors
+  name: oauth2-signin-redirect
   namespace: traefik
 spec:
-  errors:
-    status:
-      - "401"
-    service:
-      name: oauth2-proxy
-      namespace: oauth2-proxy
-      port: 80
-    query: "/oauth2/sign_in?rd={url}"
+  redirectRegex:
+    regex: "^https://([^/]+)(.*)"
+    replacement: "https://${1}/oauth2/sign_in?rd=https://${1}${2}"
+    permanent: false
 ---
 # Chain middleware - combines multiple middlewares
 apiVersion: traefik.io/v1alpha1
