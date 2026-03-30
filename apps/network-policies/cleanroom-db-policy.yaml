@@ -2,7 +2,6 @@
 # =============================================================================
 # PostgreSQL database that only needs:
 # - Ingress from scanning-console namespace (port 5432)
-# - Ingress from keycloak namespace (port 5432)
 # - Egress to DNS (name resolution)
 # =============================================================================
 ---
@@ -27,14 +26,6 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: scanning-console
-      ports:
-        - protocol: TCP
-          port: 5432
-    # Allow ingress from keycloak namespace (identity provider DB)
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: keycloak
       ports:
         - protocol: TCP
           port: 5432

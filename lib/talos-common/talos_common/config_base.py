@@ -29,15 +29,6 @@ class BaseAppSettings(BaseSettings):
     )  # Default: admin
     access_token_expire_hours: int = 8
 
-    # OIDC configuration (optional; empty = disabled, falls back to local JWT)
-    oidc_issuer_url: str = ""
-    oidc_client_id: str = ""
-    oidc_client_secret: str = ""
-    oidc_redirect_path: str = "/auth/callback"
-    oidc_redirect_host: str = ""   # e.g. "scan.knowledgeondemand.net" — set per-app via env
-    oidc_scopes: str = "openid profile email"
-    oidc_verify_ssl: bool = False  # Set True after switching to letsencrypt-prod
-
     # Known default hash — used to detect first-login and prompt password change
     _DEFAULT_PASSWORD_HASH: str = (
         "$2b$12$Fosg.8JShshDJrpDuu2/T.9gzo05L2RJ.n1n5rQM35a7AN2NK555e"

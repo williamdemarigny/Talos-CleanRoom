@@ -4,7 +4,7 @@
 # NOT inside the Kubernetes cluster. This ExternalName service + Endpoints pair
 # allows Traefik to route traffic to it, providing:
 # - TLS termination via wildcard cert (*.knowledgeondemand.net)
-# - FQDN for OIDC redirect URIs (deploy.knowledgeondemand.net)
+# - FQDN via deploy.knowledgeondemand.net
 # - Consistent access pattern across all platform services
 #
 # Traefik allowExternalNameServices is already enabled (traefik/application.yaml:42)

@@ -1,6 +1,6 @@
 # CleanRoom Database - Automated Backup CronJob
 # Runs daily at 02:00 UTC, pg_dumpall | gzip, 14-day retention
-# Backs up ALL databases (cleanroom + keycloak)
+# Backs up ALL databases (cleanroom)
 ---
 apiVersion: batch/v1
 kind: CronJob
