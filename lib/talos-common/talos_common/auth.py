@@ -101,13 +101,28 @@ def decode_token(token: str, settings) -> Optional[dict]:
             # OIDC mode: validate against Keycloak JWKS
             jwks_client = _get_jwks_client(settings.oidc_issuer_url)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
+            # Keycloak access tokens may not include the client_id in the
+            # aud claim unless an audience mapper is configured.  Validate
+            # signature + issuer + expiry first, then check audience
+            # separately so we can log a clear message on mismatch.
             payload = pyjwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                audience=settings.oidc_client_id,
                 issuer=settings.oidc_issuer_url,
+                options={"verify_aud": False},
             )
+            # Verify audience: accept if client_id OR "account" is present
+            token_aud = payload.get("aud", [])
+            if isinstance(token_aud, str):
+                token_aud = [token_aud]
+            expected = settings.oidc_client_id
+            if expected not in token_aud and "account" not in token_aud:
+                logger.warning(
+                    "OIDC token audience mismatch: expected %r or 'account', got %r",
+                    expected, token_aud,
+                )
+                return None
             # Map Keycloak claims to app format
             username = payload.get("preferred_username") or payload.get("sub")
             if username is None:

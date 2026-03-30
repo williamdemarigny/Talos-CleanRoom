@@ -81,7 +81,21 @@
         "https://cleanroom.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "portal",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     },
     {
       "clientId": "scanning-console",
@@ -100,7 +114,21 @@
         "https://scan.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "scanning-console",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     },
     {
       "clientId": "deployment-console",
@@ -119,7 +147,21 @@
         "https://deploy.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "deployment-console",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     },
     {
       "clientId": "argocd",
@@ -138,7 +180,21 @@
         "https://argocd.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "argocd",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     },
     {
       "clientId": "harbor",
@@ -157,7 +213,21 @@
         "https://harbor.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "harbor",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     },
     {
       "clientId": "traefik-forward-auth",
@@ -181,7 +251,21 @@
         "https://threatdragon.knowledgeondemand.net"
       ],
       "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"]
+      "optionalClientScopes": ["roles"],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "traefik-forward-auth",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "included.custom.audience": ""
+          }
+        }
+      ]
     }
   ]
 }
