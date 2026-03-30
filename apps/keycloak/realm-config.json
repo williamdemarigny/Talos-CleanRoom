@@ -48,6 +48,7 @@
     {
       "username": "admin",
       "enabled": true,
+      "email": "admin@knowledgeondemand.net",
       "emailVerified": true,
       "firstName": "Platform",
       "lastName": "Admin",
@@ -56,7 +57,7 @@
         {
           "type": "password",
           "value": "admin",
-          "temporary": true
+          "temporary": false
         }
       ]
     }
