@@ -68,18 +68,19 @@ def create_access_token(username: str, settings) -> str:
     return pyjwt.encode(to_encode, settings.jwt_signing_key, algorithm=LOCAL_ALGORITHM)
 
 
-def _get_jwks_client(issuer_url: str):
+def _get_jwks_client(issuer_url: str, verify_ssl: bool = False):
     """Get or create a cached PyJWKClient for the given issuer."""
-    if issuer_url not in _jwks_client_cache:
+    cache_key = (issuer_url, verify_ssl)
+    if cache_key not in _jwks_client_cache:
         jwks_uri = f"{issuer_url}/protocol/openid-connect/certs"
-        # ssl_context=False skips TLS verification (staging certs)
-        # Switch to default (True) after moving to letsencrypt-prod
-        import ssl
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        _jwks_client_cache[issuer_url] = PyJWKClient(jwks_uri, ssl_context=ctx)
-    return _jwks_client_cache[issuer_url]
+        ssl_ctx = None
+        if not verify_ssl:
+            import ssl
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        _jwks_client_cache[cache_key] = PyJWKClient(jwks_uri, ssl_context=ssl_ctx)
+    return _jwks_client_cache[cache_key]
 
 
 def decode_token(token: str, settings) -> Optional[dict]:
@@ -99,7 +100,8 @@ def decode_token(token: str, settings) -> Optional[dict]:
 
         if alg == "RS256" and settings.oidc_issuer_url:
             # OIDC mode: validate against Keycloak JWKS
-            jwks_client = _get_jwks_client(settings.oidc_issuer_url)
+            verify_ssl = getattr(settings, "oidc_verify_ssl", False)
+            jwks_client = _get_jwks_client(settings.oidc_issuer_url, verify_ssl=verify_ssl)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             # Keycloak access tokens may not include the client_id in the
             # aud claim unless an audience mapper is configured.  Validate

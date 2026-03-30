@@ -150,9 +150,11 @@ if [ "$READY" != "true" ]; then
 fi
 
 # Verify Keycloak HTTP port is actually responding (readiness probe may pass before HTTP is fully ready)
+# Note: Keycloak 26 image (quay.io/keycloak/keycloak) does NOT include curl.
+# Use the built-in bash /dev/tcp check or kcadm.sh to verify HTTP readiness.
 print_info "Verifying Keycloak HTTP port is responsive..."
 for ((i=1; i<=30; i++)); do
-    if kubectl -n keycloak exec deploy/keycloak -- curl -sf http://localhost:8080/realms/master > /dev/null 2>&1; then
+    if kubectl -n keycloak exec deploy/keycloak -- bash -c 'echo > /dev/tcp/localhost/8080' 2>/dev/null; then
         print_info "Keycloak HTTP port responding"
         break
     fi

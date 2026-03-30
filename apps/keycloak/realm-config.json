@@ -80,8 +80,8 @@
       "webOrigins": [
         "https://cleanroom.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
@@ -113,8 +113,8 @@
       "webOrigins": [
         "https://scan.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
@@ -146,8 +146,8 @@
       "webOrigins": [
         "https://deploy.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
@@ -179,8 +179,8 @@
       "webOrigins": [
         "https://argocd.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
@@ -212,8 +212,8 @@
       "webOrigins": [
         "https://harbor.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
@@ -250,8 +250,8 @@
         "https://openvas.knowledgeondemand.net",
         "https://threatdragon.knowledgeondemand.net"
       ],
-      "defaultClientScopes": ["openid", "profile", "email"],
-      "optionalClientScopes": ["roles"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "audience-mapper",
