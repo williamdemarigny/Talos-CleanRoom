@@ -2320,13 +2320,9 @@ class DeploymentService(BaseServiceMixin):
         sc_secret_key = self._generate_password(48)
         db_url = f"postgresql+asyncpg://cleanroom:{db_password}@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom"
 
-        # Generate bcrypt hash for admin password
-        hash_result = await self.process_manager.run_command_simple(
-            ["python3", "-c",
-             f"import bcrypt; print(bcrypt.hashpw(b'{sc_admin_password}', bcrypt.gensalt(10)).decode())"],
-            timeout=15,
-        )
-        sc_admin_hash = hash_result.output.strip() if hash_result.success else ""
+        # Generate bcrypt hash for admin password (using passlib already in process)
+        from talos_common.auth import get_password_hash
+        sc_admin_hash = get_password_hash(sc_admin_password)
 
         # Read Proxmox credentials for Target Lab integration
         proxmox_creds = self._read_proxmox_credentials()
