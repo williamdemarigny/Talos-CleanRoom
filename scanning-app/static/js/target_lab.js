@@ -29,10 +29,16 @@ function targetLabManager() {
 
             // Poll every 10 seconds for status updates
             this._pollTimer = setInterval(() => this.loadTargets(), 10000);
+
+            // Clean up polling when navigating away
+            window.addEventListener('beforeunload', () => this.destroy());
         },
 
         destroy() {
-            if (this._pollTimer) clearInterval(this._pollTimer);
+            if (this._pollTimer) {
+                clearInterval(this._pollTimer);
+                this._pollTimer = null;
+            }
         },
 
         async loadTemplates() {

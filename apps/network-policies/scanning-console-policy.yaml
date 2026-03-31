@@ -91,6 +91,10 @@ spec:
       ports:
         - protocol: TCP
           port: 8006
+    # Allow connection to target VMs (Target Lab — Metasploitable3 on VLAN 3)
+    - to:
+        - ipBlock:
+            cidr: 10.83.3.160/28
     # Allow HTTPS egress to external APIs (NVD, EPSS, OTX) for vulnerability enrichment
     # Excludes private networks, cloud metadata, and CGNAT to prevent SSRF
     - to:

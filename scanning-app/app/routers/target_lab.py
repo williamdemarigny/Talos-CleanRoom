@@ -1,9 +1,10 @@
 """Target Lab API router — deploy/destroy Metasploitable3 target VMs."""
 
 import logging
+from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from talos_common.auth import get_current_user
 from app.services.audit import log_audit
@@ -16,12 +17,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class TemplateType(str, Enum):
+    UBUNTU = "ubuntu"
+    WINDOWS = "windows"
+
+
 class DeployRequest(BaseModel):
-    template: str  # "ubuntu" or "windows"
+    template: TemplateType
 
 
 class ExtendTTLRequest(BaseModel):
-    hours: int = 4
+    hours: int = Field(4, ge=1, le=24)
 
 
 @router.get("/templates")
@@ -60,7 +66,7 @@ async def deploy_target(
     """Deploy a new Metasploitable3 target VM."""
     svc = get_target_lab_service()
     try:
-        result = await svc.deploy_target(body.template, user.get("sub", "admin"))
+        result = await svc.deploy_target(body.template.value, user.get("sub", "admin"))
     except TargetLabError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

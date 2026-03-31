@@ -41,6 +41,17 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    # Allow egress to target VMs for vulnerability scanning (Target Lab)
+    - to:
+        - ipBlock:
+            cidr: 10.83.3.160/28
+      ports:
+        - protocol: TCP
+          port: 1
+          endPort: 65535
+        - protocol: UDP
+          port: 1
+          endPort: 65535
     # Allow HTTPS egress for feed synchronization
     # OpenVAS syncs NVT, SCAP, CERT, and GVMD data feeds from Greenbone servers
     - to:
