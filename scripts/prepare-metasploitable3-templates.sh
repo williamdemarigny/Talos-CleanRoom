@@ -145,8 +145,8 @@ prepare_template() {
     log "Converting to template..."
     qm template "$vmid"
 
-    # Step 8: Cleanup extracted files (keep .box for potential re-use)
-    rm -rf "$extract_dir" "$qcow2_file"
+    # Step 8: Cleanup all intermediate files to free /tmp space
+    rm -rf "$extract_dir" "$qcow2_file" "$box_file"
 
     log "Template $vmid ($name) created successfully."
 }
