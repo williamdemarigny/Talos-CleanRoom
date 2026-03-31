@@ -1360,8 +1360,8 @@ except Exception as e:
         # Instead: create pod → wait for completion → read logs → delete pod
         nmap_args_str = " ".join(flags + ["-oX", "-", target])
         nmap_ns = "nmap-scanner"
-        # Ensure namespace exists
-        await self.k8s.ensure_namespace(nmap_ns)
+        # Ensure namespace exists (privileged — nmap needs NET_RAW for SYN scanning)
+        await self.k8s.ensure_namespace(nmap_ns, privileged=True)
 
         create_result = await self.process_manager.run_command_simple(
             ["kubectl", "run", pod_name,
