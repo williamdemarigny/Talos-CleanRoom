@@ -38,7 +38,7 @@ UBUNTU_BOX_URL="https://vagrantcloud.com/rapid7/boxes/metasploitable3-ub1404/ver
 
 WINDOWS_VMID=4001
 WINDOWS_NAME="metasploitable3-windows"
-WINDOWS_BOX_URL="https://app.vagrantup.com/rapid7/boxes/metasploitable3-win2k8/versions/0.1.0-weekly/providers/virtualbox/amd64/vagrant.box"
+WINDOWS_BOX_URL="https://vagrantcloud.com/rapid7/boxes/metasploitable3-win2k8/versions/0.1.0-weekly/providers/virtualbox/unknown/vagrant.box"
 
 # --- Logging ---
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
