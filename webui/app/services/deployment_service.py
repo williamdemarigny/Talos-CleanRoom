@@ -2858,20 +2858,19 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on a Proxmox node")
             return True  # Non-fatal, templates can be created later
 
-        # SSH to first Proxmox node
-        settings = get_settings()
-        proxmox_ip = settings.node_ips[0] if settings.node_ips else ""
-        if not proxmox_ip:
-            await self.log(step_id, "warn", "No Proxmox node IPs configured — skipping")
+        # SSH to the Proxmox host — extract hostname from proxmox_api_url
+        proxmox_api_url = proxmox_creds.get("proxmox_api_url", "")
+        if not proxmox_api_url:
+            await self.log(step_id, "warn", "No Proxmox API URL configured — skipping")
             return True
 
-        # Use the management IP (VLAN 2) — derive from node IP pattern
-        # Node IPs are on VLAN 3 (10.83.3.x), Proxmox mgmt is VLAN 2 (10.83.2.x)
-        parts = proxmox_ip.split(".")
-        if len(parts) == 4:
-            mgmt_ip = f"{parts[0]}.{parts[1]}.2.{parts[3]}"
-        else:
-            mgmt_ip = proxmox_ip
+        # Extract host from URL (e.g., "https://pve01.knowledgeondemand.net:8006" → "pve01.knowledgeondemand.net")
+        from urllib.parse import urlparse
+        parsed = urlparse(proxmox_api_url)
+        mgmt_ip = parsed.hostname or ""
+        if not mgmt_ip:
+            await self.log(step_id, "warn", "Could not parse Proxmox host from API URL — skipping")
+            return True
 
         ssh_prefix = [
             "sshpass", "-p", proxmox_ssh_password,
