@@ -34,7 +34,7 @@ WORK_DIR="/tmp/metasploitable3-prep"
 
 UBUNTU_VMID=4000
 UBUNTU_NAME="metasploitable3-ubuntu"
-UBUNTU_BOX_URL="https://app.vagrantup.com/rapid7/boxes/metasploitable3-ub1404/versions/0.1.12-weekly/providers/virtualbox/amd64/vagrant.box"
+UBUNTU_BOX_URL="https://vagrantcloud.com/rapid7/boxes/metasploitable3-ub1404/versions/0.1.12-weekly/providers/virtualbox/unknown/vagrant.box"
 
 WINDOWS_VMID=4001
 WINDOWS_NAME="metasploitable3-windows"
