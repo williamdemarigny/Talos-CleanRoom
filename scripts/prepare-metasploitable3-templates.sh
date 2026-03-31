@@ -85,10 +85,17 @@ prepare_template() {
 
     # Step 1: Download Vagrant box
     if [[ -f "$box_file" ]]; then
-        log "Box file already downloaded, reusing: $box_file"
+        # Validate existing file is a valid archive before reusing
+        if tar tf "$box_file" &>/dev/null; then
+            log "Box file already downloaded and valid, reusing: $box_file"
+        else
+            log "Existing box file is corrupt, re-downloading..."
+            rm -f "$box_file"
+            curl -L --progress-bar --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
+        fi
     else
         log "Downloading Vagrant box (~1-5 GB)..."
-        curl -L -C - --progress-bar -o "$box_file" "$box_url"
+        curl -L --progress-bar --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
     fi
 
     # Step 2: Extract VMDK from box (it's a tar.gz)

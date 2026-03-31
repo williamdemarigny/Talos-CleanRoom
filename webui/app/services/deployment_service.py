@@ -2905,12 +2905,12 @@ echo "=== Setup Complete ==="
             await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on Proxmox")
             return False
 
-        # Execute the script (allow 20 minutes for ~6.5 GB download + conversion)
-        await self.log(step_id, "info", "Downloading and converting Metasploitable3 images (this takes 10-15 minutes)...")
+        # Execute the script (allow 45 minutes for ~6.5 GB download + conversion)
+        await self.log(step_id, "info", "Downloading and converting Metasploitable3 images (this may take 15-30 minutes)...")
         exec_result = await self.process_manager.run_command(
             ssh_prefix + ["bash /tmp/prepare-ms3.sh && rm -f /tmp/prepare-ms3.sh"],
             on_output=self._sanitized_output_callback(step_id),
-            timeout=1200,  # 20 minutes
+            timeout=2700,  # 45 minutes
         )
 
         if not exec_result.success:
