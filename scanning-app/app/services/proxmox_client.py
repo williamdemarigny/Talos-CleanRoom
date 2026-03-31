@@ -156,9 +156,21 @@ class ProxmoxClient:
             f"/nodes/{node}/qemu/{template_vmid}/clone", data=data
         )
         # Clone returns a task UPID — wait for it
-        upid = result if isinstance(result, str) else result.get("data", result)
+        if isinstance(result, str):
+            upid = result
+        elif isinstance(result, dict):
+            upid = result.get("data", result) if "data" in result else None
+        else:
+            raise ProxmoxError(f"Clone returned unexpected format: {result}")
         if upid:
             await self._wait_for_task(node, upid, timeout=600)
+        else:
+            raise ProxmoxError("Clone did not return a task UPID")
+        # Verify VM actually exists after clone
+        if not await self.vm_exists(node, new_vmid):
+            raise ProxmoxError(
+                f"Clone task completed but VM {new_vmid} not found on {node}"
+            )
         logger.info("Clone complete: VMID %d", new_vmid)
 
     async def configure_vm(

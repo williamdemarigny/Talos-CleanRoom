@@ -233,8 +233,15 @@ class TargetLabService:
 
         factory = _get_session_factory()
         async with factory() as session:
-            # Acquire advisory lock to serialize allocation across concurrent requests
-            await session.execute(text(f"SELECT pg_advisory_lock({_ALLOCATION_LOCK_ID})"))
+            # Acquire advisory lock with timeout to serialize allocation
+            try:
+                await asyncio.wait_for(
+                    session.execute(text(f"SELECT pg_advisory_lock({_ALLOCATION_LOCK_ID})")),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                raise TargetLabError("Failed to acquire deployment lock (timeout). Try again.")
+
             try:
                 active = await self._get_active_vms(session)
 
@@ -283,14 +290,15 @@ class TargetLabService:
                     raise TargetLabError(
                         f"Resource allocation conflict (VMID {vmid}). Please retry."
                     )
+
+                # Create background task INSIDE the lock so the DB record is
+                # committed before any concurrent request can re-allocate
+                task = asyncio.create_task(
+                    self._deploy_vm_with_timeout(vmid, template_vmid, name, node, ip, template_type)
+                )
+                task.add_done_callback(self._task_done_callback)
             finally:
                 await session.execute(text(f"SELECT pg_advisory_unlock({_ALLOCATION_LOCK_ID})"))
-
-        # Deploy in background with timeout wrapper
-        task = asyncio.create_task(
-            self._deploy_vm_with_timeout(vmid, template_vmid, name, node, ip, template_type)
-        )
-        task.add_done_callback(self._task_done_callback)
 
         return {
             "vmid": vmid,
@@ -334,10 +342,11 @@ class TargetLabService:
             # Clone template
             await self._client.clone_template(node, template_vmid, vmid, name)
 
-            # Apply firewall rules to isolate the vulnerable VM
+            # Apply firewall rules to isolate the vulnerable VM (fatal if fails)
             await self._apply_vm_firewall(node, vmid)
 
-            # Configure cloud-init IP (Ubuntu only)
+            # Configure cloud-init IP (Ubuntu only — Windows lacks cloud-init,
+            # uses fixed IP baked into template via SYSPREP or DHCP reservation)
             if template_type == "ubuntu":
                 await self._client.configure_vm(
                     node, vmid, ip, settings.target_vm_gateway, settings.target_vm_netmask
@@ -349,6 +358,18 @@ class TargetLabService:
             # Wait for VM to be reachable
             detected_ip = await self._client.wait_for_ip(node, vmid, timeout=180)
             if detected_ip and detected_ip != ip:
+                # Validate detected IP is within the target VM range
+                base = ipaddress.IPv4Address(settings.target_vm_ip_start)
+                end = base + settings.target_vm_ip_count
+                detected_addr = ipaddress.IPv4Address(detected_ip)
+                if not (base <= detected_addr < end):
+                    logger.error(
+                        "VM %d: detected IP %s outside target range %s-%s",
+                        vmid, detected_ip, base, end - 1,
+                    )
+                    raise TargetLabError(
+                        f"VM got IP {detected_ip} outside allowed range"
+                    )
                 logger.info(
                     "VM %d: expected IP %s, detected %s (using detected)",
                     vmid, ip, detected_ip,
@@ -426,7 +447,8 @@ class TargetLabService:
 
             logger.info("Firewall rules applied to VM %d", vmid)
         except ProxmoxError as e:
-            logger.warning("Failed to apply firewall rules to VM %d: %s", vmid, e)
+            logger.error("Failed to apply firewall rules to VM %d: %s", vmid, e)
+            raise  # Firewall isolation is mandatory — fail deployment
 
     # ── Destroy ───────────────────────────────────────────────────
 
@@ -469,8 +491,10 @@ class TargetLabService:
     # ── TTL extension ─────────────────────────────────────────────
 
     async def extend_ttl(self, vmid: int, hours: int = 4, username: str = "admin") -> dict:
-        """Extend the TTL of a running target VM."""
+        """Extend the TTL of a running target VM (max 24h from creation)."""
         self._validate_vmid_in_range(vmid)
+        if hours < 1 or hours > 24:
+            raise TargetLabError("TTL extension must be between 1 and 24 hours.")
         factory = _get_session_factory()
         async with factory() as session:
             result = await session.execute(
@@ -482,7 +506,11 @@ class TargetLabService:
             if not target:
                 raise TargetLabError(f"No running target VM with VMID {vmid}.")
 
-            target.ttl_expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+            new_ttl = datetime.now(timezone.utc) + timedelta(hours=hours)
+            # Cap total lifetime at 24 hours from creation
+            created = target.created_at.replace(tzinfo=timezone.utc) if target.created_at and target.created_at.tzinfo is None else target.created_at
+            max_ttl = created + timedelta(hours=24) if created else new_ttl
+            target.ttl_expires_at = min(new_ttl, max_ttl)
             await session.commit()
             return self._vm_to_dict(target)
 
@@ -535,19 +563,36 @@ class TargetLabService:
                 logger.error("TTL cleanup failed for VM %d: %s", vm.vmid, e)
 
     async def reconcile_orphaned(self):
-        """Mark VMs stuck in 'deploying' for too long as errors."""
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+        """Clean up VMs stuck in 'deploying' or 'error' state.
+
+        - VMs in 'deploying' for >30 min: mark as error and destroy on Proxmox
+        - VMs in 'error' for >10 min: attempt destroy on Proxmox and mark destroyed
+        """
+        now = datetime.now(timezone.utc)
+        deploy_cutoff = now - timedelta(minutes=30)
+        error_cutoff = now - timedelta(minutes=10)
         factory = _get_session_factory()
         async with factory() as session:
             result = await session.execute(
                 select(TargetVM).where(
                     and_(
                         TargetVM.status == "deploying",
-                        TargetVM.created_at <= cutoff,
+                        TargetVM.created_at <= deploy_cutoff,
                     )
                 )
             )
             orphaned = list(result.scalars().all())
+
+            # Also find stale error VMs to clean up from Proxmox
+            result2 = await session.execute(
+                select(TargetVM).where(
+                    and_(
+                        TargetVM.status == "error",
+                        TargetVM.created_at <= error_cutoff,
+                    )
+                )
+            )
+            stale_errors = list(result2.scalars().all())
 
         for vm in orphaned:
             logger.warning("Reconciling orphaned VM %d (deploying since %s)", vm.vmid, vm.created_at)
@@ -557,6 +602,15 @@ class TargetLabService:
                     await self._client.destroy_vm(vm.proxmox_node, vm.vmid)
             except Exception:
                 pass
+
+        for vm in stale_errors:
+            logger.info("Cleaning up error VM %d from Proxmox", vm.vmid)
+            try:
+                if self._client:
+                    await self._client.destroy_vm(vm.proxmox_node, vm.vmid)
+            except Exception:
+                pass
+            await self._update_status(vm.vmid, "destroyed")
 
     # ── Helpers ───────────────────────────────────────────────────
 

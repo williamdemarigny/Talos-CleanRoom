@@ -2901,9 +2901,9 @@ echo "=== Setup Complete ==="
             timeout=30,
         )
         if not scp_result.success:
-            await self.log(step_id, "warn", "Failed to copy template script to Proxmox node")
-            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually")
-            return True  # Non-fatal
+            await self.log(step_id, "error", "Failed to copy template script to Proxmox node")
+            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on Proxmox")
+            return False
 
         # Execute the script (allow 20 minutes for ~6.5 GB download + conversion)
         await self.log(step_id, "info", "Downloading and converting Metasploitable3 images (this takes 10-15 minutes)...")
@@ -2914,9 +2914,8 @@ echo "=== Setup Complete ==="
         )
 
         if not exec_result.success:
-            await self.log(step_id, "warn", f"Template preparation had issues: {exec_result.output[-300:]}")
-            await self.log(step_id, "info", "Target Lab may still work if templates were partially created")
-            return True  # Non-fatal — deployment can continue
+            await self.log(step_id, "error", f"Template preparation failed: {exec_result.output[-300:]}")
+            return False
 
         await self.log(step_id, "info", "Metasploitable3 templates ready (VMIDs 4000, 4001)")
         return True

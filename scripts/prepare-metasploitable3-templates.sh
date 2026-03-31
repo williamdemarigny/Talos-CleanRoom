@@ -88,7 +88,7 @@ prepare_template() {
         log "Box file already downloaded, reusing: $box_file"
     else
         log "Downloading Vagrant box (~1-5 GB)..."
-        curl -L --progress-bar -o "$box_file" "$box_url"
+        curl -L -C - --progress-bar -o "$box_file" "$box_url"
     fi
 
     # Step 2: Extract VMDK from box (it's a tar.gz)
