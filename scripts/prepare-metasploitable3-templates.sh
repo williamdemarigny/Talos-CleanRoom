@@ -91,11 +91,11 @@ prepare_template() {
         else
             log "Existing box file is corrupt, re-downloading..."
             rm -f "$box_file"
-            curl -L --progress-bar --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
+            curl -L -s --show-error --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
         fi
     else
         log "Downloading Vagrant box (~1-5 GB)..."
-        curl -L --progress-bar --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
+        curl -L -s --show-error --fail -o "$box_file" "$box_url" || die "Download failed for $box_url"
     fi
 
     # Step 2: Extract VMDK from box (it's a tar.gz)
