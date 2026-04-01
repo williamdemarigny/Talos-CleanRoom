@@ -142,11 +142,50 @@ prepare_template() {
         qm set "$vmid" --ide2 "${STORAGE}:cloudinit"
     fi
 
-    # Step 7: Convert to template
+    # Step 7: Boot VM and install QEMU guest agent
+    # Required for: IP detection (wait_for_ip), graceful shutdown, Proxmox console info
+    log "Booting VM to install QEMU guest agent..."
+    qm start "$vmid"
+
+    # Wait for guest agent to become available (VM must boot fully)
+    local vm_ready=false
+    for attempt in $(seq 1 30); do
+        if qm guest exec "$vmid" -- echo ready 2>/dev/null | grep -q ready; then
+            vm_ready=true
+            break
+        fi
+        log "  Waiting for VM to boot... ($attempt/30)"
+        sleep 10
+    done
+
+    if [[ "$vm_ready" == "true" ]]; then
+        if [[ "$os_type" == "l26" ]]; then
+            log "Installing qemu-guest-agent (Linux)..."
+            qm guest exec "$vmid" -- bash -c \
+                'apt-get update -qq && apt-get install -y -qq qemu-guest-agent && systemctl enable qemu-guest-agent && systemctl start qemu-guest-agent' \
+                2>/dev/null || log "WARNING: guest agent install may have failed"
+        fi
+        log "Guest agent installed successfully"
+    else
+        log "WARNING: VM did not become accessible via guest exec — agent may need manual install"
+    fi
+
+    # Shut down cleanly before templating
+    log "Shutting down VM..."
+    qm shutdown "$vmid" --timeout 60 2>/dev/null || qm stop "$vmid"
+    # Wait for VM to fully stop
+    for i in $(seq 1 12); do
+        local status
+        status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+        [[ "$status" == "stopped" ]] && break
+        sleep 5
+    done
+
+    # Step 8: Convert to template
     log "Converting to template..."
     qm template "$vmid"
 
-    # Step 8: Cleanup all intermediate files to free /tmp space
+    # Step 9: Cleanup all intermediate files to free /tmp space
     rm -rf "$extract_dir" "$qcow2_file" "$box_file"
 
     log "Template $vmid ($name) created successfully."
