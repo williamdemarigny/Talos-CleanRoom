@@ -141,17 +141,30 @@ class ProxmoxClient:
         new_vmid: int,
         name: str,
         full: bool = True,
+        target_node: str = "",
     ) -> None:
-        """Clone a template VM to a new VMID."""
+        """Clone a template VM to a new VMID.
+
+        Args:
+            node: Node where the template is registered.
+            template_vmid: VMID of the template to clone.
+            new_vmid: VMID for the new clone.
+            name: Name for the new VM.
+            full: Full clone (True) or linked clone (False).
+            target_node: Node to place the clone on. If empty, same as source node.
+        """
+        target = target_node or node
         logger.info(
-            "Cloning template %d -> %d (%s) on %s",
-            template_vmid, new_vmid, name, node,
+            "Cloning template %d -> %d (%s) from %s to %s",
+            template_vmid, new_vmid, name, node, target,
         )
         data = {
             "newid": new_vmid,
             "name": name,
             "full": int(full),
         }
+        if target_node and target_node != node:
+            data["target"] = target_node
         result = await self._post(
             f"/nodes/{node}/qemu/{template_vmid}/clone", data=data
         )
@@ -166,12 +179,12 @@ class ProxmoxClient:
             await self._wait_for_task(node, upid, timeout=600)
         else:
             raise ProxmoxError("Clone did not return a task UPID")
-        # Verify VM actually exists after clone
-        if not await self.vm_exists(node, new_vmid):
+        # Verify VM actually exists after clone (check target node)
+        if not await self.vm_exists(target, new_vmid):
             raise ProxmoxError(
-                f"Clone task completed but VM {new_vmid} not found on {node}"
+                f"Clone task completed but VM {new_vmid} not found on {target}"
             )
-        logger.info("Clone complete: VMID %d", new_vmid)
+        logger.info("Clone complete: VMID %d on %s", new_vmid, target)
 
     async def configure_vm(
         self,
