@@ -136,10 +136,16 @@ prepare_template() {
     log "Disk imported successfully"
 
     # Step 6: Boot VM and install cloud-init + guest agent (Linux only)
-    # Metasploitable3 ships without these packages. We boot on the untagged
-    # bridge (DHCP from management network) to get internet access for apt.
+    #
+    # Metasploitable3 Ubuntu 14.04 ships without cloud-init or qemu-guest-agent.
+    # Three issues must be handled:
+    #   1. Ubuntu 14.04 is EOL — apt repos moved to old-releases.ubuntu.com
+    #   2. Ubuntu 14.04 uses Upstart, not systemd — use 'service' / 'update-rc.d'
+    #   3. ARP discovery needs MAC-based matching for reliability
+    #
+    # We boot on the untagged bridge (DHCP from management network) for internet.
     if [[ "$os_type" == "l26" ]]; then
-        # Check for sshpass (needed to SSH into Vagrant box)
+        # Ensure sshpass is available on the Proxmox host
         if ! command -v sshpass >/dev/null; then
             log "Installing sshpass (needed for Vagrant box SSH)..."
             apt-get update -qq && apt-get install -y -qq sshpass || die "Failed to install sshpass"
@@ -148,36 +154,98 @@ prepare_template() {
         log "Booting VM to install cloud-init and qemu-guest-agent..."
         qm start "$vmid"
 
+        # Get the VM's MAC address for reliable IP discovery
+        local vm_mac
+        vm_mac=$(qm config "$vmid" | grep -oP '([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' | head -1 || true)
+        log "  VM MAC address: ${vm_mac:-unknown}"
+
         # Wait for VM to get a DHCP IP and become SSH-accessible
-        # Vagrant box has credentials: vagrant/vagrant
+        # Vagrant box credentials: vagrant/vagrant
         local vm_ip=""
         log "  Waiting for VM to boot and acquire DHCP IP (up to 6 minutes)..."
         for attempt in $(seq 1 36); do
             sleep 10
-            # Try to find the IP via ARP scan on the bridge
-            # Use set +e to prevent pipefail from killing the script on grep misses
-            vm_ip=""
-            while IFS= read -r ip; do
-                [[ -z "$ip" ]] && continue
-                if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=no \
-                    vagrant@"$ip" "hostname" 2>/dev/null | grep -qi "metasploitable"; then
-                    vm_ip="$ip"
+
+            # Populate ARP table — ping broadcast to discover new hosts
+            ping -c 2 -b 10.83.2.255 >/dev/null 2>&1 || true
+
+            # Method 1: Match VM's MAC address in ARP table (most reliable)
+            if [[ -n "${vm_mac:-}" ]]; then
+                vm_ip=$(arp -an 2>/dev/null | grep -i "${vm_mac}" | grep -oP '(?<=\()[\d.]+(?=\))' || true)
+            fi
+
+            # Method 2: Fall back to trying all ARP entries via SSH hostname check
+            if [[ -z "$vm_ip" ]]; then
+                while IFS= read -r ip; do
+                    [[ -z "$ip" ]] && continue
+                    if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 \
+                        vagrant@"$ip" "hostname" 2>/dev/null | grep -qi "metasploitable"; then
+                        vm_ip="$ip"
+                        break
+                    fi
+                done < <(arp -an 2>/dev/null | grep -oP '(?<=\()[\d.]+(?=\))' || true)
+            fi
+
+            # Verify SSH is actually reachable at the discovered IP
+            if [[ -n "$vm_ip" ]]; then
+                if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 \
+                    vagrant@"$vm_ip" "echo ok" 2>/dev/null | grep -q "ok"; then
+                    log "  VM reachable at $vm_ip (attempt $attempt)"
                     break
+                else
+                    log "  Found IP $vm_ip but SSH not ready yet..."
+                    vm_ip=""
                 fi
-            done < <(arp -an 2>/dev/null | grep -oP '(?<=\()[\d.]+(?=\))' || true)
-            [[ -n "$vm_ip" ]] && break
+            fi
             log "  Waiting for VM... ($attempt/36)"
         done
 
         if [[ -n "$vm_ip" ]]; then
             log "  VM reachable at $vm_ip — installing packages..."
-            sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@"$vm_ip" \
-                "sudo apt-get update -qq && sudo apt-get install -y -qq cloud-init qemu-guest-agent && sudo systemctl enable qemu-guest-agent" \
-                2>&1 || log "WARNING: Package install may have partially failed"
-            log "  cloud-init and qemu-guest-agent installed"
+
+            # Build the install script as a heredoc.
+            # Handles: EOL repo fix, Upstart vs systemd, package verification.
+            sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@"$vm_ip" bash <<'INSTALL_EOF'
+set -e
+
+echo "=== Fixing apt sources for Ubuntu 14.04 (EOL) ==="
+sudo sed -i 's|archive\.ubuntu\.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+sudo sed -i 's|security\.ubuntu\.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+# Remove any third-party repos that might also 404
+sudo rm -f /etc/apt/sources.list.d/*.list 2>/dev/null || true
+
+echo "=== Updating package lists ==="
+sudo apt-get update -qq
+
+echo "=== Installing cloud-init and qemu-guest-agent ==="
+sudo apt-get install -y -qq cloud-init qemu-guest-agent
+
+echo "=== Enabling qemu-guest-agent ==="
+if command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1; then
+    sudo systemctl enable qemu-guest-agent
+    sudo systemctl start qemu-guest-agent
+else
+    # Ubuntu 14.04 uses Upstart — systemctl won't work
+    sudo update-rc.d qemu-guest-agent defaults || true
+    sudo service qemu-guest-agent start || true
+fi
+
+echo "=== Verifying installation ==="
+dpkg -l cloud-init 2>/dev/null | grep -q '^ii' && echo "cloud-init: OK" || echo "cloud-init: MISSING"
+dpkg -l qemu-guest-agent 2>/dev/null | grep -q '^ii' && echo "qemu-guest-agent: OK" || echo "qemu-guest-agent: MISSING"
+pgrep -x qemu-ga >/dev/null && echo "qemu-ga process: RUNNING" || echo "qemu-ga process: NOT RUNNING"
+
+echo "=== Done ==="
+INSTALL_EOF
+            local install_rc=$?
+            if [[ $install_rc -ne 0 ]]; then
+                log "WARNING: Package install returned exit code $install_rc"
+            else
+                log "  cloud-init and qemu-guest-agent installed successfully"
+            fi
         else
-            log "WARNING: Could not reach VM via SSH after 6 minutes — cloud-init/guest-agent not installed"
-            log "  Target VMs will need manual IP configuration"
+            log "WARNING: Could not reach VM via SSH after 6 minutes"
+            log "  cloud-init/guest-agent not installed — target VMs will need manual IP config"
         fi
 
         # Shut down cleanly
@@ -212,18 +280,6 @@ prepare_template() {
 
 if $DO_UBUNTU; then
     prepare_template "$UBUNTU_VMID" "$UBUNTU_NAME" "$UBUNTU_BOX_URL" "l26" 4096
-    echo ""
-    log "NOTE: For best results, start the Ubuntu template temporarily to install"
-    log "      qemu-guest-agent (required for automatic IP detection):"
-    log ""
-    log "        qm set $UBUNTU_VMID --template 0     # un-template"
-    log "        qm start $UBUNTU_VMID"
-    log "        # Wait ~60s, then SSH in (vagrant/vagrant at DHCP IP):"
-    log "        #   sudo apt-get update && sudo apt-get install -y qemu-guest-agent"
-    log "        #   sudo systemctl enable qemu-guest-agent"
-    log "        #   sudo shutdown -h now"
-    log "        qm template $UBUNTU_VMID              # re-template"
-    echo ""
 fi
 
 if $DO_WINDOWS; then
