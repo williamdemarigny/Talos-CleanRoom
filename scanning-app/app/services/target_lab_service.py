@@ -649,8 +649,6 @@ class TargetLabService:
     @staticmethod
     def _vm_to_dict(vm: TargetVM) -> dict:
         now = datetime.utcnow()
-        created = vm.created_at.replace(tzinfo=timezone.utc) if vm.created_at and vm.created_at.tzinfo is None else vm.created_at
-        ttl = vm.ttl_expires_at.replace(tzinfo=timezone.utc) if vm.ttl_expires_at and vm.ttl_expires_at.tzinfo is None else vm.ttl_expires_at
         return {
             "vmid": vm.vmid,
             "name": vm.name,
@@ -658,9 +656,9 @@ class TargetLabService:
             "ip_address": vm.ip_address,
             "proxmox_node": vm.proxmox_node,
             "status": vm.status,
-            "created_at": created.isoformat() if created else None,
-            "ttl_expires_at": ttl.isoformat() if ttl else None,
-            "ttl_remaining_seconds": max(0, int((ttl - now).total_seconds())) if ttl else 0,
+            "created_at": vm.created_at.isoformat() if vm.created_at else None,
+            "ttl_expires_at": vm.ttl_expires_at.isoformat() if vm.ttl_expires_at else None,
+            "ttl_remaining_seconds": max(0, int((vm.ttl_expires_at - now).total_seconds())) if vm.ttl_expires_at else 0,
             "created_by": vm.created_by,
             "error_message": vm.error_message,
             "template_info": TEMPLATES.get(vm.template_type, {}),
