@@ -30,7 +30,7 @@ set -euo pipefail
 STORAGE="local-lvm"
 BRIDGE="vmbr0"
 VLAN_TAG=3
-WORK_DIR="/tmp/metasploitable3-prep"
+WORK_DIR="/var/tmp/metasploitable3-prep"
 
 UBUNTU_VMID=4000
 UBUNTU_NAME="metasploitable3-ubuntu"
