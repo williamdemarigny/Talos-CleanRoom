@@ -2525,12 +2525,13 @@ except Exception as e:
         lines.append("db_rebuild_cache")
 
         # Phase 1: Network discovery via db_nmap
+        # -Pn: skip host discovery (target VMs may block ICMP ping)
         nmap_flags = {
-            ScanProfile.QUICK: "-T4 --top-ports 100",
-            ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
-            ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
-            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
-        }.get(profile, "-T4 -sV --top-ports 1000")
+            ScanProfile.QUICK: "-Pn -T4 --top-ports 100",
+            ScanProfile.STANDARD: "-Pn -T4 -sV --top-ports 1000",
+            ScanProfile.THOROUGH: "-Pn -T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-Pn -T4 -sV --top-ports 1000",
+        }.get(profile, "-Pn -T4 -sV --top-ports 1000")
 
         lines.append(f"db_nmap {nmap_flags} {target}")
 
