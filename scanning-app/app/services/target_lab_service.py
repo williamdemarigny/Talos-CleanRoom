@@ -284,6 +284,18 @@ class TargetLabService:
                 now = datetime.utcnow()
                 ttl_expires = now + timedelta(hours=settings.target_vm_ttl_hours)
 
+                # Remove any old destroyed/error record for this VMID
+                # (unique constraint on vmid prevents reuse otherwise)
+                from sqlalchemy import delete
+                await session.execute(
+                    delete(TargetVM).where(
+                        and_(
+                            TargetVM.vmid == vmid,
+                            ~TargetVM.status.in_(_ACTIVE_STATUSES),
+                        )
+                    )
+                )
+
                 # Create DB record
                 target = TargetVM(
                     vmid=vmid,
