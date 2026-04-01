@@ -185,8 +185,20 @@ class TargetLabService:
                 f"VMID {vmid} is outside target VM range ({start}-{end - 1})."
             )
 
+    async def _find_template_node(self, template_vmid: int) -> Optional[str]:
+        """Find which Proxmox node hosts a template VM.
+
+        Templates are registered per-node even on shared storage, so we
+        must check each node to find where the template config lives.
+        """
+        nodes = await self._client.get_nodes()
+        for node in nodes:
+            if await self._client.vm_exists(node, template_vmid):
+                return node
+        return None
+
     async def _select_node(self) -> str:
-        """Select a Proxmox node to deploy on."""
+        """Select the Proxmox node with most resources available for deployment."""
         settings = self._settings
         if settings.target_vm_proxmox_node:
             return settings.target_vm_proxmox_node
@@ -223,13 +235,15 @@ class TargetLabService:
             else settings.metasploitable3_windows_vmid
         )
 
-        # Validate template exists on Proxmox before allocating resources
-        node = await self._select_node()
-        if not await self._client.vm_exists(node, template_vmid):
+        # Find which node hosts the template (templates are node-registered
+        # even on shared storage) and select the best target node for the clone
+        template_node = await self._find_template_node(template_vmid)
+        if not template_node:
             raise TargetLabError(
-                f"Template VMID {template_vmid} not found on {node}. "
-                "Run scripts/prepare-metasploitable3-templates.sh on the Proxmox node first."
+                f"Template VMID {template_vmid} not found on any Proxmox node. "
+                "Run scripts/prepare-metasploitable3-templates.sh on a Proxmox node first."
             )
+        node = await self._select_node()
 
         factory = _get_session_factory()
         async with factory() as session:
@@ -294,7 +308,7 @@ class TargetLabService:
                 # Create background task INSIDE the lock so the DB record is
                 # committed before any concurrent request can re-allocate
                 task = asyncio.create_task(
-                    self._deploy_vm_with_timeout(vmid, template_vmid, name, node, ip, template_type)
+                    self._deploy_vm_with_timeout(vmid, template_vmid, name, node, ip, template_type, template_node)
                 )
                 task.add_done_callback(self._task_done_callback)
             finally:
@@ -335,12 +349,14 @@ class TargetLabService:
     async def _deploy_vm(
         self, vmid: int, template_vmid: int, name: str,
         node: str, ip: str, template_type: str,
+        template_node: str = "",
     ):
         """Background task: clone, configure, apply firewall, start, and wait for IP."""
         settings = self._settings
+        src_node = template_node or node
         try:
-            # Clone template
-            await self._client.clone_template(node, template_vmid, vmid, name)
+            # Clone template (from template's node, targeting deployment node)
+            await self._client.clone_template(src_node, template_vmid, vmid, name, target_node=node)
 
             # Apply firewall rules to isolate the vulnerable VM (fatal if fails)
             await self._apply_vm_firewall(node, vmid)
