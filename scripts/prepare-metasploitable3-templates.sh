@@ -113,7 +113,7 @@ prepare_template() {
     # Step 3: Convert VMDK to QCOW2
     local qcow2_file="$WORK_DIR/${name}.qcow2"
     log "Converting VMDK to QCOW2 (this takes a few minutes)..."
-    qemu-img convert -f vmdk -O qcow2 "$vmdk_file" "$qcow2_file"
+    qemu-img convert -f vmdk -O qcow2 "$vmdk_file" "$qcow2_file" 2>/dev/null
     log "QCOW2 size: $(du -h "$qcow2_file" | cut -f1)"
 
     # Step 4: Create VM shell — initially WITHOUT VLAN tag so it can reach internet for package install
@@ -129,10 +129,11 @@ prepare_template() {
         --boot "order=scsi0" \
         --description "Metasploitable3 target VM template. Credentials: vagrant/vagrant"
 
-    # Step 5: Import disk
-    log "Importing disk to $STORAGE..."
-    qm importdisk "$vmid" "$qcow2_file" "$STORAGE"
+    # Step 5: Import disk (suppress progress output to avoid SSH buffer overflow)
+    log "Importing disk to $STORAGE (this may take several minutes)..."
+    qm importdisk "$vmid" "$qcow2_file" "$STORAGE" >/dev/null 2>&1
     qm set "$vmid" --scsi0 "${STORAGE}:vm-${vmid}-disk-0"
+    log "Disk imported successfully"
 
     # Step 6: Boot VM and install cloud-init + guest agent (Linux only)
     # Metasploitable3 ships without these packages. We boot on the untagged
