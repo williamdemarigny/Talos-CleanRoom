@@ -135,10 +135,11 @@ prepare_template() {
     qm set "$vmid" --scsi0 "${STORAGE}:vm-${vmid}-disk-0"
 
     # Step 6: Add cloud-init drive (Linux only — for IP assignment on clone)
+    # Note: do NOT set --vga serial0 — Metasploitable3 uses standard VGA console,
+    # serial redirect causes "starting serial terminal" hang in Proxmox console
     if [[ "$os_type" == "l26" ]]; then
         log "Adding cloud-init drive..."
         qm set "$vmid" --ide2 "${STORAGE}:cloudinit"
-        qm set "$vmid" --serial0 socket --vga serial0
     fi
 
     # Step 7: Convert to template
