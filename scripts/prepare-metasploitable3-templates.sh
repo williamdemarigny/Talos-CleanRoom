@@ -116,13 +116,13 @@ prepare_template() {
     qemu-img convert -f vmdk -O qcow2 "$vmdk_file" "$qcow2_file"
     log "QCOW2 size: $(du -h "$qcow2_file" | cut -f1)"
 
-    # Step 4: Create VM shell
+    # Step 4: Create VM shell — initially WITHOUT VLAN tag so it can reach internet for package install
     log "Creating VM $vmid ($name)..."
     qm create "$vmid" \
         --name "$name" \
         --memory "$memory" \
         --cores 2 \
-        --net0 "e1000,bridge=${BRIDGE},tag=${VLAN_TAG}" \
+        --net0 "e1000,bridge=${BRIDGE}" \
         --ostype "$os_type" \
         --agent 1 \
         --scsihw virtio-scsi-single \
@@ -134,54 +134,61 @@ prepare_template() {
     qm importdisk "$vmid" "$qcow2_file" "$STORAGE"
     qm set "$vmid" --scsi0 "${STORAGE}:vm-${vmid}-disk-0"
 
-    # Step 6: Add cloud-init drive (Linux only — for IP assignment on clone)
-    # Note: do NOT set --vga serial0 — Metasploitable3 uses standard VGA console,
-    # serial redirect causes "starting serial terminal" hang in Proxmox console
+    # Step 6: Boot VM and install cloud-init + guest agent (Linux only)
+    # Metasploitable3 ships without these packages. We boot on the untagged
+    # bridge (DHCP from management network) to get internet access for apt.
     if [[ "$os_type" == "l26" ]]; then
-        log "Adding cloud-init drive..."
+        log "Booting VM to install cloud-init and qemu-guest-agent..."
+        qm start "$vmid"
+
+        # Wait for VM to get a DHCP IP and become SSH-accessible
+        # Vagrant box has credentials: vagrant/vagrant
+        local vm_ip=""
+        log "  Waiting for VM to boot and acquire DHCP IP..."
+        for attempt in $(seq 1 36); do
+            # Try to find the IP via ARP scan on the bridge
+            vm_ip=$(arp -an 2>/dev/null | grep -oP '(?<=\()[\d.]+(?=\))' | while read ip; do
+                if ping -c1 -W1 "$ip" >/dev/null 2>&1; then
+                    if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=2 \
+                        vagrant@"$ip" "hostname" 2>/dev/null | grep -qi "metasploitable"; then
+                        echo "$ip"
+                        break
+                    fi
+                fi
+            done)
+            [[ -n "$vm_ip" ]] && break
+            sleep 10
+            log "  Waiting for VM... ($attempt/36)"
+        done
+
+        if [[ -n "$vm_ip" ]]; then
+            log "  VM reachable at $vm_ip — installing packages..."
+            sshpass -p vagrant ssh -o StrictHostKeyChecking=no vagrant@"$vm_ip" \
+                "sudo apt-get update -qq && sudo apt-get install -y -qq cloud-init qemu-guest-agent && sudo systemctl enable qemu-guest-agent" \
+                2>&1 || log "WARNING: Package install may have partially failed"
+            log "  cloud-init and qemu-guest-agent installed"
+        else
+            log "WARNING: Could not reach VM via SSH — cloud-init/guest-agent not installed"
+            log "  Target VMs will need manual IP configuration"
+        fi
+
+        # Shut down cleanly
+        log "Shutting down VM..."
+        qm shutdown "$vmid" --timeout 60 2>/dev/null || qm stop "$vmid"
+        for i in $(seq 1 12); do
+            local status
+            status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+            [[ "$status" == "stopped" ]] && break
+            sleep 5
+        done
+
+        # Now reconfigure: add VLAN tag + cloud-init drive
+        log "Configuring VLAN tag and cloud-init drive..."
+        qm set "$vmid" --net0 "e1000,bridge=${BRIDGE},tag=${VLAN_TAG}"
         qm set "$vmid" --ide2 "${STORAGE}:cloudinit"
     fi
 
-    # Step 7: Boot VM and install QEMU guest agent
-    # Required for: IP detection (wait_for_ip), graceful shutdown, Proxmox console info
-    log "Booting VM to install QEMU guest agent..."
-    qm start "$vmid"
-
-    # Wait for guest agent to become available (VM must boot fully)
-    local vm_ready=false
-    for attempt in $(seq 1 30); do
-        if qm guest exec "$vmid" -- echo ready 2>/dev/null | grep -q ready; then
-            vm_ready=true
-            break
-        fi
-        log "  Waiting for VM to boot... ($attempt/30)"
-        sleep 10
-    done
-
-    if [[ "$vm_ready" == "true" ]]; then
-        if [[ "$os_type" == "l26" ]]; then
-            log "Installing qemu-guest-agent (Linux)..."
-            qm guest exec "$vmid" -- bash -c \
-                'apt-get update -qq && apt-get install -y -qq qemu-guest-agent && systemctl enable qemu-guest-agent && systemctl start qemu-guest-agent' \
-                2>/dev/null || log "WARNING: guest agent install may have failed"
-        fi
-        log "Guest agent installed successfully"
-    else
-        log "WARNING: VM did not become accessible via guest exec — agent may need manual install"
-    fi
-
-    # Shut down cleanly before templating
-    log "Shutting down VM..."
-    qm shutdown "$vmid" --timeout 60 2>/dev/null || qm stop "$vmid"
-    # Wait for VM to fully stop
-    for i in $(seq 1 12); do
-        local status
-        status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
-        [[ "$status" == "stopped" ]] && break
-        sleep 5
-    done
-
-    # Step 8: Convert to template
+    # Step 7: Convert to template
     log "Converting to template..."
     qm template "$vmid"
 
