@@ -125,22 +125,24 @@ spec:
 
             # Configure database connection
             mkdir -p /home/msf/.msf4
-            cat > /home/msf/.msf4/database.yml << EOF
-            production:
-              adapter: postgresql
-              database: msf
-              username: msf
-              password: ${DB_PASSWORD}
-              host: 127.0.0.1
-              port: 5432
-              pool: 75
-              timeout: 5
-            EOF
+            cat > /home/msf/.msf4/database.yml <<'DBEOF'
+production:
+  adapter: postgresql
+  database: msf
+  username: msf
+  password: PLACEHOLDER
+  host: 127.0.0.1
+  port: 5432
+  pool: 75
+  timeout: 5
+DBEOF
+            sed -i "s/PLACEHOLDER/${DB_PASSWORD}/" /home/msf/.msf4/database.yml
             chmod 600 /home/msf/.msf4/database.yml
 
-            # Initialize database schema using msfconsole db_connect
-            echo "Connecting Metasploit to database..."
+            # Initialize database schema
+            echo "Initializing Metasploit database schema..."
             cd /opt/metasploit-framework
+            ./msfconsole -q -x "db_status; db_rebuild_cache; exit" 2>/dev/null || echo "DB init warning (may be first run)"
 
             # Start msfrpcd (RPC daemon for web/API access)
             echo "Starting msfrpcd on port 55553..."

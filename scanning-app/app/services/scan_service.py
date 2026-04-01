@@ -2520,6 +2520,10 @@ except Exception as e:
         """
         lines = []
 
+        # Ensure database connection is active before scanning
+        lines.append("db_status")
+        lines.append("db_rebuild_cache")
+
         # Phase 1: Network discovery via db_nmap
         nmap_flags = {
             ScanProfile.QUICK: "-T4 --top-ports 100",
@@ -2625,8 +2629,16 @@ except Exception as e:
             timeout=msf_timeout
         )
 
-        if not result.success and "TIMEOUT" in (result.output or ""):
-            await self.log("metasploit", "error", "Metasploit scan timed out")
+        if not result.success:
+            output = result.output or ""
+            if "TIMEOUT" in output:
+                await self.log("metasploit", "error", "Metasploit scan timed out")
+            else:
+                await self.log("metasploit", "error", f"Metasploit scan failed (exit code non-zero)")
+                for line in output.split("\n")[-15:]:
+                    line = line.strip()
+                    if line:
+                        await self.log("metasploit", "error", f"  {line}")
             return None
 
         # Read the exported XML file
