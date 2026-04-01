@@ -1267,6 +1267,14 @@ except Exception as e:
                 scan.status = ScanStatus.COMPLETED
                 scan.completed_at = datetime.utcnow()
 
+                # Broadcast completion to all WebSocket clients
+                if self.tool_callback:
+                    for ts in scan.tools:
+                        try:
+                            await self.tool_callback(ts)
+                        except Exception:
+                            pass
+
                 await self.log(None, "info", "")
                 await self.log(None, "info", "=== Scan Complete ===")
                 await self.log(None, "info", f"Tools: {completed_tools}/{total_tools} succeeded")

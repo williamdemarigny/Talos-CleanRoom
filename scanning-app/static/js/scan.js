@@ -171,6 +171,7 @@ function scanManager() {
 
         // Page-specific poll status handler (called by WebSocketBase.pollUpdates)
         onPollStatus(statusData) {
+            this.status = statusData.status || this.status;
             if (statusData.scan) {
                 this.scanTarget = statusData.scan.target || '';
                 this.toolStates = statusData.scan.tools || [];
