@@ -981,12 +981,15 @@ class DeploymentService(BaseServiceMixin):
         except Exception as e:
             await self.log(-1, "warn", f"  Ceph cleanup exception: {e}")
 
-        # Step 5: Destroy target lab VMs (Metasploitable3, VMID 5000-5099)
-        await self.log(-1, "info", "Step 5: Destroying target lab VMs...")
+        # Step 5: Destroy target lab VMs (clones 5000-5099) and templates (4000-4001)
+        await self.log(-1, "info", "Step 5: Destroying target lab VMs and templates...")
         try:
             remaining_vms = await _proxmox_list_vms()
-            lab_vms = [v for v in remaining_vms if 5000 <= v.get("vmid", 0) < 5100]
+            target_vmids = set(range(5000, 5100)) | {4000, 4001}
+            lab_vms = [v for v in remaining_vms if v.get("vmid", 0) in target_vmids]
             if lab_vms:
+                # Destroy clones first (5000+), then templates (4000-4001)
+                lab_vms.sort(key=lambda v: 0 if v["vmid"] >= 5000 else 1)
                 for vm in lab_vms:
                     vmid = vm["vmid"]
                     node = vm["_node"]
@@ -994,9 +997,9 @@ class DeploymentService(BaseServiceMixin):
                     await self.log(-1, "info", f"  Destroying {rtype} {vmid} on {node}")
                     await _proxmox_destroy_vm(vmid, node, rtype)
                     await asyncio.sleep(2)
-                await self.log(-1, "info", f"  Destroyed {len(lab_vms)} target VMs")
+                await self.log(-1, "info", f"  Destroyed {len(lab_vms)} target lab VMs/templates")
             else:
-                await self.log(-1, "info", "  No target lab VMs found")
+                await self.log(-1, "info", "  No target lab VMs or templates found")
         except Exception as e:
             await self.log(-1, "warn", f"  Target lab cleanup failed: {e}")
 
@@ -1021,7 +1024,7 @@ class DeploymentService(BaseServiceMixin):
 
         # Check VMs
         remaining_vms = await _proxmox_list_vms()
-        managed_vmids = cluster_vmids | {build_vm_vmid} | set(range(5000, 5100))
+        managed_vmids = cluster_vmids | {build_vm_vmid} | set(range(5000, 5100)) | {4000, 4001}
         leftover = [v for v in remaining_vms if v.get("vmid") in managed_vmids]
         if leftover:
             vmid_list = [f"{v['_type']}/{v['vmid']}" for v in leftover]
