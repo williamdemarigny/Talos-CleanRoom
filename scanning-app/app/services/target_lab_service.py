@@ -281,7 +281,7 @@ class TargetLabService:
                 ip = self._allocate_ip(active, template_type)
                 name = f"ms3-{template_type}-{vmid}"
 
-                now = datetime.now(timezone.utc)
+                now = datetime.utcnow()
                 ttl_expires = now + timedelta(hours=settings.target_vm_ttl_hours)
 
                 # Create DB record
@@ -522,10 +522,9 @@ class TargetLabService:
             if not target:
                 raise TargetLabError(f"No running target VM with VMID {vmid}.")
 
-            new_ttl = datetime.now(timezone.utc) + timedelta(hours=hours)
+            new_ttl = datetime.utcnow() + timedelta(hours=hours)
             # Cap total lifetime at 24 hours from creation
-            created = target.created_at.replace(tzinfo=timezone.utc) if target.created_at and target.created_at.tzinfo is None else target.created_at
-            max_ttl = created + timedelta(hours=24) if created else new_ttl
+            max_ttl = target.created_at + timedelta(hours=24) if target.created_at else new_ttl
             target.ttl_expires_at = min(new_ttl, max_ttl)
             await session.commit()
             return self._vm_to_dict(target)
@@ -555,7 +554,7 @@ class TargetLabService:
 
     async def cleanup_expired(self):
         """Destroy VMs that have exceeded their TTL."""
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         factory = _get_session_factory()
         async with factory() as session:
             result = await session.execute(
@@ -584,7 +583,7 @@ class TargetLabService:
         - VMs in 'deploying' for >30 min: mark as error and destroy on Proxmox
         - VMs in 'error' for >10 min: attempt destroy on Proxmox and mark destroyed
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         deploy_cutoff = now - timedelta(minutes=30)
         error_cutoff = now - timedelta(minutes=10)
         factory = _get_session_factory()
@@ -644,12 +643,12 @@ class TargetLabService:
                 if error:
                     target.error_message = error
                 if status == "destroyed":
-                    target.destroyed_at = datetime.now(timezone.utc)
+                    target.destroyed_at = datetime.utcnow()
                 await session.commit()
 
     @staticmethod
     def _vm_to_dict(vm: TargetVM) -> dict:
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         created = vm.created_at.replace(tzinfo=timezone.utc) if vm.created_at and vm.created_at.tzinfo is None else vm.created_at
         ttl = vm.ttl_expires_at.replace(tzinfo=timezone.utc) if vm.ttl_expires_at and vm.ttl_expires_at.tzinfo is None else vm.ttl_expires_at
         return {
