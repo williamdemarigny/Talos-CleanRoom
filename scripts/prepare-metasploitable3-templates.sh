@@ -27,7 +27,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-STORAGE="local-lvm"
+STORAGE="CleanRoom_Storage"
 BRIDGE="vmbr0"
 VLAN_TAG=3
 WORK_DIR="/var/tmp/metasploitable3-prep"
