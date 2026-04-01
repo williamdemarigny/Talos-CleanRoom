@@ -139,26 +139,33 @@ prepare_template() {
     # Metasploitable3 ships without these packages. We boot on the untagged
     # bridge (DHCP from management network) to get internet access for apt.
     if [[ "$os_type" == "l26" ]]; then
+        # Check for sshpass (needed to SSH into Vagrant box)
+        if ! command -v sshpass >/dev/null; then
+            log "Installing sshpass (needed for Vagrant box SSH)..."
+            apt-get update -qq && apt-get install -y -qq sshpass || die "Failed to install sshpass"
+        fi
+
         log "Booting VM to install cloud-init and qemu-guest-agent..."
         qm start "$vmid"
 
         # Wait for VM to get a DHCP IP and become SSH-accessible
         # Vagrant box has credentials: vagrant/vagrant
         local vm_ip=""
-        log "  Waiting for VM to boot and acquire DHCP IP..."
+        log "  Waiting for VM to boot and acquire DHCP IP (up to 6 minutes)..."
         for attempt in $(seq 1 36); do
-            # Try to find the IP via ARP scan on the bridge
-            vm_ip=$(arp -an 2>/dev/null | grep -oP '(?<=\()[\d.]+(?=\))' | while read ip; do
-                if ping -c1 -W1 "$ip" >/dev/null 2>&1; then
-                    if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=2 \
-                        vagrant@"$ip" "hostname" 2>/dev/null | grep -qi "metasploitable"; then
-                        echo "$ip"
-                        break
-                    fi
-                fi
-            done)
-            [[ -n "$vm_ip" ]] && break
             sleep 10
+            # Try to find the IP via ARP scan on the bridge
+            # Use set +e to prevent pipefail from killing the script on grep misses
+            vm_ip=""
+            while IFS= read -r ip; do
+                [[ -z "$ip" ]] && continue
+                if sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=no \
+                    vagrant@"$ip" "hostname" 2>/dev/null | grep -qi "metasploitable"; then
+                    vm_ip="$ip"
+                    break
+                fi
+            done < <(arp -an 2>/dev/null | grep -oP '(?<=\()[\d.]+(?=\))' || true)
+            [[ -n "$vm_ip" ]] && break
             log "  Waiting for VM... ($attempt/36)"
         done
 
@@ -169,7 +176,7 @@ prepare_template() {
                 2>&1 || log "WARNING: Package install may have partially failed"
             log "  cloud-init and qemu-guest-agent installed"
         else
-            log "WARNING: Could not reach VM via SSH — cloud-init/guest-agent not installed"
+            log "WARNING: Could not reach VM via SSH after 6 minutes — cloud-init/guest-agent not installed"
             log "  Target VMs will need manual IP configuration"
         fi
 
