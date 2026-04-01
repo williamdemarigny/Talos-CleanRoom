@@ -114,9 +114,13 @@ function targetLabManager() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ template: templateType }),
                 });
-                const data = await resp.json();
                 if (!resp.ok) {
-                    this.error = data.detail || 'Deployment failed';
+                    try {
+                        const data = await resp.json();
+                        this.error = data.detail || 'Deployment failed';
+                    } catch {
+                        this.error = `Deployment failed (HTTP ${resp.status})`;
+                    }
                     return;
                 }
                 await this.loadTargets();
@@ -142,8 +146,12 @@ function targetLabManager() {
                     method: 'POST',
                 });
                 if (!resp.ok) {
-                    const data = await resp.json();
-                    this.error = data.detail || 'Destroy failed';
+                    try {
+                        const data = await resp.json();
+                        this.error = data.detail || 'Destroy failed';
+                    } catch {
+                        this.error = `Destroy failed (HTTP ${resp.status})`;
+                    }
                     return;
                 }
                 await this.loadTargets();
@@ -161,8 +169,12 @@ function targetLabManager() {
                     body: JSON.stringify({ hours: 4 }),
                 });
                 if (!resp.ok) {
-                    const data = await resp.json();
-                    this.error = data.detail || 'TTL extension failed';
+                    try {
+                        const data = await resp.json();
+                        this.error = data.detail || 'TTL extension failed';
+                    } catch {
+                        this.error = `TTL extension failed (HTTP ${resp.status})`;
+                    }
                     return;
                 }
                 await this.loadTargets();
