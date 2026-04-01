@@ -491,14 +491,18 @@ class TargetLabService:
             await session.commit()
             node = target.proxmox_node
 
-        # Destroy on Proxmox (handle already-destroyed gracefully)
-        try:
-            await self._client.destroy_vm(node, vmid)
-        except ProxmoxError as e:
-            if "does not exist" in str(e).lower() or e.status_code in (404, 500):
-                logger.info("VM %d already removed from Proxmox", vmid)
-            else:
-                logger.warning("Proxmox destroy for VM %d failed: %s", vmid, e)
+        # Destroy on Proxmox — try the recorded node first, then search all nodes
+        destroyed = False
+        for try_node in [node] + [n for n in await self._client.get_nodes() if n != node]:
+            try:
+                if await self._client.vm_exists(try_node, vmid):
+                    await self._client.destroy_vm(try_node, vmid)
+                    destroyed = True
+                    break
+            except ProxmoxError as e:
+                logger.debug("Destroy VM %d on %s failed: %s", vmid, try_node, e)
+        if not destroyed:
+            logger.info("VM %d not found on any Proxmox node (already removed?)", vmid)
 
         await self._update_status(vmid, "destroyed")
 
