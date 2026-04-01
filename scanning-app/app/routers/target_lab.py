@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from talos_common.auth import get_current_user
+from app.db import engine as db_engine
 from app.services.audit import log_audit
 from app.services.target_lab_service import (
     get_target_lab_service,
@@ -73,11 +74,14 @@ async def deploy_target(
         logger.error("Deploy failed: %s", e)
         raise HTTPException(500, "Deployment failed. Check logs for details.")
 
-    await log_audit(
-        request, "target_lab_deploy",
-        resource_type="target_vm", resource_id=str(result["vmid"]),
-        detail={"template": body.template, "ip": result["ip_address"]},
-    )
+    factory = db_engine.get_session_factory()
+    if factory:
+        async with factory() as session:
+            await log_audit(
+                session, "target_lab_deploy", user.get("username", "admin"),
+                request=request, resource_type="target_vm", resource_id=str(result["vmid"]),
+                detail={"template": body.template.value, "ip": result["ip_address"]},
+            )
     return result
 
 
@@ -97,10 +101,13 @@ async def destroy_target(
         logger.error("Destroy failed for VM %d: %s", vmid, e)
         raise HTTPException(500, "Destroy failed. Check logs for details.")
 
-    await log_audit(
-        request, "target_lab_destroy",
-        resource_type="target_vm", resource_id=str(vmid),
-    )
+    factory = db_engine.get_session_factory()
+    if factory:
+        async with factory() as session:
+            await log_audit(
+                session, "target_lab_destroy", user.get("username", "admin"),
+                request=request, resource_type="target_vm", resource_id=str(vmid),
+            )
     return result
 
 
@@ -118,11 +125,14 @@ async def extend_ttl(
     except TargetLabError as e:
         raise HTTPException(400, str(e))
 
-    await log_audit(
-        request, "target_lab_extend_ttl",
-        resource_type="target_vm", resource_id=str(vmid),
-        detail={"hours": body.hours},
-    )
+    factory = db_engine.get_session_factory()
+    if factory:
+        async with factory() as session:
+            await log_audit(
+                session, "target_lab_extend_ttl", user.get("username", "admin"),
+                request=request, resource_type="target_vm", resource_id=str(vmid),
+                detail={"hours": body.hours},
+            )
     return result
 
 
