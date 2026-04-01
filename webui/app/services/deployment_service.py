@@ -2031,8 +2031,8 @@ class DeploymentService(BaseServiceMixin):
         """
         await self.log(step_id, "info", "Deploying Metasploit...")
 
-        # Create namespace if it doesn't exist (ignore error if already exists)
-        await self.k8s.ensure_namespace("metasploit")
+        # Create namespace (privileged — Metasploit needs NET_RAW for scanning)
+        await self.k8s.ensure_namespace("metasploit", privileged=True)
 
         # Create required secrets
         await self.log(step_id, "info", "Creating Metasploit credentials secrets...")
