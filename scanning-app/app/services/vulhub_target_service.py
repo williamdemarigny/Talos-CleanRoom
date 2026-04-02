@@ -25,8 +25,11 @@ from talos_common.services.process_manager import ProcessManager
 
 logger = logging.getLogger(__name__)
 
-# Active statuses (not destroyed/error)
-_ACTIVE_STATUSES = ("deploying", "running", "stopping")
+# Visible statuses (shown in target list — includes error for log diagnosis)
+_VISIBLE_STATUSES = ("deploying", "running", "stopping", "error")
+
+# Capacity-consuming statuses (error targets don't block new deployments)
+_CAPACITY_STATUSES = ("deploying", "running", "stopping")
 
 # Advisory lock ID for serializing target allocation (PostgreSQL pg_advisory_lock)
 _ALLOCATION_LOCK_ID = 839272
@@ -152,20 +155,24 @@ class VulhubTargetService:
     # ── Capacity ──────────────────────────────────────────────────
 
     async def get_capacity(self) -> dict:
-        """Return current capacity info."""
+        """Return current capacity info (error targets don't consume slots)."""
         factory = _get_session_factory()
         async with factory() as session:
-            active = await self._get_active_targets(session)
+            result = await session.execute(
+                select(VulhubTarget).where(VulhubTarget.status.in_(_CAPACITY_STATUSES))
+            )
+            capacity_targets = list(result.scalars().all())
         max_concurrent = self._settings.vulhub_target_max_concurrent
         return {
-            "used": len(active),
+            "used": len(capacity_targets),
             "max": max_concurrent,
-            "available": max(0, max_concurrent - len(active)),
+            "available": max(0, max_concurrent - len(capacity_targets)),
         }
 
-    async def _get_active_targets(self, session: AsyncSession) -> list[VulhubTarget]:
+    async def _get_visible_targets(self, session: AsyncSession) -> list[VulhubTarget]:
+        """Return targets visible in the UI (includes error for log diagnosis)."""
         result = await session.execute(
-            select(VulhubTarget).where(VulhubTarget.status.in_(_ACTIVE_STATUSES))
+            select(VulhubTarget).where(VulhubTarget.status.in_(_VISIBLE_STATUSES))
         )
         return list(result.scalars().all())
 
@@ -220,9 +227,12 @@ class VulhubTargetService:
                 raise VulhubTargetError("Failed to acquire deployment lock (timeout). Try again.")
 
             try:
-                active = await self._get_active_targets(session)
+                cap_result = await session.execute(
+                    select(VulhubTarget).where(VulhubTarget.status.in_(_CAPACITY_STATUSES))
+                )
+                active = list(cap_result.scalars().all())
 
-                # Check capacity
+                # Check capacity (error targets don't consume slots)
                 if len(active) >= settings.vulhub_target_max_concurrent:
                     raise VulhubTargetError(
                         f"Maximum concurrent Vulhub targets reached ({settings.vulhub_target_max_concurrent}). "
@@ -548,7 +558,7 @@ class VulhubTargetService:
         async with factory() as session:
             result = await session.execute(
                 select(VulhubTarget).where(
-                    and_(VulhubTarget.id == target_id, VulhubTarget.status.in_(_ACTIVE_STATUSES))
+                    and_(VulhubTarget.id == target_id, VulhubTarget.status.in_(_VISIBLE_STATUSES))
                 )
             )
             target = result.scalar_one_or_none()
@@ -568,7 +578,8 @@ class VulhubTargetService:
             )
 
         await self._update_status(target_id, "destroyed")
-        self._clear_deploy_logs(target_id)
+        # Keep deploy logs in memory — user may still be viewing them.
+        # Logs are cleared by the orphan reconciler after the retention window.
         logger.info("Vulhub target %d (%s) destroyed by %s", target_id, namespace, username)
         return {"id": target_id, "status": "destroyed"}
 
@@ -613,11 +624,11 @@ class VulhubTargetService:
     # ── List & status ─────────────────────────────────────────────
 
     async def list_targets(self) -> list[dict]:
-        """Return all active (non-destroyed) Vulhub targets."""
+        """Return all visible Vulhub targets (includes error for diagnosis)."""
         factory = _get_session_factory()
         async with factory() as session:
-            active = await self._get_active_targets(session)
-            return [self._target_to_dict(t) for t in active]
+            visible = await self._get_visible_targets(session)
+            return [self._target_to_dict(t) for t in visible]
 
     async def get_target(self, target_id: int) -> Optional[dict]:
         """Get a single Vulhub target by ID."""
@@ -641,7 +652,7 @@ class VulhubTargetService:
             result = await session.execute(
                 select(VulhubTarget).where(
                     and_(
-                        VulhubTarget.status.in_(_ACTIVE_STATUSES),
+                        VulhubTarget.status.in_(_CAPACITY_STATUSES),
                         VulhubTarget.ttl_expires_at <= now,
                     )
                 )
@@ -665,11 +676,11 @@ class VulhubTargetService:
 
         - Targets stuck in 'deploying' for >15 min: mark error, delete namespace
         - DB records whose namespace no longer exists: mark destroyed
-        - Targets in 'error' for >10 min: delete namespace, mark destroyed
+        - Targets in 'error' for >30 min: delete namespace, mark destroyed
         """
         now = datetime.utcnow()
         deploy_cutoff = now - timedelta(minutes=15)
-        error_cutoff = now - timedelta(minutes=10)
+        error_cutoff = now - timedelta(minutes=30)
         factory = _get_session_factory()
 
         async with factory() as session:
