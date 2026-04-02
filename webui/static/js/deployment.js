@@ -44,10 +44,11 @@ function deploymentMonitor() {
             { id: 17, name: 'generate_secrets', description: 'Generate & Apply Secrets' },
             { id: 18, name: 'commit_push_secrets', description: 'Commit & Push Secrets' },
             { id: 19, name: 'deploy_build_vm', description: 'Deploy Build VM' },
-            { id: 20, name: 'prepare_target_templates', description: 'Prepare Target VM Templates' },
+            { id: 20, name: 'prepare_vulhub_targets', description: 'Prepare Vulhub Target Environments' },
             { id: 21, name: 'build_push_images', description: 'Build & Push Container Images' },
             { id: 22, name: 'deploy_cleanroom_apps', description: 'Deploy CleanRoom Applications' },
-            { id: 23, name: 'apply_network_policies', description: 'Apply Network Policies' },
+            { id: 23, name: 'deploy_console_routing', description: 'Deploy Deployment Console Routing' },
+            { id: 24, name: 'apply_network_policies', description: 'Apply Network Policies' },
         ],
 
         get statusText() {

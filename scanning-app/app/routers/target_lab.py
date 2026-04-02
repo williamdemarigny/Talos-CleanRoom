@@ -1,47 +1,59 @@
-"""Target Lab API router — deploy/destroy Metasploitable3 target VMs."""
+"""Target Lab API router — deploy/destroy Vulhub K8s-based vulnerable environments."""
 
 import logging
-from enum import Enum
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from talos_common.auth import get_current_user
 from app.db import engine as db_engine
 from app.services.audit import log_audit
-from app.services.target_lab_service import (
-    get_target_lab_service,
-    TargetLabError,
+from app.services.vulhub_target_service import (
+    get_vulhub_target_service,
+    VulhubTargetError,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class TemplateType(str, Enum):
-    UBUNTU = "ubuntu"
-    WINDOWS = "windows"
-
-
 class DeployRequest(BaseModel):
-    template: TemplateType
+    env_id: str
 
 
 class ExtendTTLRequest(BaseModel):
-    hours: int = Field(4, ge=1, le=24)
+    hours: int = Field(2, ge=1, le=12)
 
 
-@router.get("/templates")
-async def list_templates(user: dict = Depends(get_current_user)):
-    """List available Metasploitable3 templates."""
-    svc = get_target_lab_service()
-    return {"templates": svc.get_templates(), "enabled": svc.enabled}
+@router.get("/catalog")
+async def list_catalog(
+    category: Optional[str] = Query(None, description="Filter by category"),
+    user: dict = Depends(get_current_user),
+):
+    """List available Vulhub environments, optionally filtered by category."""
+    svc = get_vulhub_target_service()
+    catalog = svc.get_catalog(category=category)
+    return {"catalog": catalog, "enabled": svc.enabled}
+
+
+@router.get("/catalog/{env_id}")
+async def get_catalog_entry(
+    env_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Get details for a single Vulhub environment."""
+    svc = get_vulhub_target_service()
+    entry = svc.get_catalog_entry(env_id)
+    if not entry:
+        raise HTTPException(404, f"Environment '{env_id}' not found in catalog.")
+    return entry
 
 
 @router.get("/targets")
 async def list_targets(user: dict = Depends(get_current_user)):
-    """List active target VMs."""
-    svc = get_target_lab_service()
+    """List active Vulhub targets."""
+    svc = get_vulhub_target_service()
     if not svc.enabled:
         return {"targets": [], "enabled": False}
     targets = await svc.list_targets()
@@ -49,13 +61,17 @@ async def list_targets(user: dict = Depends(get_current_user)):
     return {"targets": targets, "capacity": capacity, "enabled": True}
 
 
-@router.get("/capacity")
-async def get_capacity(user: dict = Depends(get_current_user)):
-    """Get current target VM capacity."""
-    svc = get_target_lab_service()
-    if not svc.enabled:
-        raise HTTPException(503, "Target Lab is not configured.")
-    return await svc.get_capacity()
+@router.get("/targets/{target_id}")
+async def get_target(
+    target_id: int,
+    user: dict = Depends(get_current_user),
+):
+    """Get status of a specific Vulhub target."""
+    svc = get_vulhub_target_service()
+    target = await svc.get_target(target_id)
+    if not target:
+        raise HTTPException(404, f"Target {target_id} not found.")
+    return target
 
 
 @router.post("/deploy")
@@ -64,14 +80,14 @@ async def deploy_target(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Deploy a new Metasploitable3 target VM."""
-    svc = get_target_lab_service()
+    """Deploy a new Vulhub vulnerable environment."""
+    svc = get_vulhub_target_service()
     try:
-        result = await svc.deploy_target(body.template.value, user.get("sub", "admin"))
-    except TargetLabError as e:
+        result = await svc.deploy_target(body.env_id, user.get("username", "admin"))
+    except VulhubTargetError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        logger.error("Deploy failed: %s", e)
+        logger.error("Vulhub deploy failed: %s", e)
         raise HTTPException(500, "Deployment failed. Check logs for details.")
 
     factory = db_engine.get_session_factory()
@@ -79,26 +95,27 @@ async def deploy_target(
         async with factory() as session:
             await log_audit(
                 session, "target_lab_deploy", user.get("username", "admin"),
-                request=request, resource_type="target_vm", resource_id=str(result["vmid"]),
-                detail={"template": body.template.value, "ip": result["ip_address"]},
+                request=request, resource_type="vulhub_target",
+                resource_id=str(result.get("id", "")),
+                detail={"env_id": body.env_id, "namespace": result.get("namespace", "")},
             )
     return result
 
 
-@router.post("/destroy/{vmid}")
+@router.post("/destroy/{target_id}")
 async def destroy_target(
-    vmid: int,
+    target_id: int,
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Destroy a target VM."""
-    svc = get_target_lab_service()
+    """Destroy a Vulhub target environment."""
+    svc = get_vulhub_target_service()
     try:
-        result = await svc.destroy_target(vmid, user.get("sub", "admin"))
-    except TargetLabError as e:
+        result = await svc.destroy_target(target_id, user.get("username", "admin"))
+    except VulhubTargetError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        logger.error("Destroy failed for VM %d: %s", vmid, e)
+        logger.error("Vulhub destroy failed for target %d: %s", target_id, e)
         raise HTTPException(500, "Destroy failed. Check logs for details.")
 
     factory = db_engine.get_session_factory()
@@ -106,23 +123,24 @@ async def destroy_target(
         async with factory() as session:
             await log_audit(
                 session, "target_lab_destroy", user.get("username", "admin"),
-                request=request, resource_type="target_vm", resource_id=str(vmid),
+                request=request, resource_type="vulhub_target",
+                resource_id=str(target_id),
             )
     return result
 
 
-@router.post("/extend/{vmid}")
+@router.post("/extend/{target_id}")
 async def extend_ttl(
-    vmid: int,
+    target_id: int,
     body: ExtendTTLRequest,
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Extend the TTL of a running target VM."""
-    svc = get_target_lab_service()
+    """Extend the TTL of a running Vulhub target."""
+    svc = get_vulhub_target_service()
     try:
-        result = await svc.extend_ttl(vmid, body.hours, user.get("sub", "admin"))
-    except TargetLabError as e:
+        result = await svc.extend_ttl(target_id, body.hours, user.get("username", "admin"))
+    except VulhubTargetError as e:
         raise HTTPException(400, str(e))
 
     factory = db_engine.get_session_factory()
@@ -130,20 +148,17 @@ async def extend_ttl(
         async with factory() as session:
             await log_audit(
                 session, "target_lab_extend_ttl", user.get("username", "admin"),
-                request=request, resource_type="target_vm", resource_id=str(vmid),
+                request=request, resource_type="vulhub_target",
+                resource_id=str(target_id),
                 detail={"hours": body.hours},
             )
     return result
 
 
-@router.get("/status/{vmid}")
-async def get_target_status(
-    vmid: int,
-    user: dict = Depends(get_current_user),
-):
-    """Get status of a specific target VM."""
-    svc = get_target_lab_service()
-    target = await svc.get_target(vmid)
-    if not target:
-        raise HTTPException(404, f"Target VM {vmid} not found.")
-    return target
+@router.get("/capacity")
+async def get_capacity(user: dict = Depends(get_current_user)):
+    """Get current Vulhub target capacity."""
+    svc = get_vulhub_target_service()
+    if not svc.enabled:
+        raise HTTPException(503, "Target Lab is not configured.")
+    return await svc.get_capacity()

@@ -218,26 +218,28 @@ class CveCache(Base):
     )
 
 
-class TargetVM(Base):
-    """Tracks Metasploitable3 target VMs deployed via the Target Lab."""
-    __tablename__ = "target_vms"
+class VulhubTarget(Base):
+    """Tracks Vulhub K8s-based vulnerable environments deployed via the Target Lab."""
+    __tablename__ = "vulhub_targets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    vmid = Column(Integer, unique=True, nullable=False)
+    env_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
-    template_type = Column(String, nullable=False)  # "ubuntu" | "windows"
-    ip_address = Column(String, nullable=False)
-    proxmox_node = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="deploying")  # deploying/running/stopping/destroyed/error
+    namespace = Column(String, unique=True, nullable=False)
+    service_endpoint = Column(String, nullable=False)
+    cve_id = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="deploying")
     created_at = Column(DateTime, default=func.now())
     ttl_expires_at = Column(DateTime, nullable=False)
     created_by = Column(String, nullable=True)
     destroyed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
+    ports_json = Column(JSONB, nullable=True)
 
     __table_args__ = (
-        Index("ix_target_vms_status", "status"),
-        Index("ix_target_vms_ttl", "ttl_expires_at"),
+        Index("ix_vulhub_targets_status", "status"),
+        Index("ix_vulhub_targets_ttl", "ttl_expires_at"),
     )
 
 

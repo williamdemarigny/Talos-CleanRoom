@@ -1,7 +1,7 @@
 # Scanning Console - RBAC (Least-Privilege Model)
 # =============================================================================
 # Namespaced Roles: pods, pods/log, pods/exec, secrets in tool namespaces
-# ClusterRole: namespaces (get/list/create/patch), nodes (list)
+# ClusterRole: namespaces, resourcequotas, deployments, services, networkpolicies (Vulhub mgmt), nodes
 #
 # Explicitly EXCLUDED namespaces: argocd, traefik, cert-manager,
 #   metallb-system, ceph-csi, kube-system, harbor
@@ -21,10 +21,23 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["namespaces"]
-  verbs: ["get", "list", "create", "patch"]
+  verbs: ["get", "list", "create", "delete", "patch"]
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["list"]
+# Vulhub target namespace management (dynamic vulnerable environments)
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "list", "create", "delete", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "delete", "patch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "create", "delete"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

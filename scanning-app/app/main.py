@@ -34,12 +34,12 @@ TEMPLATES_DIR = APP_DIR.parent / "templates"
 
 
 async def _target_lab_cleanup_loop():
-    """Background task: destroy expired VMs and reconcile orphaned deploys."""
-    from app.services.target_lab_service import get_target_lab_service
+    """Background task: destroy expired Vulhub targets and reconcile orphaned deploys."""
+    from app.services.vulhub_target_service import get_vulhub_target_service
     while True:
         try:
             await asyncio.sleep(300)  # Check every 5 minutes
-            svc = get_target_lab_service()
+            svc = get_vulhub_target_service()
             if svc.enabled:
                 await svc.cleanup_expired()
                 await svc.reconcile_orphaned()
@@ -53,10 +53,10 @@ async def _target_lab_cleanup_loop():
 async def lifespan(app: FastAPI):
     """Manage database connection pool, enrichment, and target lab lifecycle."""
     await init_db()
-    # Reconcile any VMs orphaned from previous pod lifecycle
+    # Reconcile any Vulhub targets orphaned from previous pod lifecycle
     try:
-        from app.services.target_lab_service import get_target_lab_service
-        svc = get_target_lab_service()
+        from app.services.vulhub_target_service import get_vulhub_target_service
+        svc = get_vulhub_target_service()
         if svc.enabled:
             await svc.reconcile_orphaned()
     except Exception as e:
@@ -68,10 +68,10 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
-    # Shutdown target lab client
+    # Shutdown target lab service
     try:
-        from app.services.target_lab_service import get_target_lab_service
-        await get_target_lab_service().close()
+        from app.services.vulhub_target_service import get_vulhub_target_service
+        await get_vulhub_target_service().close()
     except Exception:
         pass
     # Shutdown enrichment service HTTP client
