@@ -176,8 +176,6 @@ function targetLab() {
                     }
                     return;
                 }
-                // Clean up deploy logs for destroyed target
-                delete this.deployLogs[targetId];
                 await this.loadTargets();
             } catch (e) {
                 this.error = 'Destroy request failed: ' + e.message;
