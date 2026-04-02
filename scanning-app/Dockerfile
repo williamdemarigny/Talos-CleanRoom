@@ -46,6 +46,9 @@ COPY scanning-app/app/ ./app/
 COPY scanning-app/static/ ./static/
 COPY scanning-app/templates/ ./templates/
 
+# Copy Vulhub K8s manifests (baked into image for kubectl apply)
+COPY apps/vulhub-targets/manifests/ ./vulhub-manifests/
+
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app

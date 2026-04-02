@@ -981,29 +981,7 @@ class DeploymentService(BaseServiceMixin):
         except Exception as e:
             await self.log(-1, "warn", f"  Ceph cleanup exception: {e}")
 
-        # Step 5: Destroy target lab VMs (clones 5000-5099) and templates (4000-4001)
-        await self.log(-1, "info", "Step 5: Destroying target lab VMs and templates...")
-        try:
-            remaining_vms = await _proxmox_list_vms()
-            target_vmids = set(range(5000, 5100)) | {4000, 4001}
-            lab_vms = [v for v in remaining_vms if v.get("vmid", 0) in target_vmids]
-            if lab_vms:
-                # Destroy clones first (5000+), then templates (4000-4001)
-                lab_vms.sort(key=lambda v: 0 if v["vmid"] >= 5000 else 1)
-                for vm in lab_vms:
-                    vmid = vm["vmid"]
-                    node = vm["_node"]
-                    rtype = vm["_type"]
-                    await self.log(-1, "info", f"  Destroying {rtype} {vmid} on {node}")
-                    await _proxmox_destroy_vm(vmid, node, rtype)
-                    await asyncio.sleep(2)
-                await self.log(-1, "info", f"  Destroyed {len(lab_vms)} target lab VMs/templates")
-            else:
-                await self.log(-1, "info", "  No target lab VMs or templates found")
-        except Exception as e:
-            await self.log(-1, "warn", f"  Target lab cleanup failed: {e}")
-
-        # Step 6: Clean generated configs and kubeconfig
+        # Step 5: Clean generated configs and kubeconfig
         await self.log(-1, "info", "Step 6: Cleaning generated configs...")
         try:
             clusterconfig_dir = self.talos_dir / "clusterconfig"
@@ -1024,7 +1002,7 @@ class DeploymentService(BaseServiceMixin):
 
         # Check VMs
         remaining_vms = await _proxmox_list_vms()
-        managed_vmids = cluster_vmids | {build_vm_vmid} | set(range(5000, 5100)) | {4000, 4001}
+        managed_vmids = cluster_vmids | {build_vm_vmid}
         leftover = [v for v in remaining_vms if v.get("vmid") in managed_vmids]
         if leftover:
             vmid_list = [f"{v['_type']}/{v['vmid']}" for v in leftover]
@@ -1080,7 +1058,7 @@ class DeploymentService(BaseServiceMixin):
             (17, self._step_generate_secrets),
             (18, self._step_commit_push_secrets),
             (19, self._step_deploy_build_vm),
-            (20, self._step_prepare_target_templates),
+            (20, self._step_prepare_vulhub_targets),
             (21, self._step_build_push_images),
             (22, self._step_deploy_cleanroom_apps),
             (23, self._step_deploy_console_routing),
@@ -2327,20 +2305,11 @@ class DeploymentService(BaseServiceMixin):
         from talos_common.auth import get_password_hash
         sc_admin_hash = get_password_hash(sc_admin_password)
 
-        # Read Proxmox credentials for Target Lab integration
-        proxmox_creds = self._read_proxmox_credentials()
-        proxmox_api_url = proxmox_creds.get("proxmox_api_url", "")
-        proxmox_api_token = proxmox_creds.get("proxmox_api_token", "")
-
         sc_secret_data = {
             "secret-key": sc_secret_key,
             "database-url": db_url,
             "admin-password-hash": sc_admin_hash,
         }
-        if proxmox_api_url:
-            sc_secret_data["proxmox-api-url"] = proxmox_api_url
-        if proxmox_api_token:
-            sc_secret_data["proxmox-api-token"] = proxmox_api_token
         await self._create_secret(step_id, "scanning-console", "scanning-console-credentials",
                                   sc_secret_data)
         self.credentials["scanning_console"] = {"username": "admin", "password": sc_admin_password}
@@ -2404,10 +2373,6 @@ class DeploymentService(BaseServiceMixin):
             f'  database-url: "{db_url}"\n'
             f'  admin-password-hash: "{sc_admin_hash}"\n'
         )
-        if proxmox_api_url:
-            sc_sops_content += f'  proxmox-api-url: "{proxmox_api_url}"\n'
-        if proxmox_api_token:
-            sc_sops_content += f'  proxmox-api-token: "{proxmox_api_token}"\n'
         await write_sops_file("apps/scanning-console/secrets.sops.yaml", sc_sops_content)
 
         # Portal
@@ -2845,82 +2810,32 @@ echo "=== Setup Complete ==="
         await self.log(step_id, "info", "Build VM deployment complete")
         return True
 
-    async def _step_prepare_target_templates(self, step_id: int) -> bool:
-        """Step 20: Prepare Metasploitable3 VM templates on Proxmox.
+    async def _step_prepare_vulhub_targets(self, step_id: int) -> bool:
+        """Step 20: Prepare Vulhub target environments.
 
-        SSHs to a Proxmox node and runs the template preparation script
-        which downloads Vagrant boxes, converts VMDK to QCOW2, and creates
-        VM templates (VMIDs 4000, 4001). Idempotent — skips if templates exist.
+        Vulhub targets are K8s-native and deployed on-demand via the Scanning
+        Console.  This step validates that the scanning-console image includes
+        the vulhub-manifests directory and logs guidance for the operator.
         """
-        await self.log(step_id, "info", "Preparing Metasploitable3 target VM templates...")
+        await self.log(step_id, "info", "Preparing Vulhub target environments...")
+        await self.log(step_id, "info",
+                       "Vulhub targets are Kubernetes-native and deployed on-demand "
+                       "via the Scanning Console UI")
 
-        proxmox_creds = self._read_proxmox_credentials()
-        proxmox_ssh_password = proxmox_creds.get("proxmox_ssh_password", "")
-        if not proxmox_ssh_password:
-            await self.log(step_id, "warn", "Proxmox SSH password not available — skipping template preparation")
-            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on a Proxmox node")
-            return True  # Non-fatal, templates can be created later
+        # Verify vulhub manifests exist in the repo (they ship inside the
+        # scanning-console container image)
+        vulhub_dir = self.repo_root / "scanning-app" / "vulhub-manifests"
+        if vulhub_dir.is_dir():
+            manifest_count = len(list(vulhub_dir.glob("**/*.yaml")))
+            await self.log(step_id, "info",
+                           f"Found vulhub-manifests directory ({manifest_count} YAML files)")
+        else:
+            await self.log(step_id, "warn",
+                           "vulhub-manifests directory not found in scanning-app/ — "
+                           "Vulhub targets will not be available until manifests are added")
 
-        # SSH to the Proxmox host — extract hostname from proxmox_api_url
-        proxmox_api_url = proxmox_creds.get("proxmox_api_url", "")
-        if not proxmox_api_url:
-            await self.log(step_id, "warn", "No Proxmox API URL configured — skipping")
-            return True
-
-        # Extract host from URL (e.g., "https://pve01.knowledgeondemand.net:8006" → "pve01.knowledgeondemand.net")
-        from urllib.parse import urlparse
-        parsed = urlparse(proxmox_api_url)
-        mgmt_ip = parsed.hostname or ""
-        if not mgmt_ip:
-            await self.log(step_id, "warn", "Could not parse Proxmox host from API URL — skipping")
-            return True
-
-        ssh_prefix = [
-            "sshpass", "-p", proxmox_ssh_password,
-            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-            f"root@{mgmt_ip}",
-        ]
-
-        # Check if templates already exist (idempotent)
-        check_result = await self.process_manager.run_command_simple(
-            ssh_prefix + ["qm status 4000 2>/dev/null && qm status 4001 2>/dev/null"],
-            timeout=30,
-        )
-        if check_result.success:
-            await self.log(step_id, "info", "Templates already exist (VMIDs 4000, 4001) — skipping download")
-            return True
-
-        # Copy and execute the preparation script
-        script_path = str(self.repo_root / "scripts" / "prepare-metasploitable3-templates.sh")
-
-        scp_cmd = [
-            "sshpass", "-p", proxmox_ssh_password,
-            "scp", "-o", "StrictHostKeyChecking=no",
-            script_path, f"root@{mgmt_ip}:/tmp/prepare-ms3.sh",
-        ]
-        scp_result = await self.process_manager.run_command(
-            scp_cmd,
-            on_output=self._sanitized_output_callback(step_id),
-            timeout=30,
-        )
-        if not scp_result.success:
-            await self.log(step_id, "error", "Failed to copy template script to Proxmox node")
-            await self.log(step_id, "info", "Run scripts/prepare-metasploitable3-templates.sh manually on Proxmox")
-            return False
-
-        # Execute the script (allow 45 minutes for ~6.5 GB download + conversion)
-        await self.log(step_id, "info", "Downloading and converting Metasploitable3 images (this may take 15-30 minutes)...")
-        exec_result = await self.process_manager.run_command(
-            ssh_prefix + ["bash /tmp/prepare-ms3.sh && rm -f /tmp/prepare-ms3.sh"],
-            on_output=self._sanitized_output_callback(step_id),
-            timeout=2700,  # 45 minutes
-        )
-
-        if not exec_result.success:
-            await self.log(step_id, "error", f"Template preparation failed: {exec_result.output[-300:]}")
-            return False
-
-        await self.log(step_id, "info", "Metasploitable3 templates ready (VMIDs 4000, 4001)")
+        await self.log(step_id, "info",
+                       "Vulhub target environments can be launched from the Scanning Console")
         return True
 
     async def _step_build_push_images(self, step_id: int) -> bool:

@@ -114,19 +114,6 @@ spec:
               name: scanning-console-credentials
               key: otx-api-key
               optional: true
-        # Target Lab (Proxmox API for Metasploitable3 VMs)
-        - name: PROXMOX_API_URL
-          valueFrom:
-            secretKeyRef:
-              name: scanning-console-credentials
-              key: proxmox-api-url
-              optional: true
-        - name: PROXMOX_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: scanning-console-credentials
-              key: proxmox-api-token
-              optional: true
         ports:
         - containerPort: 8000
           name: http

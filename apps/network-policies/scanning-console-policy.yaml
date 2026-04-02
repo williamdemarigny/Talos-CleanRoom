@@ -84,17 +84,11 @@ spec:
       ports:
         - protocol: TCP
           port: 6443
-    # Allow connection to Proxmox API (Target Lab — target VM management)
+    # Vulhub target namespaces (K8s-based vulnerable environments)
     - to:
-        - ipBlock:
-            cidr: 10.83.2.0/24
-      ports:
-        - protocol: TCP
-          port: 8006
-    # Allow connection to target VMs (Target Lab — Metasploitable3 on VLAN 3)
-    - to:
-        - ipBlock:
-            cidr: 10.83.3.160/28
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: vulhub-targets
     # Allow HTTPS egress to external APIs (NVD, EPSS, OTX) for vulnerability enrichment
     # Excludes private networks, cloud metadata, and CGNAT to prevent SSRF
     - to:

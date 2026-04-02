@@ -1,0 +1,63 @@
+# Vulhub: Struts2 S2-045 (CVE-2017-5638) — Apache Struts2 Jakarta parser RCE
+# Source: https://github.com/vulhub/vulhub/tree/master/struts2/s2-045
+# Port: 8080 (Tomcat with vulnerable Struts2 app)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: struts2-s2045
+  labels:
+    app.kubernetes.io/name: struts2-s2045
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: struts2-s2045
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: struts2-s2045
+    spec:
+      containers:
+        - name: struts2
+          image: vulhub/struts2:2.3.30
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: struts2-s2045
+  labels:
+    app.kubernetes.io/name: struts2-s2045
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: struts2-s2045
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
