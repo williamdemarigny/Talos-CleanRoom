@@ -158,8 +158,8 @@
                                 <th class="text-right text-xs text-gray-400 font-medium px-4 py-3">Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <template x-for="t in targets" :key="t.id">
+                        <template x-for="t in targets" :key="t.id">
+                            <tbody>
                                 <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
                                     <td class="px-4 py-3">
                                         <span class="text-white text-sm font-medium" x-text="t.name"></span>
@@ -187,6 +187,15 @@
                                               x-text="ttlRemaining(t)"></span>
                                     </td>
                                     <td class="px-4 py-3 text-right space-x-2">
+                                        <button x-show="t.status === 'deploying' || t.status === 'error' || hasLogs(t.id)"
+                                                @click="toggleLogs(t.id)"
+                                                class="text-xs px-3 py-1 rounded transition-colors"
+                                                :class="isLogsExpanded(t.id)
+                                                    ? 'bg-cyan-700 text-white'
+                                                    : 'bg-gray-600 hover:bg-gray-500 text-gray-200'"
+                                                title="View deployment logs">
+                                            Logs
+                                        </button>
                                         <button x-show="t.status === 'running'"
                                                 @click="scanTarget(t.service_endpoint, t.env_id)"
                                                 class="text-xs bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded transition-colors">
@@ -205,8 +214,43 @@
                                         </button>
                                     </td>
                                 </tr>
-                            </template>
-                        </tbody>
+                                <!-- Deploy log panel (collapsible row below target) -->
+                                <tr x-show="isLogsExpanded(t.id)" x-transition>
+                                    <td colspan="7" class="px-4 py-0">
+                                        <div :id="'deploy-log-' + t.id"
+                                             class="bg-gray-900 border border-gray-700 rounded-md my-2 max-h-64 overflow-y-auto font-mono text-xs">
+                                            <template x-if="getLogsForTarget(t.id).length === 0">
+                                                <div class="p-3 text-gray-500">
+                                                    <span x-show="t.status === 'deploying'" class="flex items-center">
+                                                        <svg class="animate-spin h-3 w-3 mr-2" viewBox="0 0 24 24">
+                                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                                        </svg>
+                                                        Waiting for deployment logs...
+                                                    </span>
+                                                    <span x-show="t.status !== 'deploying'">No logs available.</span>
+                                                </div>
+                                            </template>
+                                            <template x-if="getLogsForTarget(t.id).length > 0">
+                                                <div class="p-2 space-y-0.5">
+                                                    <template x-for="(log, idx) in getLogsForTarget(t.id)" :key="idx">
+                                                        <div class="flex gap-2 leading-tight py-0.5">
+                                                            <span class="text-gray-500 flex-shrink-0 w-20"
+                                                                  x-text="formatLogTime(log.timestamp)"></span>
+                                                            <span class="text-cyan-600 flex-shrink-0 w-28 truncate"
+                                                                  x-text="'[' + log.step + ']'"></span>
+                                                            <span :class="logLevelClass(log.level)"
+                                                                  x-text="log.message"
+                                                                  class="whitespace-pre-wrap break-all"></span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </template>
                     </table>
                 </div>
             </template>

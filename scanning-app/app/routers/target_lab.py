@@ -102,6 +102,30 @@ async def deploy_target(
     return result
 
 
+@router.get("/targets/{target_id}/logs")
+async def get_target_deploy_logs(
+    target_id: int,
+    offset: int = Query(0, ge=0, description="Log entry offset for incremental fetching"),
+    user: dict = Depends(get_current_user),
+):
+    """Get deployment logs for a Vulhub target.
+
+    Returns log entries starting from offset, enabling incremental polling.
+    Logs are in-memory and available while the target is active or in error state.
+    """
+    svc = get_vulhub_target_service()
+    target = await svc.get_target(target_id)
+    if not target:
+        raise HTTPException(404, f"Target {target_id} not found.")
+    logs = svc.get_deploy_logs(target_id, offset=offset)
+    return {
+        "target_id": target_id,
+        "status": target["status"],
+        "logs": logs,
+        "total": offset + len(logs),
+    }
+
+
 @router.post("/destroy/{target_id}")
 async def destroy_target(
     target_id: int,
