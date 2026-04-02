@@ -18,9 +18,17 @@ function targetLab() {
             { value: 'all', label: 'All' },
             { value: 'rce', label: 'RCE' },
             { value: 'web', label: 'Web' },
-            { value: 'network', label: 'Network' },
+            { value: 'tls', label: 'TLS' },
             { value: 'auth', label: 'Auth' },
+            { value: 'ssrf', label: 'SSRF' },
+            { value: 'xxe', label: 'XXE' },
+            { value: 'sqli', label: 'SQLi' },
+            { value: 'nosql', label: 'NoSQL' },
+            { value: 'network', label: 'Network' },
+            { value: 'dns', label: 'DNS' },
+            { value: 'php', label: 'PHP' },
             { value: 'misc', label: 'Misc' },
+            { value: 'container', label: 'Container' },
         ],
 
         async init() {
@@ -160,8 +168,19 @@ function targetLab() {
             }
         },
 
-        scanTarget(endpoint) {
-            window.location.href = '/scan?target=' + encodeURIComponent(endpoint);
+        scanTarget(endpoint, envId) {
+            const env = this.catalog.find(e => e.env_id === envId);
+            const params = new URLSearchParams();
+            params.set('target', endpoint);
+
+            if (env && env.recommended_scan) {
+                const recipe = env.recommended_scan;
+                if (recipe.tools) params.set('tools', recipe.tools.join(','));
+                if (recipe.profile) params.set('profile', recipe.profile);
+                if (recipe.msf_modules) params.set('msf_modules', recipe.msf_modules.join(','));
+                if (recipe.nmap_scripts) params.set('nmap_scripts', recipe.nmap_scripts);
+            }
+            window.location.href = '/scan?' + params.toString();
         },
 
         ttlSeconds(target) {
@@ -193,11 +212,20 @@ function targetLab() {
 
         categoryBadgeClass(category) {
             switch (category) {
-                case 'rce':     return 'bg-red-900/50 text-red-400';
-                case 'web':     return 'bg-blue-900/50 text-blue-400';
-                case 'network': return 'bg-green-900/50 text-green-400';
-                case 'auth':    return 'bg-yellow-900/50 text-yellow-400';
-                default:        return 'bg-gray-700 text-gray-300';
+                case 'rce':       return 'bg-red-900/50 text-red-400';
+                case 'web':       return 'bg-blue-900/50 text-blue-400';
+                case 'tls':       return 'bg-cyan-900/50 text-cyan-400';
+                case 'auth':      return 'bg-yellow-900/50 text-yellow-400';
+                case 'ssrf':      return 'bg-orange-900/50 text-orange-400';
+                case 'xxe':       return 'bg-pink-900/50 text-pink-400';
+                case 'sqli':      return 'bg-amber-900/50 text-amber-400';
+                case 'nosql':     return 'bg-lime-900/50 text-lime-400';
+                case 'network':   return 'bg-green-900/50 text-green-400';
+                case 'dns':       return 'bg-teal-900/50 text-teal-400';
+                case 'php':       return 'bg-violet-900/50 text-violet-400';
+                case 'misc':      return 'bg-gray-700 text-gray-300';
+                case 'container': return 'bg-rose-900/50 text-rose-400';
+                default:          return 'bg-gray-700 text-gray-300';
             }
         },
     };

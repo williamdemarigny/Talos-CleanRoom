@@ -143,10 +143,25 @@ function scanManager() {
 
             this._wsBase.connectWebSocket();
 
-            // Pre-fill target from ?target= query param (e.g. from Target Lab)
+            // Pre-fill from query params (e.g. from Target Lab scan recipe)
             const params = new URLSearchParams(window.location.search);
             if (params.get('target')) {
                 this.target = params.get('target');
+            }
+            if (params.get('tools')) {
+                this.selectedTools = params.get('tools').split(',').filter(t =>
+                    ['nmap', 'openvas', 'metasploit'].includes(t)
+                );
+            }
+            if (params.get('profile')) {
+                const p = params.get('profile');
+                if (['quick', 'standard', 'thorough', 'custom'].includes(p)) {
+                    this.profile = p;
+                }
+            }
+            if (params.get('msf_modules')) {
+                this.profile = 'custom';
+                this.customModules = params.get('msf_modules').split(',');
             }
 
             await this.fetchStatus();
@@ -301,10 +316,18 @@ function scanManager() {
                     this.startPolling();
                 } else {
                     const error = await response.json();
-                    alert('Failed to start scan: ' + error.detail);
+                    let msg = 'Unknown error';
+                    if (typeof error.detail === 'string') {
+                        msg = error.detail;
+                    } else if (Array.isArray(error.detail)) {
+                        msg = error.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+                    } else if (error.detail) {
+                        msg = JSON.stringify(error.detail);
+                    }
+                    alert('Failed to start scan: ' + msg);
                 }
             } catch (e) {
-                alert('Failed to start scan: ' + e.message);
+                alert('Failed to start scan: ' + (e.message || String(e)));
             }
         },
 

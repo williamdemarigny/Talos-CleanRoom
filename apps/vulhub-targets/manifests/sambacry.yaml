@@ -1,0 +1,63 @@
+# Vulhub: SambaCry (CVE-2017-7494) — Samba remote code execution
+# Source: https://github.com/vulhub/vulhub/tree/master/samba/CVE-2017-7494
+# Port: 445 (SMB)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sambacry
+  labels:
+    app.kubernetes.io/name: sambacry
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sambacry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sambacry
+    spec:
+      containers:
+        - name: samba
+          image: vulhub/samba:4.6.3
+          ports:
+            - containerPort: 445
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            tcpSocket:
+              port: 445
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 445
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sambacry
+  labels:
+    app.kubernetes.io/name: sambacry
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sambacry
+  ports:
+    - port: 445
+      targetPort: 445
+      protocol: TCP
+      name: smb

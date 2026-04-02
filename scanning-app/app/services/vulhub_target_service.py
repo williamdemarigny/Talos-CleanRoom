@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import engine as db_engine
 from app.db.models import VulhubTarget
-from app.services.vulhub_catalog import VULHUB_CATALOG
+from app.services.vulhub_catalog import VULHUB_CATALOG, TIER_CONFIG
 from talos_common.services.process_manager import ProcessManager
 
 logger = logging.getLogger(__name__)
@@ -198,7 +198,7 @@ class VulhubTargetService:
 
                 # Create background task for the actual K8s deployment
                 task = asyncio.create_task(
-                    self._deploy_with_timeout(target_id, namespace, manifest_path, svc_name, env_id)
+                    self._deploy_with_timeout(target_id, namespace, manifest_path, svc_name, env_id, catalog_entry)
                 )
                 task.add_done_callback(self._task_done_callback)
             finally:
@@ -227,16 +227,21 @@ class VulhubTargetService:
             logger.error("Background Vulhub deploy task failed: %s", exc)
 
     async def _deploy_with_timeout(self, target_id: int, namespace: str,
-                                    manifest_path: Path, svc_name: str, env_id: str):
-        """Wrap _deploy_target_k8s with an overall timeout."""
+                                    manifest_path: Path, svc_name: str, env_id: str,
+                                    catalog_entry: dict):
+        """Wrap _deploy_target_k8s with a tier-based overall timeout."""
+        tier = catalog_entry.get("tier", "tier2")
+        tier_cfg = TIER_CONFIG.get(tier, TIER_CONFIG["tier2"])
+        # Overall timeout = rollout timeout + 120s buffer for namespace/manifest/quota setup
+        overall_timeout = tier_cfg["rollout_timeout"] + 120
         try:
             await asyncio.wait_for(
-                self._deploy_target_k8s(target_id, namespace, manifest_path, svc_name, env_id),
-                timeout=300,
+                self._deploy_target_k8s(target_id, namespace, manifest_path, svc_name, env_id, catalog_entry),
+                timeout=overall_timeout,
             )
         except asyncio.TimeoutError:
-            logger.error("Deploy timed out for Vulhub target %d (%s) after 300s", target_id, namespace)
-            await self._update_status(target_id, "error", "Deployment timed out after 5 minutes")
+            logger.error("Deploy timed out for Vulhub target %d (%s) after %ds", target_id, namespace, overall_timeout)
+            await self._update_status(target_id, "error", f"Deployment timed out after {overall_timeout}s")
             # Attempt cleanup
             try:
                 await self._delete_namespace(namespace)
@@ -244,7 +249,8 @@ class VulhubTargetService:
                 pass
 
     async def _deploy_target_k8s(self, target_id: int, namespace: str,
-                                  manifest_path: Path, svc_name: str, env_id: str):
+                                  manifest_path: Path, svc_name: str, env_id: str,
+                                  catalog_entry: dict):
         """Background task: create namespace, apply manifests, wait for rollout."""
         try:
             # Step 1: Create namespace with label
@@ -276,17 +282,20 @@ class VulhubTargetService:
             if not result.success:
                 raise VulhubTargetError(f"Failed to apply NetworkPolicy: {result.output}")
 
-            # Step 4: Apply ResourceQuota
-            quota_json = self._build_resource_quota_json()
+            # Step 4: Apply ResourceQuota (tier-based)
+            tier = catalog_entry.get("tier", "tier2")
+            quota_json = self._build_resource_quota_json(tier=tier)
             result = await self._kubectl_apply_stdin(quota_json, namespace=namespace)
             if not result.success:
                 raise VulhubTargetError(f"Failed to apply ResourceQuota: {result.output}")
 
-            # Step 5: Wait for rollout
+            # Step 5: Wait for rollout (tier-based timeout)
+            tier_cfg = TIER_CONFIG.get(tier, TIER_CONFIG["tier2"])
+            rollout_timeout = tier_cfg["rollout_timeout"]
             result = await self._process_manager.run_command_simple(
                 ["kubectl", "rollout", "status", f"deployment/{svc_name}",
-                 "-n", namespace, "--timeout=120s"],
-                timeout=150,
+                 "-n", namespace, f"--timeout={rollout_timeout}s"],
+                timeout=rollout_timeout + 30,
             )
             if not result.success:
                 logger.warning(
@@ -358,19 +367,17 @@ class VulhubTargetService:
         }
         return json.dumps(policy)
 
-    def _build_resource_quota_json(self) -> str:
+    def _build_resource_quota_json(self, tier: str = "tier2") -> str:
         """Build the ResourceQuota JSON for a Vulhub target namespace.
 
-        Limits are doubled relative to config values to accommodate
-        multi-container pods (e.g. drupalgeddon2 has Drupal + MySQL).
+        Uses tier-based resource allocation.  Quota = per-container limit
+        multiplied by max_pods for that tier (accommodates multi-container
+        pods like Drupal + MySQL in tier3).
         """
-        settings = self._settings
-        # Parse cpu/memory values and double them for the quota ceiling
-        cpu_limit = settings.vulhub_target_cpu_limit   # e.g. "500m"
-        mem_limit = settings.vulhub_target_memory_limit  # e.g. "512Mi"
-        # Double: "500m" -> "1000m", "512Mi" -> "1024Mi"
-        cpu_num = int(cpu_limit.rstrip("m"))
-        mem_num = int(mem_limit.rstrip("Mi"))
+        tier_cfg = TIER_CONFIG.get(tier, TIER_CONFIG["tier2"])
+        max_pods = tier_cfg["max_pods"]
+        cpu_limit_num = int(tier_cfg["cpu_limit"].rstrip("m"))
+        mem_limit_num = int(tier_cfg["memory_limit"].rstrip("Mi"))
         quota = {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
@@ -379,11 +386,11 @@ class VulhubTargetService:
             },
             "spec": {
                 "hard": {
-                    "pods": "5",
-                    "requests.cpu": f"{cpu_num * 2}m",
-                    "requests.memory": f"{mem_num * 2}Mi",
-                    "limits.cpu": f"{cpu_num * 2}m",
-                    "limits.memory": f"{mem_num * 2}Mi",
+                    "pods": str(max_pods),
+                    "requests.cpu": f"{cpu_limit_num * max_pods}m",
+                    "requests.memory": f"{mem_limit_num * max_pods}Mi",
+                    "limits.cpu": f"{cpu_limit_num * max_pods}m",
+                    "limits.memory": f"{mem_limit_num * max_pods}Mi",
                 },
             },
         }
