@@ -10,8 +10,8 @@
         </div>
         <div x-show="enabled" class="text-sm">
             <span class="text-gray-400">Capacity:</span>
-            <span :class="capacity.current < capacity.max ? 'text-green-400' : 'text-red-400'"
-                  x-text="capacity.current + '/' + capacity.max + ' slots used'"></span>
+            <span :class="capacity.used < capacity.max ? 'text-green-400' : 'text-red-400'"
+                  x-text="capacity.used + '/' + capacity.max + ' slots used'"></span>
         </div>
     </div>
 
@@ -53,7 +53,7 @@
 
             <!-- Catalog Card Grid -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-                <template x-for="env in filteredCatalog" :key="env.id">
+                <template x-for="env in filteredCatalog" :key="env.env_id">
                     <div class="bg-gray-800 border border-gray-700 rounded-lg p-5 hover:border-gray-600 transition-colors flex flex-col">
                         <!-- Header: Name + CVE -->
                         <div class="flex items-start justify-between mb-2">
@@ -90,13 +90,13 @@
                         </div>
 
                         <!-- Deploy button -->
-                        <button @click="deploy(env.id)"
-                                :disabled="deployingId === env.id || capacity.current >= capacity.max"
+                        <button @click="deploy(env.env_id)"
+                                :disabled="deployingId === env.env_id || capacity.used >= capacity.max"
                                 class="w-full py-2 px-4 rounded-md text-sm font-medium transition-colors
                                        bg-cyan-600 hover:bg-cyan-500 text-white
                                        disabled:opacity-50 disabled:cursor-not-allowed">
-                            <span x-show="deployingId !== env.id">Deploy</span>
-                            <span x-show="deployingId === env.id" class="flex items-center justify-center">
+                            <span x-show="deployingId !== env.env_id">Deploy</span>
+                            <span x-show="deployingId === env.env_id" class="flex items-center justify-center">
                                 <svg class="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>

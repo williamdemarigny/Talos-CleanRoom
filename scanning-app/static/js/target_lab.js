@@ -7,7 +7,7 @@ function targetLab() {
         loading: true,
         catalog: [],
         targets: [],
-        capacity: { current: 0, max: 8 },
+        capacity: { used: 0, max: 8, available: 8 },
         selectedCategory: 'all',
         searchQuery: '',
         deployingId: '',
