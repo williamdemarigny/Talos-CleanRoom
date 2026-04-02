@@ -13,6 +13,9 @@ function targetLab() {
         deployingId: '',
         error: '',
         _pollTimer: null,
+        // Deploy log state: { [targetId]: { logs: [], offset: 0, expanded: false } }
+        deployLogs: {},
+        _logPollTimer: null,
 
         categories: [
             { value: 'all', label: 'All' },
@@ -35,17 +38,44 @@ function targetLab() {
             await Promise.all([this.loadCatalog(), this.loadTargets()]);
             this.loading = false;
 
-            // Poll targets every 10 seconds
-            this._pollTimer = setInterval(() => this.loadTargets(), 10000);
+            // Start adaptive polling (faster when deploying targets exist)
+            this._startAdaptivePolling();
+
+            // Poll deploy logs every 3 seconds for deploying/error targets
+            this._logPollTimer = setInterval(() => this._pollDeployLogs(), 3000);
 
             // Clean up polling on navigation
             window.addEventListener('beforeunload', () => this.cleanup());
+        },
+
+        _startAdaptivePolling() {
+            // Use 3s polling when any target is deploying, 10s otherwise
+            const interval = this._hasDeployingTargets() ? 3000 : 10000;
+            if (this._pollTimer) clearInterval(this._pollTimer);
+            this._pollTimer = setInterval(() => {
+                this.loadTargets();
+                // Re-check if polling interval needs to change
+                const needed = this._hasDeployingTargets() ? 3000 : 10000;
+                if (needed !== this._currentPollInterval) {
+                    this._currentPollInterval = needed;
+                    this._startAdaptivePolling();
+                }
+            }, interval);
+            this._currentPollInterval = interval;
+        },
+
+        _hasDeployingTargets() {
+            return this.targets.some(t => t.status === 'deploying');
         },
 
         cleanup() {
             if (this._pollTimer) {
                 clearInterval(this._pollTimer);
                 this._pollTimer = null;
+            }
+            if (this._logPollTimer) {
+                clearInterval(this._logPollTimer);
+                this._logPollTimer = null;
             }
         },
 
@@ -113,7 +143,14 @@ function targetLab() {
                     }
                     return;
                 }
+                const result = await resp.json();
+                // Immediately start tracking deploy logs for this target
+                if (result.id) {
+                    this.deployLogs[result.id] = { logs: [], offset: 0, expanded: true };
+                }
                 await this.loadTargets();
+                // Switch to fast polling since we now have a deploying target
+                this._startAdaptivePolling();
             } catch (e) {
                 this.error = 'Deployment request failed: ' + e.message;
             } finally {
@@ -139,6 +176,8 @@ function targetLab() {
                     }
                     return;
                 }
+                // Clean up deploy logs for destroyed target
+                delete this.deployLogs[targetId];
                 await this.loadTargets();
             } catch (e) {
                 this.error = 'Destroy request failed: ' + e.message;
@@ -166,6 +205,93 @@ function targetLab() {
             } catch (e) {
                 this.error = 'TTL extension failed: ' + e.message;
             }
+        },
+
+        // ── Deploy log methods ──────────────────────────────────
+
+        getLogState(targetId) {
+            if (!this.deployLogs[targetId]) {
+                this.deployLogs[targetId] = { logs: [], offset: 0, expanded: false };
+            }
+            return this.deployLogs[targetId];
+        },
+
+        toggleLogs(targetId) {
+            const state = this.getLogState(targetId);
+            state.expanded = !state.expanded;
+            if (state.expanded && state.logs.length === 0) {
+                this._fetchDeployLogs(targetId);
+            }
+        },
+
+        async _fetchDeployLogs(targetId) {
+            const state = this.getLogState(targetId);
+            try {
+                const resp = await authFetch(
+                    '/api/target-lab/targets/' + targetId + '/logs?offset=' + state.offset
+                );
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.logs && data.logs.length > 0) {
+                        state.logs = state.logs.concat(data.logs);
+                        state.offset = data.total;
+                        // Auto-scroll log container to bottom after DOM update
+                        this.$nextTick(() => {
+                            const el = document.getElementById('deploy-log-' + targetId);
+                            if (el) el.scrollTop = el.scrollHeight;
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch deploy logs for target', targetId, e);
+            }
+        },
+
+        async _pollDeployLogs() {
+            // Only poll logs for targets that are deploying or in error state with expanded logs
+            for (const t of this.targets) {
+                const state = this.deployLogs[t.id];
+                // Auto-expand for deploying targets; also poll if expanded
+                if (t.status === 'deploying') {
+                    if (!state) {
+                        this.deployLogs[t.id] = { logs: [], offset: 0, expanded: true };
+                    }
+                    await this._fetchDeployLogs(t.id);
+                } else if (state && state.expanded && t.status === 'error') {
+                    // One final fetch for error targets
+                    await this._fetchDeployLogs(t.id);
+                }
+            }
+        },
+
+        hasLogs(targetId) {
+            const state = this.deployLogs[targetId];
+            return state && state.logs.length > 0;
+        },
+
+        isLogsExpanded(targetId) {
+            const state = this.deployLogs[targetId];
+            return state && state.expanded;
+        },
+
+        getLogsForTarget(targetId) {
+            const state = this.deployLogs[targetId];
+            return state ? state.logs : [];
+        },
+
+        logLevelClass(level) {
+            switch (level) {
+                case 'error':   return 'text-red-400';
+                case 'warning': return 'text-yellow-400';
+                case 'info':    return 'text-gray-300';
+                default:        return 'text-gray-400';
+            }
+        },
+
+        formatLogTime(timestamp) {
+            if (!timestamp) return '';
+            const d = new Date(timestamp + 'Z');
+            return d.toLocaleTimeString();
         },
 
         scanTarget(endpoint, envId) {

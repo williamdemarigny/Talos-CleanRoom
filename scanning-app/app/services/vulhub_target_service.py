@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,9 @@ _ACTIVE_STATUSES = ("deploying", "running", "stopping")
 # Advisory lock ID for serializing target allocation (PostgreSQL pg_advisory_lock)
 _ALLOCATION_LOCK_ID = 839272
 
+# Maximum deploy log entries kept per target (in-memory)
+_MAX_DEPLOY_LOG_ENTRIES = 200
+
 
 def _get_session_factory():
     """Get the async session factory, raising if DB not initialized."""
@@ -50,6 +54,8 @@ class VulhubTargetService:
     def __init__(self):
         self._settings = get_settings()
         self._process_manager = ProcessManager()
+        # In-memory deploy log buffer: target_id → list of log dicts
+        self._deploy_logs: dict[int, list[dict]] = defaultdict(list)
 
     @property
     def enabled(self) -> bool:
@@ -59,6 +65,68 @@ class VulhubTargetService:
         """Shutdown cleanup — cancel any running processes."""
         if self._process_manager.is_running:
             await self._process_manager.cancel()
+
+    # ── Deploy logs ──────────────────────────────────────────────
+
+    def _log_deploy(self, target_id: int, step: str, level: str, message: str):
+        """Append a log entry to the in-memory deploy log buffer.
+
+        Also forwards to the Python logger so it appears in container stdout.
+        """
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "step": step,
+            "level": level,
+            "message": message,
+        }
+        logs = self._deploy_logs[target_id]
+        logs.append(entry)
+        # Trim to prevent unbounded growth
+        if len(logs) > _MAX_DEPLOY_LOG_ENTRIES:
+            self._deploy_logs[target_id] = logs[-_MAX_DEPLOY_LOG_ENTRIES:]
+        # Mirror to Python logger
+        log_fn = getattr(logger, level, logger.info)
+        log_fn("[target %d / %s] %s", target_id, step, message)
+
+    def get_deploy_logs(self, target_id: int, offset: int = 0) -> list[dict]:
+        """Return deploy log entries for a target, starting from offset."""
+        logs = self._deploy_logs.get(target_id, [])
+        return logs[offset:]
+
+    def _clear_deploy_logs(self, target_id: int):
+        """Remove deploy logs for a target (called on destroy/cleanup)."""
+        self._deploy_logs.pop(target_id, None)
+
+    async def _fetch_k8s_diagnostics(self, namespace: str) -> str:
+        """Fetch K8s events and pod status for a namespace to diagnose failures."""
+        diag_lines = []
+
+        # Get pod statuses
+        pod_result = await self._process_manager.run_command_simple(
+            ["kubectl", "get", "pods", "-n", namespace,
+             "-o", "jsonpath={range .items[*]}{.metadata.name}{'\\t'}{.status.phase}{'\\t'}"
+             "{range .status.containerStatuses[*]}{.state}{end}{'\\n'}{end}"],
+            timeout=15,
+        )
+        if pod_result.success and pod_result.output.strip():
+            diag_lines.append("Pod statuses:")
+            for line in pod_result.output.strip().splitlines():
+                diag_lines.append(f"  {line}")
+
+        # Get recent events (sorted by last timestamp)
+        event_result = await self._process_manager.run_command_simple(
+            ["kubectl", "get", "events", "-n", namespace,
+             "--sort-by=.lastTimestamp",
+             "-o", "custom-columns=TYPE:.type,REASON:.reason,MESSAGE:.message",
+             "--no-headers"],
+            timeout=15,
+        )
+        if event_result.success and event_result.output.strip():
+            diag_lines.append("K8s events:")
+            for line in event_result.output.strip().splitlines()[-15:]:
+                diag_lines.append(f"  {line}")
+
+        return "\n".join(diag_lines) if diag_lines else "No diagnostic info available."
 
     # ── Catalog ───────────────────────────────────────────────────
 
@@ -234,15 +302,23 @@ class VulhubTargetService:
         tier_cfg = TIER_CONFIG.get(tier, TIER_CONFIG["tier2"])
         # Overall timeout = rollout timeout + 120s buffer for namespace/manifest/quota setup
         overall_timeout = tier_cfg["rollout_timeout"] + 120
+        self._log_deploy(target_id, "init", "info",
+                         f"Starting deployment of {env_id} (tier={tier}, timeout={overall_timeout}s)")
         try:
             await asyncio.wait_for(
                 self._deploy_target_k8s(target_id, namespace, manifest_path, svc_name, env_id, catalog_entry),
                 timeout=overall_timeout,
             )
         except asyncio.TimeoutError:
-            logger.error("Deploy timed out for Vulhub target %d (%s) after %ds", target_id, namespace, overall_timeout)
+            self._log_deploy(target_id, "timeout", "error",
+                             f"Deployment timed out after {overall_timeout}s")
+            # Fetch K8s diagnostics before cleanup
+            try:
+                diag = await self._fetch_k8s_diagnostics(namespace)
+                self._log_deploy(target_id, "diagnostics", "error", diag)
+            except Exception:
+                pass
             await self._update_status(target_id, "error", f"Deployment timed out after {overall_timeout}s")
-            # Attempt cleanup
             try:
                 await self._delete_namespace(namespace)
             except Exception:
@@ -254,6 +330,8 @@ class VulhubTargetService:
         """Background task: create namespace, apply manifests, wait for rollout."""
         try:
             # Step 1: Create namespace with label
+            self._log_deploy(target_id, "namespace", "info",
+                             f"Creating namespace {namespace}")
             ns_json = json.dumps({
                 "apiVersion": "v1",
                 "kind": "Namespace",
@@ -268,40 +346,60 @@ class VulhubTargetService:
             })
             result = await self._kubectl_apply_stdin(ns_json)
             if not result.success:
+                self._log_deploy(target_id, "namespace", "error",
+                                 f"Failed to create namespace: {result.output}")
                 raise VulhubTargetError(f"Failed to create namespace: {result.output}")
+            self._log_deploy(target_id, "namespace", "info", "Namespace created")
 
             # Step 2: Apply the workload manifest (Deployment + Service)
+            self._log_deploy(target_id, "manifest", "info",
+                             f"Applying manifest {manifest_path.name} "
+                             f"(images: {', '.join(catalog_entry.get('images', []))})")
             manifest_content = manifest_path.read_text()
             result = await self._kubectl_apply_stdin(manifest_content, namespace=namespace)
             if not result.success:
+                self._log_deploy(target_id, "manifest", "error",
+                                 f"Failed to apply manifest: {result.output}")
                 raise VulhubTargetError(f"Failed to apply manifest: {result.output}")
+            self._log_deploy(target_id, "manifest", "info", "Manifest applied")
 
             # Step 3: Apply NetworkPolicy (scanner ingress only, DNS-only egress)
+            self._log_deploy(target_id, "network-policy", "info",
+                             "Applying network isolation policy")
             netpol_json = self._build_network_policy_json()
             result = await self._kubectl_apply_stdin(netpol_json, namespace=namespace)
             if not result.success:
+                self._log_deploy(target_id, "network-policy", "error",
+                                 f"Failed to apply NetworkPolicy: {result.output}")
                 raise VulhubTargetError(f"Failed to apply NetworkPolicy: {result.output}")
+            self._log_deploy(target_id, "network-policy", "info", "NetworkPolicy applied")
 
             # Step 4: Apply ResourceQuota (tier-based)
             tier = catalog_entry.get("tier", "tier2")
+            self._log_deploy(target_id, "resource-quota", "info",
+                             f"Applying resource quota (tier={tier})")
             quota_json = self._build_resource_quota_json(tier=tier)
             result = await self._kubectl_apply_stdin(quota_json, namespace=namespace)
             if not result.success:
+                self._log_deploy(target_id, "resource-quota", "error",
+                                 f"Failed to apply ResourceQuota: {result.output}")
                 raise VulhubTargetError(f"Failed to apply ResourceQuota: {result.output}")
+            self._log_deploy(target_id, "resource-quota", "info", "ResourceQuota applied")
 
             # Step 5: Wait for rollout (tier-based timeout)
             tier_cfg = TIER_CONFIG.get(tier, TIER_CONFIG["tier2"])
             rollout_timeout = tier_cfg["rollout_timeout"]
+            self._log_deploy(target_id, "rollout", "info",
+                             f"Waiting for deployment/{svc_name} rollout "
+                             f"(timeout={rollout_timeout}s)")
             result = await self._process_manager.run_command_simple(
                 ["kubectl", "rollout", "status", f"deployment/{svc_name}",
                  "-n", namespace, f"--timeout={rollout_timeout}s"],
                 timeout=rollout_timeout + 30,
             )
             if not result.success:
-                logger.warning(
-                    "Rollout status check failed for %s (may still be starting): %s",
-                    namespace, result.output,
-                )
+                self._log_deploy(target_id, "rollout", "warning",
+                                 f"Rollout status check failed: {result.output}")
                 # Don't fail hard — the deployment might have multiple deployments
                 # or a different naming convention.  Check if pods are running.
                 pod_check = await self._process_manager.run_command_simple(
@@ -310,18 +408,32 @@ class VulhubTargetService:
                     timeout=30,
                 )
                 if "Running" not in (pod_check.output or ""):
+                    # Fetch K8s diagnostics to understand the failure
+                    diag = await self._fetch_k8s_diagnostics(namespace)
+                    self._log_deploy(target_id, "diagnostics", "error", diag)
                     raise VulhubTargetError(
                         f"Deployment did not reach Running state: {result.output}"
                     )
+                self._log_deploy(target_id, "rollout", "info",
+                                 "Pods are running (rollout check was inconclusive)")
 
             # Success
+            self._log_deploy(target_id, "complete", "info",
+                             f"Target {env_id} deployed successfully in {namespace}")
             await self._update_status(target_id, "running")
-            logger.info("Vulhub target %d (%s) deployed in namespace %s", target_id, env_id, namespace)
 
         except Exception as e:
-            logger.error("Failed to deploy Vulhub target %d (%s): %s", target_id, env_id, e)
+            self._log_deploy(target_id, "error", "error", f"Deployment failed: {e}")
+            # Fetch K8s diagnostics on any failure
+            try:
+                diag = await self._fetch_k8s_diagnostics(namespace)
+                self._log_deploy(target_id, "diagnostics", "error", diag)
+            except Exception:
+                pass
             await self._update_status(target_id, "error", str(e))
             # Attempt cleanup
+            self._log_deploy(target_id, "cleanup", "info",
+                             f"Cleaning up namespace {namespace}")
             try:
                 await self._delete_namespace(namespace)
             except Exception:
@@ -456,6 +568,7 @@ class VulhubTargetService:
             )
 
         await self._update_status(target_id, "destroyed")
+        self._clear_deploy_logs(target_id)
         logger.info("Vulhub target %d (%s) destroyed by %s", target_id, namespace, username)
         return {"id": target_id, "status": "destroyed"}
 
@@ -608,6 +721,7 @@ class VulhubTargetService:
             except Exception:
                 pass
             await self._update_status(target.id, "destroyed")
+            self._clear_deploy_logs(target.id)
 
         # Check running targets for orphaned namespaces
         for target in running:
