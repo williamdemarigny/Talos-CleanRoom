@@ -139,7 +139,7 @@ async def extend_ttl(
     """Extend the TTL of a running Vulhub target."""
     svc = get_vulhub_target_service()
     try:
-        result = await svc.extend_ttl(target_id, body.hours, user.get("username", "admin"))
+        result = await svc.extend_ttl(target_id, body.hours)
     except VulhubTargetError as e:
         raise HTTPException(400, str(e))
 

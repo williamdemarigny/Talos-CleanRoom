@@ -74,6 +74,13 @@ class VulhubTargetService:
             result.append({"env_id": env_id, **entry})
         return result
 
+    def get_catalog_entry(self, env_id: str) -> Optional[dict]:
+        """Return a single catalog entry with env_id included, or None."""
+        entry = VULHUB_CATALOG.get(env_id)
+        if entry is None:
+            return None
+        return {"env_id": env_id, **entry}
+
     # ── Capacity ──────────────────────────────────────────────────
 
     async def get_capacity(self) -> dict:
@@ -352,8 +359,18 @@ class VulhubTargetService:
         return json.dumps(policy)
 
     def _build_resource_quota_json(self) -> str:
-        """Build the ResourceQuota JSON for a Vulhub target namespace."""
+        """Build the ResourceQuota JSON for a Vulhub target namespace.
+
+        Limits are doubled relative to config values to accommodate
+        multi-container pods (e.g. drupalgeddon2 has Drupal + MySQL).
+        """
         settings = self._settings
+        # Parse cpu/memory values and double them for the quota ceiling
+        cpu_limit = settings.vulhub_target_cpu_limit   # e.g. "500m"
+        mem_limit = settings.vulhub_target_memory_limit  # e.g. "512Mi"
+        # Double: "500m" -> "1000m", "512Mi" -> "1024Mi"
+        cpu_num = int(cpu_limit.rstrip("m"))
+        mem_num = int(mem_limit.rstrip("Mi"))
         quota = {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
@@ -363,10 +380,10 @@ class VulhubTargetService:
             "spec": {
                 "hard": {
                     "pods": "5",
-                    "requests.cpu": settings.vulhub_target_cpu_limit,
-                    "requests.memory": settings.vulhub_target_memory_limit,
-                    "limits.cpu": settings.vulhub_target_cpu_limit,
-                    "limits.memory": settings.vulhub_target_memory_limit,
+                    "requests.cpu": f"{cpu_num * 2}m",
+                    "requests.memory": f"{mem_num * 2}Mi",
+                    "limits.cpu": f"{cpu_num * 2}m",
+                    "limits.memory": f"{mem_num * 2}Mi",
                 },
             },
         }

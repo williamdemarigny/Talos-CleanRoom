@@ -109,9 +109,11 @@
             </div>
 
             <!-- Empty catalog state -->
-            <template x-if="filteredCatalog.length === 0 && catalog.length > 0">
+            <template x-if="filteredCatalog.length === 0 && !loading">
                 <div class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center mb-8">
-                    <p class="text-gray-400">No environments match your filter.</p>
+                    <p class="text-gray-400" x-text="catalog.length === 0
+                        ? 'No Vulhub environments configured. Ensure manifests are baked into the container image.'
+                        : 'No environments match your filter.'"></p>
                 </div>
             </template>
 
