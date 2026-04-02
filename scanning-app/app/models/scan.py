@@ -73,29 +73,65 @@ _HOSTNAME_RE = re.compile(
 
 
 def _validate_single_target(token: str) -> str:
-    """Validate a single scan target token (IP, CIDR, or hostname).
+    """Validate a single scan target token (IP, CIDR, hostname, or host:port).
 
-    Raises ValueError if the token is not a valid IP address,
-    CIDR network, or RFC 1123 hostname.
+    Accepts:
+      - IPv4/IPv6 address (e.g. 192.168.1.1)
+      - CIDR range (e.g. 10.0.0.0/24)
+      - RFC 1123 hostname (e.g. server.example.com)
+      - host:port (e.g. svc.ns.svc.cluster.local:8983)
+
+    Raises ValueError if the token is not a valid target.
     """
-    # Try IP address first
+    # Check for host:port format
+    host_part = token
+    port_part = None
+    if token.startswith('['):
+        # IPv6 bracket notation: [::1]:8080
+        bracket_end = token.find(']')
+        if bracket_end > 0 and bracket_end + 1 < len(token) and token[bracket_end + 1] == ':':
+            host_part = token[1:bracket_end]
+            port_part = token[bracket_end + 2:]
+    elif ':' in token:
+        # Could be host:port or plain IPv6
+        last_colon = token.rfind(':')
+        candidate_port = token[last_colon + 1:]
+        candidate_host = token[:last_colon]
+        if candidate_port.isdigit() and 1 <= int(candidate_port) <= 65535:
+            # Check if the full token is a valid IPv6 address (not host:port)
+            try:
+                ipaddress.ip_address(token)
+                return token
+            except ValueError:
+                host_part = candidate_host
+                port_part = candidate_port
+
+    # Validate port if present
+    if port_part is not None:
+        if not port_part.isdigit() or not (1 <= int(port_part) <= 65535):
+            raise ValueError(
+                f"Invalid port in target: {token!r}. Port must be 1-65535."
+            )
+
+    # Try IP address
     try:
-        ipaddress.ip_address(token)
+        ipaddress.ip_address(host_part)
         return token
     except ValueError:
         pass
-    # Try CIDR notation
-    try:
-        ipaddress.ip_network(token, strict=False)
-        return token
-    except ValueError:
-        pass
+    # Try CIDR notation (only without port — CIDR with port is nonsensical)
+    if port_part is None:
+        try:
+            ipaddress.ip_network(host_part, strict=False)
+            return token
+        except ValueError:
+            pass
     # Try hostname (RFC 1123)
-    if _HOSTNAME_RE.match(token) and len(token) <= 253:
+    if _HOSTNAME_RE.match(host_part) and len(host_part) <= 253:
         return token
     raise ValueError(
         f"Invalid target: {token!r}. Must be a valid IP address, "
-        "CIDR range, or hostname."
+        "CIDR range, hostname, or host:port."
     )
 
 
