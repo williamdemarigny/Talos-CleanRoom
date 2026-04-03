@@ -1093,17 +1093,21 @@ except Exception as e:
         return True
 
     def _validate_target(self, target: str) -> bool:
-        """Validate target is an IP address, CIDR, or hostname."""
-        # Allow IP addresses, CIDR notation, hostnames
+        """Validate target is an IP address, CIDR, hostname, or host:port."""
+        # Allow IP addresses, CIDR notation, hostnames, with optional :port
         ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
         hostname_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$'
+        port_suffix = r'(:\d{1,5})?'
+        ip_port_pattern = r'^(\d{1,3}\.){3}\d{1,3}' + port_suffix + r'$'
+        hostname_port_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*' + port_suffix + r'$'
         # Allow comma-separated or space-separated targets
         targets = re.split(r'[,\s]+', target)
         for t in targets:
             t = t.strip()
             if not t:
                 continue
-            if not (re.match(ip_pattern, t) or re.match(hostname_pattern, t)):
+            if not (re.match(ip_pattern, t) or re.match(ip_port_pattern, t)
+                    or re.match(hostname_pattern, t) or re.match(hostname_port_pattern, t)):
                 return False
         return len(targets) > 0
 
