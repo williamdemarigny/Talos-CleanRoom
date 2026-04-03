@@ -9,10 +9,11 @@
 #   2. Creates the "cleanroom" Harbor project (idempotent)
 #   3. Creates harbor-pull-secret in the openvas namespace (idempotent)
 #   4. Logs into Harbor with Docker
-#   5. Pulls all Greenbone images from upstream
-#   6. Tags and pushes them to Harbor
+#   5. Skips images already present in Harbor (idempotent re-runs)
+#   6. Pulls from multiple upstream registries with retry + fallback
+#   7. Tags and pushes to Harbor
 #
-# Prerequisites (run on the build VM — VMID 201):
+# Prerequisites (run on the build VM - VMID 201):
 #   - Docker installed
 #   - kubectl configured with cluster access
 #   - curl and jq
@@ -20,6 +21,7 @@
 # Usage:
 #   ./mirror-greenbone.sh                    # pull, tag, push all images
 #   ./mirror-greenbone.sh --dry-run          # show what would be done
+#   ./mirror-greenbone.sh --force            # re-pull even if already in Harbor
 #
 # Environment variables (optional, avoids prompts):
 #   HARBOR_USER       Harbor username       (default: admin)
@@ -32,29 +34,27 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 HARBOR_HOST="harbor.knowledgeondemand.net"
 HARBOR_PROJECT="cleanroom"
-# Primary: Greenbone's own registry. Fallback: Docker Hub (same images, different host).
-SOURCE_REGISTRIES=(
-    "registry.community.greenbone.net/community"
-    "docker.io/greenbone"
-)
 DEST_REGISTRY="${HARBOR_HOST}/${HARBOR_PROJECT}"
 DRY_RUN=false
+FORCE=false
 
-if [[ "${1:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
-    echo "=== DRY RUN — no images will be pulled or pushed ==="
-    echo ""
-fi
+# Upstream registries in priority order.
+# Each is tried with retries before moving to the next.
+SOURCE_REGISTRIES=(
+    "registry.community.greenbone.net/community"
+    "ghcr.io/greenbone"
+    "docker.io/greenbone"
+)
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true; echo "=== DRY RUN ===" ;;
+        --force)   FORCE=true;   echo "=== FORCE MODE — re-pulling all ===" ;;
+    esac
+done
 
 # All unique Greenbone images used in greenbone-deployment.yaml.
 # Format: "source_name:source_tag:dest_name:dest_tag"
-#
-# Feed images (data containers — updated frequently):
-#   These use no tag upstream (defaults to :latest). We mirror as :latest.
-#
-# Service images (long-running processes):
-#   These use :stable upstream. We mirror as :stable.
-#
 IMAGES=(
     # Feed / data init containers (no upstream tag = latest)
     "vulnerability-tests::vulnerability-tests:latest"
@@ -76,11 +76,33 @@ IMAGES=(
 
 PULL_SECRET_NAMESPACES=("openvas")
 
-echo "=== Greenbone → Harbor Mirror ==="
+echo "=== Greenbone -> Harbor Mirror ==="
 echo "Source registries: ${SOURCE_REGISTRIES[*]}"
 echo "Dest registry   : ${DEST_REGISTRY}"
 echo "Images to mirror: ${#IMAGES[@]}"
 echo ""
+
+# ---------------------------------------------------------------------------
+# Helper: check if image:tag exists in Harbor
+# ---------------------------------------------------------------------------
+harbor_image_exists() {
+    local repo="$1" tag="$2"
+    local http_code
+    http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+        -u "${HARBOR_USER}:${HARBOR_PASSWORD}" \
+        "https://${HARBOR_HOST}/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${repo}/artifacts?q=tags%3D${tag}&page_size=1" \
+        2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+        local count
+        count=$(curl -sk \
+            -u "${HARBOR_USER}:${HARBOR_PASSWORD}" \
+            "https://${HARBOR_HOST}/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${repo}/artifacts?q=tags%3D${tag}&page_size=1" \
+            2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+        [ "$count" -gt 0 ] 2>/dev/null
+    else
+        return 1
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Step 0: Check prerequisites
@@ -234,6 +256,7 @@ echo "--- Step 6: Mirroring images ---"
 
 FAILED=()
 SUCCEEDED=0
+SKIPPED=0
 
 for entry in "${IMAGES[@]}"; do
     IFS=':' read -r src_name src_tag dest_name dest_tag <<< "$entry"
@@ -242,15 +265,21 @@ for entry in "${IMAGES[@]}"; do
 
     echo ""
     echo "  [${dest_name}:${dest_tag}]"
-    echo "    dst: ${DST}"
 
     if $DRY_RUN; then
         echo "    (dry-run — skipping)"
         continue
     fi
 
-    # Try each source registry, with retries per registry.
-    # Primary: Greenbone registry. Fallback: Docker Hub.
+    # Check if image already exists in Harbor (skip re-pull unless --force)
+    if ! $FORCE && harbor_image_exists "$dest_name" "$dest_tag"; then
+        echo "    already in Harbor — skipping (use --force to re-pull)"
+        SKIPPED=$((SKIPPED + 1))
+        SUCCEEDED=$((SUCCEEDED + 1))
+        continue
+    fi
+
+    # Try each source registry with retries per registry
     IMAGE_OK=false
     for registry in "${SOURCE_REGISTRIES[@]}"; do
         if [ -n "$src_tag" ]; then
@@ -262,31 +291,35 @@ for entry in "${IMAGES[@]}"; do
 
         for attempt in 1 2 3; do
             if [ $attempt -gt 1 ]; then
-                WAIT=$((attempt * 10))
+                WAIT=$((attempt * 15))
                 echo "    retry ${attempt}/3 after ${WAIT}s..."
                 sleep $WAIT
             fi
 
-            if docker pull "$SRC" 2>&1; then
+            PULL_OUTPUT=$(docker pull "$SRC" 2>&1) && PULL_OK=true || PULL_OK=false
+
+            if $PULL_OK; then
                 docker tag "$SRC" "$DST"
-                if docker push "$DST"; then
+                if docker push "$DST" 2>&1; then
                     echo "    OK (from ${registry})"
                     SUCCEEDED=$((SUCCEEDED + 1))
                     IMAGE_OK=true
                     break 2  # break both loops
                 else
-                    echo "    FAILED (push, attempt ${attempt}/3)"
+                    echo "    FAILED push (attempt ${attempt}/3)"
                 fi
             else
-                echo "    FAILED (pull, attempt ${attempt}/3)"
+                # Show the actual error from Docker for diagnostics
+                LAST_LINE=$(echo "$PULL_OUTPUT" | tail -1)
+                echo "    FAILED pull (attempt ${attempt}/3): ${LAST_LINE}"
             fi
         done
 
-        echo "    all retries exhausted for ${registry}, trying next source..."
+        echo "    exhausted retries for ${registry}"
     done
 
     if ! $IMAGE_OK; then
-        echo "    FAILED from all registries after all retries"
+        echo "    FAILED from all sources"
         FAILED+=("$dest_name:$dest_tag")
     fi
 done
@@ -296,10 +329,10 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "============================================"
-echo "  Greenbone → Harbor Mirror Complete"
+echo "  Greenbone -> Harbor Mirror Complete"
 echo "============================================"
 echo ""
-echo "  Succeeded: ${SUCCEEDED}/${#IMAGES[@]}"
+echo "  Succeeded: ${SUCCEEDED}/${#IMAGES[@]} (${SKIPPED} already in Harbor)"
 
 if [ ${#FAILED[@]} -gt 0 ]; then
     echo "  Failed:    ${#FAILED[@]}"
@@ -314,6 +347,5 @@ else
 fi
 
 echo ""
-echo "  Next step: Ensure greenbone-deployment.yaml uses Harbor image refs."
-echo "  All images: ${DEST_REGISTRY}/<name>:<tag>"
+echo "  All images available at: ${DEST_REGISTRY}/<name>:<tag>"
 echo ""
