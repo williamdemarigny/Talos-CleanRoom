@@ -251,17 +251,32 @@ for entry in "${IMAGES[@]}"; do
         continue
     fi
 
-    if docker pull "$SRC"; then
-        docker tag "$SRC" "$DST"
-        if docker push "$DST"; then
-            echo "    OK"
-            SUCCEEDED=$((SUCCEEDED + 1))
-        else
-            echo "    FAILED (push)"
-            FAILED+=("$dest_name:$dest_tag")
+    # Retry up to 3 times with backoff — upstream registry has transient failures
+    IMAGE_OK=false
+    for attempt in 1 2 3; do
+        if [ $attempt -gt 1 ]; then
+            WAIT=$((attempt * 10))
+            echo "    Retry ${attempt}/3 after ${WAIT}s..."
+            sleep $WAIT
         fi
-    else
-        echo "    FAILED (pull)"
+
+        if docker pull "$SRC"; then
+            docker tag "$SRC" "$DST"
+            if docker push "$DST"; then
+                echo "    OK"
+                SUCCEEDED=$((SUCCEEDED + 1))
+                IMAGE_OK=true
+                break
+            else
+                echo "    FAILED (push, attempt ${attempt}/3)"
+            fi
+        else
+            echo "    FAILED (pull, attempt ${attempt}/3)"
+        fi
+    done
+
+    if ! $IMAGE_OK; then
+        echo "    FAILED after 3 attempts"
         FAILED+=("$dest_name:$dest_tag")
     fi
 done
