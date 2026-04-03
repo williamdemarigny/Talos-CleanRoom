@@ -25,7 +25,7 @@ TIER_CONFIG: dict[str, dict] = {
         "memory_request": "64Mi",
         "memory_limit": "256Mi",
         "max_pods": 2,
-        "rollout_timeout": 120,
+        "rollout_timeout": 180,
         "badge_color": "green",
     },
     "tier2": {
@@ -35,7 +35,7 @@ TIER_CONFIG: dict[str, dict] = {
         "memory_request": "128Mi",
         "memory_limit": "512Mi",
         "max_pods": 3,
-        "rollout_timeout": 180,
+        "rollout_timeout": 300,
         "badge_color": "blue",
     },
     "tier3": {
