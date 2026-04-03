@@ -32,7 +32,11 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 HARBOR_HOST="harbor.knowledgeondemand.net"
 HARBOR_PROJECT="cleanroom"
-SOURCE_REGISTRY="registry.community.greenbone.net/community"
+# Primary: Greenbone's own registry. Fallback: Docker Hub (same images, different host).
+SOURCE_REGISTRIES=(
+    "registry.community.greenbone.net/community"
+    "docker.io/greenbone"
+)
 DEST_REGISTRY="${HARBOR_HOST}/${HARBOR_PROJECT}"
 DRY_RUN=false
 
@@ -73,7 +77,7 @@ IMAGES=(
 PULL_SECRET_NAMESPACES=("openvas")
 
 echo "=== Greenbone → Harbor Mirror ==="
-echo "Source registry : ${SOURCE_REGISTRY}"
+echo "Source registries: ${SOURCE_REGISTRIES[*]}"
 echo "Dest registry   : ${DEST_REGISTRY}"
 echo "Images to mirror: ${#IMAGES[@]}"
 echo ""
@@ -234,16 +238,10 @@ SUCCEEDED=0
 for entry in "${IMAGES[@]}"; do
     IFS=':' read -r src_name src_tag dest_name dest_tag <<< "$entry"
 
-    if [ -n "$src_tag" ]; then
-        SRC="${SOURCE_REGISTRY}/${src_name}:${src_tag}"
-    else
-        SRC="${SOURCE_REGISTRY}/${src_name}"
-    fi
     DST="${DEST_REGISTRY}/${dest_name}:${dest_tag}"
 
     echo ""
     echo "  [${dest_name}:${dest_tag}]"
-    echo "    src: ${SRC}"
     echo "    dst: ${DST}"
 
     if $DRY_RUN; then
@@ -251,32 +249,44 @@ for entry in "${IMAGES[@]}"; do
         continue
     fi
 
-    # Retry up to 3 times with backoff — upstream registry has transient failures
+    # Try each source registry, with retries per registry.
+    # Primary: Greenbone registry. Fallback: Docker Hub.
     IMAGE_OK=false
-    for attempt in 1 2 3; do
-        if [ $attempt -gt 1 ]; then
-            WAIT=$((attempt * 10))
-            echo "    Retry ${attempt}/3 after ${WAIT}s..."
-            sleep $WAIT
-        fi
-
-        if docker pull "$SRC"; then
-            docker tag "$SRC" "$DST"
-            if docker push "$DST"; then
-                echo "    OK"
-                SUCCEEDED=$((SUCCEEDED + 1))
-                IMAGE_OK=true
-                break
-            else
-                echo "    FAILED (push, attempt ${attempt}/3)"
-            fi
+    for registry in "${SOURCE_REGISTRIES[@]}"; do
+        if [ -n "$src_tag" ]; then
+            SRC="${registry}/${src_name}:${src_tag}"
         else
-            echo "    FAILED (pull, attempt ${attempt}/3)"
+            SRC="${registry}/${src_name}"
         fi
+        echo "    trying: ${SRC}"
+
+        for attempt in 1 2 3; do
+            if [ $attempt -gt 1 ]; then
+                WAIT=$((attempt * 10))
+                echo "    retry ${attempt}/3 after ${WAIT}s..."
+                sleep $WAIT
+            fi
+
+            if docker pull "$SRC" 2>&1; then
+                docker tag "$SRC" "$DST"
+                if docker push "$DST"; then
+                    echo "    OK (from ${registry})"
+                    SUCCEEDED=$((SUCCEEDED + 1))
+                    IMAGE_OK=true
+                    break 2  # break both loops
+                else
+                    echo "    FAILED (push, attempt ${attempt}/3)"
+                fi
+            else
+                echo "    FAILED (pull, attempt ${attempt}/3)"
+            fi
+        done
+
+        echo "    all retries exhausted for ${registry}, trying next source..."
     done
 
     if ! $IMAGE_OK; then
-        echo "    FAILED after 3 attempts"
+        echo "    FAILED from all registries after all retries"
         FAILED+=("$dest_name:$dest_tag")
     fi
 done
