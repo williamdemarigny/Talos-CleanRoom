@@ -2614,15 +2614,38 @@ except Exception as e:
 
     async def _run_metasploit_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run a Metasploit scan via resource script with vulnerability modules."""
-        # Pre-flight: check if Metasploit deployment exists
+        # Pre-flight: check if Metasploit deployment exists and has a ready pod
         check = await self.process_manager.run_command_simple(
             ["kubectl", "get", "deployment/metasploit", "-n", "metasploit",
              "-o", "name", "--ignore-not-found"],
             timeout=10
         )
         if not check.success or not check.output.strip():
-            await self.log("metasploit", "warning",
-                "Metasploit deployment not found in cluster — skipping Metasploit scan")
+            # Log diagnostics to help identify why Metasploit is missing
+            ns_check = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "namespace", "metasploit", "--ignore-not-found",
+                 "-o", "jsonpath={.metadata.name}"],
+                timeout=10
+            )
+            if not ns_check.output.strip():
+                await self.log("metasploit", "warning",
+                    "Metasploit namespace does not exist — has the deployment step run?")
+            else:
+                # Namespace exists but no deployment — check for pods/events
+                pods = await self.process_manager.run_command_simple(
+                    ["kubectl", "get", "pods", "-n", "metasploit", "--no-headers"],
+                    timeout=10
+                )
+                if pods.output and pods.output.strip():
+                    await self.log("metasploit", "warning",
+                        f"Metasploit namespace exists but deployment not found. Pods: {pods.output.strip()}")
+                else:
+                    await self.log("metasploit", "warning",
+                        "Metasploit namespace exists but has no deployment or pods — "
+                        "check ArgoCD sync status for the metasploit application")
+            if not check.success:
+                await self.log("metasploit", "warning",
+                    f"kubectl error: {(check.output or '').strip()}")
             await self._update_tool_state(
                 ScanTool.METASPLOIT, status=ScanStatus.COMPLETED,
                 completed_at=datetime.utcnow())
