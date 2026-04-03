@@ -53,8 +53,13 @@ for arg in "$@"; do
     esac
 done
 
-# All unique Greenbone images used in greenbone-deployment.yaml.
+# Greenbone images mirrored to Harbor.
 # Format: "source_name:source_tag:dest_name:dest_tag"
+#
+# NOT mirrored (kept on Greenbone registry in the deployment manifest):
+#   - gpg-data         — only exists on Greenbone registry, not on Docker Hub or GHCR
+#   - openvas-scanner  — persistent CDN issues on all mirrors; K8s retries handle it
+#
 IMAGES=(
     # Feed / data init containers (no upstream tag = latest)
     "vulnerability-tests::vulnerability-tests:latest"
@@ -64,12 +69,10 @@ IMAGES=(
     "dfn-cert-data::dfn-cert-data:latest"
     "data-objects::data-objects:latest"
     "report-formats::report-formats:latest"
-    "gpg-data::gpg-data:latest"
     "redis-server::redis-server:latest"
     # Service containers (:stable upstream)
     "pg-gvm:stable:pg-gvm:stable"
     "gvmd:stable:gvmd:stable"
-    "openvas-scanner:stable:openvas-scanner:stable"
     "ospd-openvas:stable:ospd-openvas:stable"
     "gsa:stable:gsa:stable"
 )
@@ -340,12 +343,13 @@ if [ ${#FAILED[@]} -gt 0 ]; then
         echo "    - ${f}"
     done
     echo ""
-    echo "  Re-run this script to retry failed images."
-    exit 1
+    echo "  WARNING: Failed images will pull from the Greenbone registry directly."
+    echo "  The deployment manifest uses the original registry as fallback for these."
+    echo "  Re-run this script later to retry mirroring when the upstream recovers."
 else
     echo "  Failed:    0"
 fi
 
 echo ""
-echo "  All images available at: ${DEST_REGISTRY}/<name>:<tag>"
+echo "  Mirrored images: ${DEST_REGISTRY}/<name>:<tag>"
 echo ""

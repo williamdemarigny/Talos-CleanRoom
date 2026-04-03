@@ -156,8 +156,10 @@ spec:
             cpu: "500m"
 
       # 8. GPG Data
+      # NOTE: gpg-data is not available on Docker Hub or GHCR — only on the
+      # Greenbone registry. Keep the original source; K8s will retry on failure.
       - name: gpg-data
-        image: harbor.knowledgeondemand.net/cleanroom/gpg-data:latest
+        image: registry.community.greenbone.net/community/gpg-data
         imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: gpg-data
@@ -247,8 +249,10 @@ spec:
             cpu: "200m"
 
       # 11. Configure OpenVAS
+      # NOTE: openvas-scanner is not reliably available on Docker Hub/GHCR —
+      # keep the original Greenbone registry source; K8s will retry on failure.
       - name: configure-openvas
-        image: harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+        image: registry.community.greenbone.net/community/openvas-scanner:stable
         imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
@@ -352,8 +356,10 @@ spec:
           periodSeconds: 10
 
       # 3. OpenVAS Scanner Daemon (Notus mode)
+      # NOTE: openvas-scanner is not reliably available on Docker Hub/GHCR —
+      # keep the original Greenbone registry source; K8s will retry on failure.
       - name: openvasd
-        image: harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+        image: registry.community.greenbone.net/community/openvas-scanner:stable
         imagePullPolicy: IfNotPresent
         env:
         - name: OPENVASD_MODE
