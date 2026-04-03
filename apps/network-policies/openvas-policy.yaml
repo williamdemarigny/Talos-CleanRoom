@@ -22,14 +22,19 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ingress from Traefik namespace (web UI access)
+    # Allow ingress from Traefik namespace (web UI access via GSA on port 80)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
       ports:
         - protocol: TCP
-          port: 9392  # GSA (Greenbone Security Assistant) HTTP port
+          port: 80
+    # Allow ingress from scanning-console (kubectl exec for scan orchestration)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scanning-console
   egress:
     # Allow DNS resolution
     - to:
@@ -41,7 +46,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Allow egress to target VMs for vulnerability scanning (Target Lab)
+    # Allow egress to target VMs for vulnerability scanning
     - to:
         - ipBlock:
             cidr: 10.83.3.160/28
@@ -50,6 +55,14 @@ spec:
           port: 1
           endPort: 65535
         - protocol: UDP
+          port: 1
+          endPort: 65535
+    # Allow egress to Vulhub Target Lab pods (K8s pod CIDR)
+    - to:
+        - ipBlock:
+            cidr: 10.14.0.0/16
+      ports:
+        - protocol: TCP
           port: 1
           endPort: 65535
     # Allow HTTPS egress for feed synchronization

@@ -1092,22 +1092,38 @@ except Exception as e:
         self._save_to_history()
         return True
 
+    @staticmethod
+    def _parse_target(target: str) -> tuple:
+        """Parse a target string into (host, port_or_none).
+
+        Handles formats: hostname, hostname:port, IP, IP:port, IP/CIDR.
+        Returns (host, int_port) or (host, None) if no port specified.
+        """
+        target = target.strip()
+        # Check for host:port pattern (but not CIDR like 10.0.0.0/24)
+        if ":" in target and "/" not in target:
+            last_colon = target.rfind(":")
+            host_part = target[:last_colon]
+            port_part = target[last_colon + 1:]
+            if port_part.isdigit():
+                port = int(port_part)
+                if 1 <= port <= 65535:
+                    return (host_part, port)
+        return (target, None)
+
     def _validate_target(self, target: str) -> bool:
         """Validate target is an IP address, CIDR, hostname, or host:port."""
-        # Allow IP addresses, CIDR notation, hostnames, with optional :port
         ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
         hostname_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$'
-        port_suffix = r'(:\d{1,5})?'
-        ip_port_pattern = r'^(\d{1,3}\.){3}\d{1,3}' + port_suffix + r'$'
-        hostname_port_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*' + port_suffix + r'$'
         # Allow comma-separated or space-separated targets
         targets = re.split(r'[,\s]+', target)
         for t in targets:
             t = t.strip()
             if not t:
                 continue
-            if not (re.match(ip_pattern, t) or re.match(ip_port_pattern, t)
-                    or re.match(hostname_pattern, t) or re.match(hostname_port_pattern, t)):
+            # Strip port suffix for validation
+            host, _port = self._parse_target(t)
+            if not (re.match(ip_pattern, host) or re.match(hostname_pattern, host)):
                 return False
         return len(targets) > 0
 
@@ -1358,7 +1374,7 @@ except Exception as e:
         """Run an Nmap scan via a temporary Kubernetes pod."""
         scan_id = self.current_scan.id
         pod_name = f"nmap-scan-{scan_id}"
-        flags = NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD])
+        flags = list(NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD]))
 
         timeout = {
             ScanProfile.QUICK: NMAP_TIMEOUT_QUICK,
@@ -1366,11 +1382,19 @@ except Exception as e:
             ScanProfile.THOROUGH: NMAP_TIMEOUT_THOROUGH,
         }.get(profile, NMAP_TIMEOUT_STANDARD)
 
-        await self.log("nmap", "info", f"Launching Nmap pod '{pod_name}' with flags: {' '.join(flags)}")
+        # Parse host:port — nmap needs port via -p flag, not in target
+        nmap_host, nmap_port = self._parse_target(target)
+        if nmap_port:
+            # Only add -p if not already specified in flags
+            if not any(f.startswith("-p") for f in flags):
+                flags.extend(["-p", str(nmap_port)])
+            await self.log("nmap", "info",
+                f"Launching Nmap pod '{pod_name}' targeting {nmap_host} port {nmap_port} with flags: {' '.join(flags)}")
+        else:
+            await self.log("nmap", "info", f"Launching Nmap pod '{pod_name}' with flags: {' '.join(flags)}")
 
         # Create the nmap pod (don't use --attach/--rm since stdout capture is unreliable)
         # Instead: create pod → wait for completion → read logs → delete pod
-        nmap_args_str = " ".join(flags + ["-oX", "-", target])
         nmap_ns = "nmap-scanner"
         # Ensure namespace exists (privileged — nmap needs NET_RAW for SYN scanning)
         await self.k8s.ensure_namespace(nmap_ns, privileged=True)
@@ -1380,7 +1404,7 @@ except Exception as e:
              "--image=instrumentisto/nmap:latest",
              "--restart=Never",
              f"--namespace={nmap_ns}",
-             "--", "nmap"] + flags + ["-oX", "-", target],
+             "--", "nmap"] + flags + ["-oX", "-", nmap_host],
             timeout=30
         )
 
@@ -1460,6 +1484,14 @@ except Exception as e:
 
     async def _run_openvas_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run an OpenVAS scan via GMP protocol inside the gvmd container."""
+        # OpenVAS GMP <hosts> element accepts only hostnames/IPs, not host:port.
+        # Extract port if present — OpenVAS scans use port lists, not target ports.
+        ov_host, ov_port = self._parse_target(target)
+        if ov_port:
+            await self.log("openvas", "info",
+                f"Target includes port {ov_port} — OpenVAS will scan {ov_host} using profile port list")
+        target = ov_host  # Pass only host to GMP scripts
+
         scan_id = self.current_scan.id
         openvas_config = self.current_scan.openvas_config
         openvas_families = self.current_scan.openvas_families
@@ -2522,6 +2554,9 @@ except Exception as e:
         Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
         Custom:   db_nmap + user-selected modules from catalog
         """
+        # Parse host:port — db_nmap uses nmap (needs -p flag), modules need RPORT
+        msf_host, msf_port = self._parse_target(target)
+
         lines = []
 
         # Ensure database connection is active before scanning
@@ -2537,12 +2572,17 @@ except Exception as e:
             ScanProfile.CUSTOM: "-Pn -T4 -sV --top-ports 1000",
         }.get(profile, "-Pn -T4 -sV --top-ports 1000")
 
-        lines.append(f"db_nmap {nmap_flags} {target}")
+        if msf_port:
+            lines.append(f"db_nmap {nmap_flags} -p {msf_port} {msf_host}")
+        else:
+            lines.append(f"db_nmap {nmap_flags} {msf_host}")
 
         # Helper to add a module block
         def add_module(mod, extra_opts=None):
             lines.append(f"use {mod}")
-            lines.append(f"set RHOSTS {target}")
+            lines.append(f"set RHOSTS {msf_host}")
+            if msf_port:
+                lines.append(f"set RPORT {msf_port}")
             lines.append(f"set THREADS 5")
             if extra_opts:
                 for k, v in extra_opts.items():
@@ -2574,6 +2614,20 @@ except Exception as e:
 
     async def _run_metasploit_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run a Metasploit scan via resource script with vulnerability modules."""
+        # Pre-flight: check if Metasploit deployment exists
+        check = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "deployment/metasploit", "-n", "metasploit",
+             "-o", "name", "--ignore-not-found"],
+            timeout=10
+        )
+        if not check.success or not check.output.strip():
+            await self.log("metasploit", "warning",
+                "Metasploit deployment not found in cluster — skipping Metasploit scan")
+            await self._update_tool_state(
+                ScanTool.METASPLOIT, status=ScanStatus.COMPLETED,
+                completed_at=datetime.utcnow())
+            return None
+
         scan_id = self.current_scan.id
         xml_path = f"/tmp/msf-scan-{scan_id}.xml"
         rc_path = f"/tmp/scan-{scan_id}.rc"

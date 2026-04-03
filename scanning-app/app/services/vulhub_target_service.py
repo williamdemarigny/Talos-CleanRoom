@@ -410,14 +410,14 @@ class VulhubTargetService:
             if not result.success:
                 self._log_deploy(target_id, "rollout", "warning",
                                  f"Rollout status check failed: {result.output}")
-                # Don't fail hard — the deployment might have multiple deployments
-                # or a different naming convention.  Check if pods are running.
+                # Fallback: check actual pod phases (jsonpath returns space-separated values)
                 pod_check = await self._process_manager.run_command_simple(
                     ["kubectl", "get", "pods", "-n", namespace,
                      "-o", "jsonpath={.items[*].status.phase}"],
                     timeout=30,
                 )
-                if "Running" not in (pod_check.output or ""):
+                phases = (pod_check.output or "").split()
+                if not phases or not all(p == "Running" for p in phases):
                     # Fetch K8s diagnostics to understand the failure
                     diag = await self._fetch_k8s_diagnostics(namespace)
                     self._log_deploy(target_id, "diagnostics", "error", diag)
@@ -425,7 +425,7 @@ class VulhubTargetService:
                         f"Deployment did not reach Running state: {result.output}"
                     )
                 self._log_deploy(target_id, "rollout", "info",
-                                 "Pods are running (rollout check was inconclusive)")
+                                 f"All {len(phases)} pod(s) running (rollout watch timed out but pods are healthy)")
 
             # Success
             self._log_deploy(target_id, "complete", "info",
