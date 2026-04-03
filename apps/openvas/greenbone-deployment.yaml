@@ -35,13 +35,16 @@ spec:
       # child processes (defunct nmap/openvas workers from completed scans).
       # Without this, ospd-openvas (PID 1) doesn't call waitpid() on orphans.
       shareProcessNamespace: true
+      imagePullSecrets:
+      - name: harbor-pull-secret
       # ============================================================
       # INIT CONTAINERS - Data feeds and configuration
       # ============================================================
       initContainers:
       # 1. Vulnerability Tests Data Feed
       - name: vulnerability-tests
-        image: registry.community.greenbone.net/community/vulnerability-tests
+        image: harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: FEED_RELEASE
           value: "24.10"
@@ -58,7 +61,8 @@ spec:
 
       # 2. Notus Data Feed
       - name: notus-data
-        image: registry.community.greenbone.net/community/notus-data
+        image: harbor.knowledgeondemand.net/cleanroom/notus-data:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: notus-data
           mountPath: /mnt
@@ -72,7 +76,8 @@ spec:
 
       # 3. SCAP Data Feed
       - name: scap-data
-        image: registry.community.greenbone.net/community/scap-data
+        image: harbor.knowledgeondemand.net/cleanroom/scap-data:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: scap-data
           mountPath: /mnt
@@ -86,7 +91,8 @@ spec:
 
       # 4. CERT-Bund Data Feed
       - name: cert-bund-data
-        image: registry.community.greenbone.net/community/cert-bund-data
+        image: harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: cert-data
           mountPath: /mnt
@@ -100,7 +106,8 @@ spec:
 
       # 5. DFN-CERT Data Feed (runs after cert-bund-data)
       - name: dfn-cert-data
-        image: registry.community.greenbone.net/community/dfn-cert-data
+        image: harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: cert-data
           mountPath: /mnt
@@ -114,7 +121,8 @@ spec:
 
       # 6. Data Objects
       - name: data-objects
-        image: registry.community.greenbone.net/community/data-objects
+        image: harbor.knowledgeondemand.net/cleanroom/data-objects:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: FEED_RELEASE
           value: "24.10"
@@ -131,7 +139,8 @@ spec:
 
       # 7. Report Formats (runs after data-objects)
       - name: report-formats
-        image: registry.community.greenbone.net/community/report-formats
+        image: harbor.knowledgeondemand.net/cleanroom/report-formats:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: FEED_RELEASE
           value: "24.10"
@@ -148,7 +157,8 @@ spec:
 
       # 8. GPG Data
       - name: gpg-data
-        image: registry.community.greenbone.net/community/gpg-data
+        image: harbor.knowledgeondemand.net/cleanroom/gpg-data:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: gpg-data
           mountPath: /mnt
@@ -163,7 +173,8 @@ spec:
       # 9. PostgreSQL Data Directory Setup
       # Initialize PostgreSQL data directory with proper structure for pg-gvm
       - name: psql-data-setup
-        image: registry.community.greenbone.net/community/pg-gvm:stable
+        image: harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "-c"]
         args:
           - |
@@ -205,7 +216,8 @@ spec:
       # 10. GVMD Data Directory Setup
       # Initialize GVMD data directory with proper structure and permissions
       - name: gvmd-data-setup
-        image: registry.community.greenbone.net/community/gvmd:stable
+        image: harbor.knowledgeondemand.net/cleanroom/gvmd:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -236,7 +248,8 @@ spec:
 
       # 11. Configure OpenVAS
       - name: configure-openvas
-        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        image: harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -265,7 +278,8 @@ spec:
       containers:
       # 1. Redis Server (must start first - other services depend on it)
       - name: redis-server
-        image: registry.community.greenbone.net/community/redis-server
+        image: harbor.knowledgeondemand.net/cleanroom/redis-server:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: redis-socket
           mountPath: /run/redis/
@@ -294,7 +308,8 @@ spec:
       # The pg-gvm image uses a custom start-postgresql script as CMD.
       # We inject tuning via conf.d/ before calling it (Debian pg_createcluster includes conf.d).
       - name: pg-gvm
-        image: registry.community.greenbone.net/community/pg-gvm:stable
+        image: harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable
+        imagePullPolicy: IfNotPresent
         command: ["/usr/local/bin/entrypoint"]
         args:
           - "sh"
@@ -338,7 +353,8 @@ spec:
 
       # 3. OpenVAS Scanner Daemon (Notus mode)
       - name: openvasd
-        image: registry.community.greenbone.net/community/openvas-scanner:stable
+        image: harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+        imagePullPolicy: IfNotPresent
         env:
         - name: OPENVASD_MODE
           value: service_notus
@@ -381,7 +397,8 @@ spec:
 
       # 4. OSPD-OpenVAS (Scanner Protocol Daemon)
       - name: ospd-openvas
-        image: registry.community.greenbone.net/community/ospd-openvas:stable
+        image: harbor.knowledgeondemand.net/cleanroom/ospd-openvas:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -430,7 +447,8 @@ spec:
 
       # 5. GVMD (Greenbone Vulnerability Manager Daemon)
       - name: gvmd
-        image: registry.community.greenbone.net/community/gvmd:stable
+        image: harbor.knowledgeondemand.net/cleanroom/gvmd:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
@@ -511,7 +529,8 @@ spec:
 
       # 6. GSA (Greenbone Security Assistant - Web UI)
       - name: gsa
-        image: registry.community.greenbone.net/community/gsa:stable
+        image: harbor.knowledgeondemand.net/cleanroom/gsa:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |

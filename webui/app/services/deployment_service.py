@@ -1049,20 +1049,21 @@ class DeploymentService(BaseServiceMixin):
             (8, self._step_install_argocd),
             (9, self._step_deploy_infrastructure),
             (10, self._step_argocd_self_management),
-            (11, self._step_deploy_openvas),
-            (12, self._step_deploy_faraday),
-            (13, self._step_deploy_metasploit),
-            (14, self._step_deploy_threat_dragon),
-            (15, self._step_deploy_harbor),
-            (16, self._step_configure_integrations),
-            (17, self._step_generate_secrets),
-            (18, self._step_commit_push_secrets),
-            (19, self._step_deploy_build_vm),
-            (20, self._step_prepare_vulhub_targets),
-            (21, self._step_build_push_images),
-            (22, self._step_deploy_cleanroom_apps),
-            (23, self._step_deploy_console_routing),
-            (24, self._step_apply_network_policies),
+            (11, self._step_deploy_harbor),
+            (12, self._step_deploy_build_vm),
+            (13, self._step_mirror_greenbone_images),
+            (14, self._step_deploy_openvas),
+            (15, self._step_deploy_faraday),
+            (16, self._step_deploy_metasploit),
+            (17, self._step_deploy_threat_dragon),
+            (18, self._step_configure_integrations),
+            (19, self._step_generate_secrets),
+            (20, self._step_commit_push_secrets),
+            (21, self._step_prepare_vulhub_targets),
+            (22, self._step_build_push_images),
+            (23, self._step_deploy_cleanroom_apps),
+            (24, self._step_deploy_console_routing),
+            (25, self._step_apply_network_policies),
         ]
 
     async def _run_deployment(self, resume_from_step: int = 0):
@@ -1769,12 +1770,76 @@ class DeploymentService(BaseServiceMixin):
         await asyncio.sleep(ARGOCD_SYNC_WAIT)
         return True
 
+    async def _step_mirror_greenbone_images(self, step_id: int) -> bool:
+        """Step 13: Mirror Greenbone images from upstream registry to Harbor.
+
+        Runs mirror-greenbone.sh on the Build VM via SSH. This ensures all
+        OpenVAS images are available in Harbor before the OpenVAS deployment
+        step, eliminating the dependency on the external Greenbone registry.
+        """
+        await self.log(step_id, "info", "Mirroring Greenbone images to Harbor...")
+
+        settings = get_settings()
+        container_ip = settings.build_vm_ip.split("/")[0]
+        ssh_user = settings.build_vm_ssh_user
+        ssh_password = self.credentials.get("build_vm", {}).get("password", "")
+
+        if not ssh_password:
+            await self.log(step_id, "error", "Build VM credentials not available")
+            return False
+
+        harbor_password = self.credentials.get("harbor", {}).get("password", "Harbor12345")
+
+        ssh_cmd_prefix = [
+            "sshpass", "-p", ssh_password,
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"{ssh_user}@{container_ip}",
+        ]
+
+        # Ensure Build VM repo is up to date (mirror script lives in the repo)
+        await self.log(step_id, "info", "Updating Build VM git repository...")
+        git_result = await self.process_manager.run_command(
+            ssh_cmd_prefix + [
+                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/refactor/restructure"
+            ],
+            on_output=self._sanitized_output_callback(step_id),
+            timeout=60,
+        )
+        if not git_result.success:
+            await self.log(step_id, "error",
+                           f"Failed to update Build VM repo: {git_result.output[:200]}")
+            return False
+
+        # Run the mirror script
+        mirror_script = "/opt/talos-cleanroom/apps/openvas/mirror-greenbone.sh"
+        await self.log(step_id, "info",
+                       "Pulling and pushing 14 Greenbone images (this may take several minutes)...")
+        mirror_result = await self.process_manager.run_command(
+            ssh_cmd_prefix + [
+                f"sudo HARBOR_USER=admin HARBOR_PASSWORD='{harbor_password}' bash {mirror_script}"
+            ],
+            on_output=self._sanitized_output_callback(step_id),
+            timeout=900,  # 15 minutes — pulling 14 images can be slow
+        )
+        if not mirror_result.success:
+            await self.log(step_id, "error", "Greenbone image mirror failed")
+            # Show tail of output for diagnostics
+            if mirror_result.output:
+                for line in mirror_result.output.strip().split('\n')[-10:]:
+                    await self.log(step_id, "error", f"  {line}")
+            return False
+
+        await self.log(step_id, "info",
+                       "All Greenbone images mirrored to Harbor. "
+                       "OpenVAS will pull from harbor.knowledgeondemand.net/cleanroom/")
+        return True
+
     async def _step_deploy_openvas(self, step_id: int) -> bool:
-        """Step 11: Deploy OpenVAS vulnerability scanner.
+        """Deploy OpenVAS vulnerability scanner.
 
         Creates required secrets and deploys the Greenbone OpenVAS stack
-        via ArgoCD Application. OpenVAS provides vulnerability scanning
-        capabilities.
+        via ArgoCD Application. Images are pulled from Harbor (mirrored
+        in the previous step).
 
         Args:
             step_id: The deployment step identifier for logging.
@@ -1910,7 +1975,7 @@ class DeploymentService(BaseServiceMixin):
         return True
 
     async def _step_deploy_faraday(self, step_id: int) -> bool:
-        """Step 12: Deploy Faraday vulnerability management platform.
+        """Deploy Faraday vulnerability management platform.
 
         Creates required secrets, deploys Faraday via ArgoCD Application,
         and creates the initial admin user. Faraday aggregates vulnerability
@@ -1995,7 +2060,7 @@ class DeploymentService(BaseServiceMixin):
         return True
 
     async def _step_deploy_metasploit(self, step_id: int) -> bool:
-        """Step 13: Deploy Metasploit penetration testing framework.
+        """Deploy Metasploit penetration testing framework.
 
         Creates required secrets and deploys Metasploit via ArgoCD Application.
         Metasploit provides exploit development and penetration testing
@@ -2047,7 +2112,7 @@ class DeploymentService(BaseServiceMixin):
         return await self._deploy_argocd_app("metasploit", step_id)
 
     async def _step_deploy_threat_dragon(self, step_id: int) -> bool:
-        """Step 14: Deploy Threat Dragon via ArgoCD Application."""
+        """Deploy Threat Dragon via ArgoCD Application."""
         await self.log(step_id, "info", "Deploying Threat Dragon...")
 
         if not await self._deploy_argocd_app("threat-dragon", step_id):
@@ -2055,7 +2120,7 @@ class DeploymentService(BaseServiceMixin):
         return await self._wait_for_argocd_sync("threat-dragon", step_id)
 
     async def _step_deploy_harbor(self, step_id: int) -> bool:
-        """Step 15: Deploy Harbor container registry via ArgoCD Application."""
+        """Deploy Harbor container registry via ArgoCD Application."""
         await self.log(step_id, "info", "Deploying Harbor container registry...")
 
         if not await self._deploy_argocd_app("harbor", step_id):
@@ -2063,43 +2128,20 @@ class DeploymentService(BaseServiceMixin):
         if not await self._wait_for_argocd_sync("harbor", step_id):
             return False
 
-        # Log deployment summary
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "==========================================")
-        await self.log(step_id, "info", "All applications deployed!")
-        await self.log(step_id, "info", "==========================================")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Credentials:")
-        await self.log(step_id, "info", "  - ArgoCD:     admin / (use 'argocd admin initial-password -n argocd')")
-        await self.log(step_id, "info", "  - OpenVAS:    admin / (auto-generated)")
-        await self.log(step_id, "info", "  - Faraday:    admin / (auto-generated, user auto-created)")
-        await self.log(step_id, "info", "  - Metasploit: msf / (auto-generated)")
-        await self.log(step_id, "info", "  - Harbor:     admin / Harbor12345 (change on first login)")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Retrieve auto-generated passwords:")
-        await self.log(step_id, "info", "  OpenVAS:    kubectl get secret openvas-credentials -n openvas -o jsonpath='{.data.admin-password}' | base64 -d")
-        await self.log(step_id, "info", "  Faraday:    kubectl get secret faraday-credentials -n faraday -o jsonpath='{.data.admin-password}' | base64 -d")
-        await self.log(step_id, "info", "  Metasploit: kubectl get secret metasploit-db-credentials -n metasploit -o jsonpath='{.data.password}' | base64 -d")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Access services at:")
-        await self.log(step_id, "info", "  - ArgoCD:        https://argocd.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Traefik:       https://traefik.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Harbor:        https://harbor.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - OpenVAS:       https://openvas.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Faraday:       https://faraday.knowledgeondemand.net")
-        await self.log(step_id, "info", "  - Threat Dragon: https://threatdragon.knowledgeondemand.net")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Metasploit access (CLI only - no web UI):")
-        await self.log(step_id, "info", "  kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole")
-        await self.log(step_id, "info", "")
-        await self.log(step_id, "info", "Note: OpenVAS feed sync takes 30-60 minutes on first deployment.")
-        await self.log(step_id, "info", "Note: Build and push the LOKI-RS image from the build VM for IOC scanning.")
-        await self.log(step_id, "info", "==========================================")
+        self.credentials["harbor"] = {
+            "username": "admin", "password": "Harbor12345",
+            "note": "Change on first login",
+        }
+        self._save_state()
+
+        await self.log(step_id, "info", "Harbor registry deployed at https://harbor.knowledgeondemand.net")
+        await self.log(step_id, "info", "  Credentials: admin / Harbor12345 (change on first login)")
+        await self.log(step_id, "info", "  Greenbone images will be mirrored to Harbor in the next steps.")
 
         return True
 
     async def _step_configure_integrations(self, step_id: int) -> bool:
-        """Step 16: Configure security tool integrations.
+        """Configure security tool integrations.
 
         Creates a default Faraday workspace and verifies cross-service
         connectivity between Faraday, Metasploit, and OpenVAS.
@@ -2271,7 +2313,7 @@ class DeploymentService(BaseServiceMixin):
         return result
 
     async def _step_generate_secrets(self, step_id: int) -> bool:
-        """Step 17: Generate and apply K8s secrets for CleanRoom apps.
+        """Generate and apply K8s secrets for CleanRoom apps.
 
         Creates secrets for cleanroom-db, scanning-console, and portal.
         Steps 11-15 already created secrets for openvas, faraday, metasploit.
@@ -2425,7 +2467,7 @@ class DeploymentService(BaseServiceMixin):
         return True
 
     async def _step_commit_push_secrets(self, step_id: int) -> bool:
-        """Step 18: Commit and push SOPS-encrypted secrets to git.
+        """Commit and push SOPS-encrypted secrets to git.
 
         Adds encrypted secret files to git, verifies they contain SOPS
         headers (not plaintext), commits, and pushes.
@@ -2512,7 +2554,7 @@ class DeploymentService(BaseServiceMixin):
         return True
 
     async def _step_deploy_build_vm(self, step_id: int) -> bool:
-        """Step 19: Deploy and configure the Build VM LXC container.
+        """Deploy and configure the Build VM LXC container.
 
         Uses Terraform to create the LXC, then configures it via Proxmox
         SSH + pct exec (user creation, SSH keys, repo clone, Docker install).
@@ -2811,7 +2853,7 @@ echo "=== Setup Complete ==="
         return True
 
     async def _step_prepare_vulhub_targets(self, step_id: int) -> bool:
-        """Step 20: Prepare Vulhub target environments.
+        """Prepare Vulhub target environments.
 
         Vulhub targets are K8s-native and deployed on-demand via the Scanning
         Console.  This step validates that the scanning-console image includes
@@ -2839,7 +2881,7 @@ echo "=== Setup Complete ==="
         return True
 
     async def _step_build_push_images(self, step_id: int) -> bool:
-        """Step 20: Build and push container images from the Build VM.
+        """Build and push container images from the Build VM.
 
         SSHs to the Build VM and runs existing build-and-push.sh scripts
         for LOKI-RS, Scanning Console, and Portal.
@@ -2900,17 +2942,11 @@ echo "=== Setup Complete ==="
                 return False
             await self.log(step_id, "info", f"{name} built and pushed successfully")
 
-        self.credentials["harbor"] = {
-            "username": "admin", "password": "Harbor12345",
-            "note": "Change on first login",
-        }
-        self._save_state()
-
         await self.log(step_id, "info", "All container images built and pushed to Harbor")
         return True
 
     async def _step_deploy_cleanroom_apps(self, step_id: int) -> bool:
-        """Step 21: Deploy CleanRoom DB, Scanning Console, and Portal via ArgoCD."""
+        """Deploy CleanRoom DB, Scanning Console, and Portal via ArgoCD."""
         await self.log(step_id, "info", "Deploying CleanRoom applications...")
 
         # Deploy all three apps
@@ -2938,7 +2974,7 @@ echo "=== Setup Complete ==="
         return True
 
     async def _step_deploy_console_routing(self, step_id: int) -> bool:
-        """Step 23: Deploy Deployment Console routing via Traefik.
+        """Deploy Deployment Console routing via Traefik.
 
         Deploys the deployment-console ArgoCD app which creates an
         ExternalName service + IngressRoute for the WebUI LXC container.
@@ -2957,7 +2993,7 @@ echo "=== Setup Complete ==="
         return True
 
     async def _step_apply_network_policies(self, step_id: int) -> bool:
-        """Step 24: Apply zero-trust network policies to all namespaces.
+        """Apply zero-trust network policies to all namespaces.
 
         Applied last because earlier steps need unrestricted network during setup.
         Applies each file individually so policies for non-existent namespaces
