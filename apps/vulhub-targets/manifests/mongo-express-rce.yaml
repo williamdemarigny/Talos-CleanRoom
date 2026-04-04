@@ -47,7 +47,7 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
         - name: mongo-express
-          image: vulhub/mongo-express:0.54.0
+          image: vulhub/mongo-express:0.53.0
           ports:
             - containerPort: 8081
               protocol: TCP

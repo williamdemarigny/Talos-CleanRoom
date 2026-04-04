@@ -71,24 +71,6 @@ VULHUB_CATALOG: dict[str, dict] = {
             "profile": "standard",
         },
     },
-    "spring4shell": {
-        "name": "Spring4Shell (CVE-2022-22965)",
-        "cve": "CVE-2022-22965",
-        "category": "rce",
-        "description": "Spring Framework parameter binding RCE via ClassLoader manipulation",
-        "services": ["Spring App (8080)"],
-        "ports": [8080],
-        "images": ["vulhub/spring-core:5.3.17"],
-        "manifest": "spring4shell.yaml",
-        "difficulty": "easy",
-        "tier": "tier2",
-        "recommended_scan": {
-            "tools": ["nmap", "openvas"],
-            "profile": "standard",
-            "nmap_scripts": "http-title,http-headers,http-methods",
-        },
-    },
-
     # ── TLS ───────────────────────────────────────────────────────
     "heartbleed": {
         "name": "Heartbleed (CVE-2014-0160)",
@@ -97,7 +79,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "description": "OpenSSL TLS heartbeat extension information leak",
         "services": ["Nginx/HTTPS (8443)"],
         "ports": [8443],
-        "images": ["vulhub/openssl:1.0.1f-nginx"],
+        "images": ["vulhub/openssl:1.0.1c-with-nginx"],
         "manifest": "heartbleed.yaml",
         "difficulty": "easy",
         "tier": "tier1",
@@ -273,7 +255,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "description": "mongo-express remote code execution via SSJS injection",
         "services": ["mongo-express (8081)", "MongoDB (27017)"],
         "ports": [8081],
-        "images": ["vulhub/mongo-express:0.54.0", "mongo:3.6"],
+        "images": ["vulhub/mongo-express:0.53.0", "mongo:3.6"],
         "manifest": "mongo-express-rce.yaml",
         "difficulty": "easy",
         "tier": "tier3",
@@ -347,7 +329,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "description": "BIND9 TSIG authentication bypass for zone updates",
         "services": ["BIND9 DNS (53)"],
         "ports": [53],
-        "images": ["vulhub/bind:9.10.6"],
+        "images": ["vulhub/bind:9.10.3"],
         "manifest": "bind9-tsig.yaml",
         "difficulty": "medium",
         "tier": "tier1",
@@ -358,59 +340,6 @@ VULHUB_CATALOG: dict[str, dict] = {
         },
     },
 
-    # ── PHP ───────────────────────────────────────────────────────
-    "php-fpm-rce": {
-        "name": "PHP-FPM RCE (CVE-2019-11043)",
-        "cve": "CVE-2019-11043",
-        "category": "php",
-        "description": "PHP-FPM remote code execution via path_info underflow",
-        "services": ["Nginx+PHP-FPM (8080)"],
-        "ports": [8080],
-        "images": ["vulhub/php:7.1.10-fpm-stretch-with-nginx"],
-        "manifest": "php-fpm-rce.yaml",
-        "difficulty": "medium",
-        "tier": "tier1",
-        "recommended_scan": {
-            "tools": ["nmap", "openvas"],
-            "profile": "standard",
-        },
-    },
-
-    # ── Misc ──────────────────────────────────────────────────────
-    "nginx-misconfig": {
-        "name": "Nginx Misconfiguration",
-        "cve": None,
-        "category": "misc",
-        "description": "Common Nginx misconfigurations: directory traversal, alias bypass",
-        "services": ["Nginx (8080)"],
-        "ports": [8080],
-        "images": ["vulhub/nginx:insecure-configuration"],
-        "manifest": "nginx-misconfig.yaml",
-        "difficulty": "easy",
-        "tier": "tier1",
-        "recommended_scan": {
-            "tools": ["nmap", "openvas"],
-            "profile": "quick",
-        },
-    },
-
-    # ── Container ─────────────────────────────────────────────────
-    "runc-escape": {
-        "name": "runc Container Escape (CVE-2019-5736) — Demo Only",
-        "cve": "CVE-2019-5736",
-        "category": "container",
-        "description": "runc container escape via /proc/self/exe overwrite (demo mode, non-exploitable)",
-        "services": ["Container Runtime (Demo) (80)"],
-        "ports": [80],
-        "images": ["vulhub/runc:1.0.0-rc6"],
-        "manifest": "runc-escape.yaml",
-        "difficulty": "hard",
-        "tier": "tier1",
-        "recommended_scan": {
-            "tools": ["nmap"],
-            "profile": "quick",
-        },
-    },
 }
 
 
