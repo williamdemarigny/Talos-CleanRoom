@@ -133,13 +133,6 @@ MSF_MODULE_CATALOG = [
         "profiles": ["standard", "thorough"],
     },
     {
-        "id": "auxiliary/scanner/smb/smb_ms08_067",
-        "name": "Conficker (MS08-067)",
-        "category": "Critical CVEs",
-        "description": "SMB Remote Code Execution check",
-        "profiles": ["standard", "thorough"],
-    },
-    {
         "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
         "name": "BlueKeep (CVE-2019-0708)",
         "category": "Critical CVEs",
@@ -159,6 +152,7 @@ MSF_MODULE_CATALOG = [
         "category": "Critical CVEs",
         "description": "Apache Log4j Remote Code Execution",
         "profiles": ["standard", "thorough"],
+        "needs_srvhost": True,  # scanner sends JNDI payload; target calls back to SRVHOST
     },
     {
         "id": "auxiliary/scanner/http/apache_mod_cgi_bash_env",
@@ -2546,13 +2540,16 @@ except Exception as e:
 
     def _build_msf_resource_script(self, target: str, profile: ScanProfile,
                                      scan_id: str, xml_path: str,
-                                     custom_modules: list = None) -> str:
+                                     custom_modules: list = None,
+                                     srvhost: str = None) -> str:
         """Build a Metasploit resource script based on scan profile.
 
         Quick:    db_nmap discovery only (fast port scan, no vuln modules)
         Standard: db_nmap service detection + common vulnerability scanners
         Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
         Custom:   db_nmap + user-selected modules from catalog
+
+        srvhost: pod IP for callback-based modules (e.g. log4shell_scanner)
         """
         # Parse host:port — db_nmap uses nmap (needs -p flag), modules need RPORT
         msf_host, msf_port = self._parse_target(target)
@@ -2565,25 +2562,34 @@ except Exception as e:
 
         # Phase 1: Network discovery via db_nmap
         # -Pn: skip host discovery (target VMs may block ICMP ping)
-        nmap_flags = {
-            ScanProfile.QUICK: "-Pn -T4 --top-ports 100",
-            ScanProfile.STANDARD: "-Pn -T4 -sV --top-ports 1000",
-            ScanProfile.THOROUGH: "-Pn -T4 -sV -sC --top-ports 1000",
-            ScanProfile.CUSTOM: "-Pn -T4 -sV --top-ports 1000",
-        }.get(profile, "-Pn -T4 -sV --top-ports 1000")
-
+        # When an explicit port is given, drop --top-ports to avoid nmap conflict
         if msf_port:
+            nmap_flags = {
+                ScanProfile.QUICK: "-Pn -T4",
+                ScanProfile.STANDARD: "-Pn -T4 -sV",
+                ScanProfile.THOROUGH: "-Pn -T4 -sV -sC",
+                ScanProfile.CUSTOM: "-Pn -T4 -sV",
+            }.get(profile, "-Pn -T4 -sV")
             lines.append(f"db_nmap {nmap_flags} -p {msf_port} {msf_host}")
         else:
+            nmap_flags = {
+                ScanProfile.QUICK: "-Pn -T4 --top-ports 100",
+                ScanProfile.STANDARD: "-Pn -T4 -sV --top-ports 1000",
+                ScanProfile.THOROUGH: "-Pn -T4 -sV -sC --top-ports 1000",
+                ScanProfile.CUSTOM: "-Pn -T4 -sV --top-ports 1000",
+            }.get(profile, "-Pn -T4 -sV --top-ports 1000")
             lines.append(f"db_nmap {nmap_flags} {msf_host}")
 
         # Helper to add a module block
-        def add_module(mod, extra_opts=None):
+        def add_module(mod, extra_opts=None, needs_srvhost=False):
             lines.append(f"use {mod}")
             lines.append(f"set RHOSTS {msf_host}")
             if msf_port:
                 lines.append(f"set RPORT {msf_port}")
             lines.append(f"set THREADS 5")
+            if needs_srvhost and srvhost:
+                lines.append(f"set SRVHOST {srvhost}")
+                lines.append(f"set LHOST {srvhost}")
             if extra_opts:
                 for k, v in extra_opts.items():
                     lines.append(f"set {k} {v}")
@@ -2601,7 +2607,7 @@ except Exception as e:
             modules = [m for m in MSF_MODULE_CATALOG if profile.value in m["profiles"]]
 
         for mod in modules:
-            add_module(mod["id"], mod.get("extra_opts"))
+            add_module(mod["id"], mod.get("extra_opts"), mod.get("needs_srvhost", False))
 
         # Print discovered vulns summary
         lines.append("vulns")
@@ -2656,6 +2662,22 @@ except Exception as e:
         rc_path = f"/tmp/scan-{scan_id}.rc"
         custom_modules = self.current_scan.custom_modules
 
+        # Get pod IP for callback-based modules (e.g. log4shell_scanner sends JNDI
+        # payloads and the target calls back to SRVHOST — must be a routable pod IP)
+        srvhost = None
+        pod_ip_result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "pods", "-n", "metasploit",
+             "-l", "app.kubernetes.io/name=metasploit",
+             "-o", "jsonpath={.items[0].status.podIP}"],
+            timeout=10
+        )
+        if pod_ip_result.success and pod_ip_result.output.strip():
+            srvhost = pod_ip_result.output.strip()
+            await self.log("metasploit", "info", f"SRVHOST (pod IP): {srvhost}")
+        else:
+            await self.log("metasploit", "warning",
+                "Could not determine pod IP — callback-based modules (log4shell) may fail")
+
         # Select timeout based on profile
         if profile == ScanProfile.CUSTOM:
             module_count_est = len(custom_modules) if custom_modules else 0
@@ -2670,7 +2692,8 @@ except Exception as e:
 
         # Build the resource script
         rc_content = self._build_msf_resource_script(
-            target, profile, scan_id, xml_path, custom_modules=custom_modules
+            target, profile, scan_id, xml_path, custom_modules=custom_modules,
+            srvhost=srvhost
         )
 
         module_count = rc_content.count("use auxiliary/")
