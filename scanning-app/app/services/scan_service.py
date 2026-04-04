@@ -101,10 +101,14 @@ METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln module
 FARADAY_UPLOAD_TIMEOUT = 300   # 5 min for Faraday upload (one API call per result)
 
 # Nmap flags per profile
+# -Pn: skip host discovery — K8s ClusterIP services only forward traffic on
+# defined service ports, so ICMP and TCP 443/80 probes used for host discovery
+# are silently dropped, causing nmap to report "Host seems down" and skip the
+# scan entirely.  Metasploit's db_nmap already uses -Pn for this reason.
 NMAP_PROFILES = {
-    ScanProfile.QUICK: ["-T4", "--top-ports", "100"],
-    ScanProfile.STANDARD: ["-sV", "-sC"],
-    ScanProfile.THOROUGH: ["-sV", "-sC", "-p-", "-A"],
+    ScanProfile.QUICK: ["-Pn", "-T4", "--top-ports", "100"],
+    ScanProfile.STANDARD: ["-Pn", "-sV", "-sC"],
+    ScanProfile.THOROUGH: ["-Pn", "-sV", "-sC", "-p-", "-A"],
 }
 
 # OpenVAS scan config UUIDs
@@ -1431,10 +1435,10 @@ except Exception as e:
         # the nmap "no tcp ports specified" warning that skips the entire TCP scan.
         if nmap_port:
             base_flags = {
-                ScanProfile.QUICK: ["-T4"],
-                ScanProfile.STANDARD: ["-sV", "-sC"],
-                ScanProfile.THOROUGH: ["-sV", "-sC", "-A"],
-            }.get(profile, ["-sV", "-sC"])
+                ScanProfile.QUICK: ["-Pn", "-T4"],
+                ScanProfile.STANDARD: ["-Pn", "-sV", "-sC"],
+                ScanProfile.THOROUGH: ["-Pn", "-sV", "-sC", "-A"],
+            }.get(profile, ["-Pn", "-sV", "-sC"])
             flags = base_flags + ["-p", str(nmap_port)]
         else:
             flags = list(NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD]))
@@ -1517,6 +1521,17 @@ except Exception as e:
             # Count hosts found
             host_count = xml_content.count("<host ")
             await self.log("nmap", "info", f"Nmap found {host_count} host(s)")
+
+            if host_count == 0:
+                # Diagnose why nmap found no hosts
+                if "Host seems down" in output or 'down="1"' in xml_content:
+                    await self.log("nmap", "warn",
+                        "Nmap reports host as down. Check that the target is reachable "
+                        "and that network policies allow egress from nmap-scanner namespace.")
+                else:
+                    await self.log("nmap", "warn",
+                        "Nmap XML has zero hosts. First 500 chars of output:")
+                    await self.log("nmap", "warn", f"  {xml_content[:500]}")
 
             # Update findings count
             for ts in self.current_scan.tools:
@@ -2368,9 +2383,11 @@ try:
     except ET.ParseError:
         print(f"STATUS: Using default port list {{port_list_id}}", flush=True)
 
-    # Create target
+    # Create target — alive_tests="Consider Alive" skips host discovery probes.
+    # K8s ClusterIP services only forward traffic on defined service ports, so
+    # ICMP/TCP 443/80 alive checks fail and GVM marks the host as unreachable.
     target_name = f"scan-{{SCAN_ID}}-target"
-    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>'
+    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/><alive_tests>Consider Alive</alive_tests></create_target>'
     resp = send_gmp(sock, create_target)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
@@ -2532,8 +2549,9 @@ try:
         print("STATUS: Configured NVT families on custom config", flush=True)
 
     # Create target (with port_list_id — required by GVM 22+)
+    # alive_tests="Consider Alive": skip host discovery (ClusterIP targets don't respond to ICMP)
     target_name = f"scan-{{SCAN_ID}}-target"
-    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/></create_target>\'
+    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/><alive_tests>Consider Alive</alive_tests></create_target>\'
     resp = send_gmp(sock, create_target)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):

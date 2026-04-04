@@ -65,6 +65,20 @@ spec:
         - protocol: TCP
           port: 1
           endPort: 65535
+        - protocol: UDP
+          port: 1
+          endPort: 65535
+    # Allow egress to K8s Service CIDR (Vulhub target ClusterIPs)
+    - to:
+        - ipBlock:
+            cidr: 10.15.0.0/16
+      ports:
+        - protocol: TCP
+          port: 1
+          endPort: 65535
+        - protocol: UDP
+          port: 1
+          endPort: 65535
     # Allow HTTPS egress for feed synchronization
     # OpenVAS syncs NVT, SCAP, CERT, and GVMD data feeds from Greenbone servers
     - to:
