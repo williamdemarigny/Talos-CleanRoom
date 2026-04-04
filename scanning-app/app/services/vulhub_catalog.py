@@ -83,8 +83,9 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "metasploit"],
+            "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-title,http-headers,http-methods",
         },
     },
 
@@ -186,8 +187,9 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "medium",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "metasploit"],
+            "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-auth-finder,http-title,http-headers",
         },
     },
     "libssh-auth-bypass": {
@@ -276,9 +278,9 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier3",
         "recommended_scan": {
-            "tools": ["nmap", "metasploit"],
+            "tools": ["nmap", "openvas"],
             "profile": "standard",
-            "msf_modules": ["auxiliary/scanner/mongodb/mongodb_login"],
+            "nmap_scripts": "http-title,http-headers,http-auth-finder",
         },
     },
 
