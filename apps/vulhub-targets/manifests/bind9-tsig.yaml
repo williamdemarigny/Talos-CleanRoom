@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: bind9
-          image: vulhub/bind:9.10.6
+          image: vulhub/bind:9.10.3
           ports:
             - containerPort: 53
               protocol: TCP

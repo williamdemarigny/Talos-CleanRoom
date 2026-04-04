@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: vulhub/openssl:1.0.1f-nginx
+          image: vulhub/openssl:1.0.1c-with-nginx
           ports:
             - containerPort: 8443
               protocol: TCP
