@@ -125,12 +125,17 @@ OPENVAS_XML_FORMAT = "a994b278-1f62-11e1-96ac-406186ea4fc5"
 # =============================================================================
 MSF_MODULE_CATALOG = [
     # --- Critical CVEs (included in standard + thorough) ---
+    # default_port: the protocol's standard port. When scanning a target with an
+    # explicit port (e.g. host:8983), RPORT is only overridden for modules whose
+    # default_port matches the target port, or for HTTP modules (no default_port)
+    # which accept whatever port the user specifies.
     {
         "id": "auxiliary/scanner/smb/smb_ms17_010",
         "name": "EternalBlue (MS17-010)",
         "category": "Critical CVEs",
         "description": "SMB Remote Code Execution check",
         "profiles": ["standard", "thorough"],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
@@ -138,6 +143,7 @@ MSF_MODULE_CATALOG = [
         "category": "Critical CVEs",
         "description": "RDP Remote Code Execution check",
         "profiles": ["standard", "thorough"],
+        "default_port": 3389,
     },
     {
         "id": "auxiliary/scanner/ssl/openssl_heartbleed",
@@ -145,6 +151,7 @@ MSF_MODULE_CATALOG = [
         "category": "Critical CVEs",
         "description": "OpenSSL memory disclosure",
         "profiles": ["standard", "thorough"],
+        "default_port": 443,
     },
     {
         "id": "auxiliary/scanner/http/log4shell_scanner",
@@ -175,6 +182,7 @@ MSF_MODULE_CATALOG = [
         "category": "Service Detection",
         "description": "SMB protocol version fingerprint",
         "profiles": ["standard", "thorough"],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/ssh/ssh_version",
@@ -182,6 +190,7 @@ MSF_MODULE_CATALOG = [
         "category": "Service Detection",
         "description": "SSH protocol version fingerprint",
         "profiles": ["standard", "thorough"],
+        "default_port": 22,
     },
     {
         "id": "auxiliary/scanner/http/http_version",
@@ -196,6 +205,7 @@ MSF_MODULE_CATALOG = [
         "category": "Service Detection",
         "description": "FTP anonymous access check",
         "profiles": ["standard", "thorough"],
+        "default_port": 21,
     },
     # --- Extended SMB (thorough only) ---
     {
@@ -204,6 +214,7 @@ MSF_MODULE_CATALOG = [
         "category": "Extended SMB",
         "description": "Enumerate SMB shares",
         "profiles": ["thorough"],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/smb/smb_enumusers",
@@ -211,6 +222,7 @@ MSF_MODULE_CATALOG = [
         "category": "Extended SMB",
         "description": "Enumerate SMB users",
         "profiles": ["thorough"],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/smb/pipe_auditor",
@@ -218,6 +230,7 @@ MSF_MODULE_CATALOG = [
         "category": "Extended SMB",
         "description": "SMB named pipe auditing",
         "profiles": ["thorough"],
+        "default_port": 445,
     },
     # --- Extended RDP (thorough only) ---
     {
@@ -226,6 +239,7 @@ MSF_MODULE_CATALOG = [
         "category": "Extended RDP",
         "description": "RDP service detection",
         "profiles": ["thorough"],
+        "default_port": 3389,
     },
     # --- Extended SSH (thorough only) ---
     {
@@ -234,6 +248,7 @@ MSF_MODULE_CATALOG = [
         "category": "Extended SSH",
         "description": "Enumerate SSH users via wordlist",
         "profiles": ["thorough"],
+        "default_port": 22,
         "extra_opts": {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"},
     },
     # --- HTTP/Web (thorough only) ---
@@ -300,6 +315,7 @@ MSF_MODULE_CATALOG = [
         "category": "SSL/TLS",
         "description": "SSL/TLS version and cipher analysis",
         "profiles": ["thorough"],
+        "default_port": 443,
     },
     # --- FTP (thorough only) ---
     {
@@ -308,6 +324,7 @@ MSF_MODULE_CATALOG = [
         "category": "FTP",
         "description": "FTP version fingerprint",
         "profiles": ["thorough"],
+        "default_port": 21,
     },
     # --- Email (thorough only) ---
     {
@@ -316,6 +333,7 @@ MSF_MODULE_CATALOG = [
         "category": "Email",
         "description": "SMTP server version detection",
         "profiles": ["thorough"],
+        "default_port": 25,
     },
     {
         "id": "auxiliary/scanner/smtp/smtp_relay",
@@ -323,6 +341,7 @@ MSF_MODULE_CATALOG = [
         "category": "Email",
         "description": "Open SMTP relay check",
         "profiles": ["thorough"],
+        "default_port": 25,
     },
     {
         "id": "auxiliary/scanner/pop3/pop3_version",
@@ -330,6 +349,7 @@ MSF_MODULE_CATALOG = [
         "category": "Email",
         "description": "POP3 server version detection",
         "profiles": ["thorough"],
+        "default_port": 110,
     },
     # --- Database (thorough only) ---
     {
@@ -338,6 +358,7 @@ MSF_MODULE_CATALOG = [
         "category": "Database",
         "description": "MySQL version detection",
         "profiles": ["thorough"],
+        "default_port": 3306,
     },
     {
         "id": "auxiliary/scanner/postgres/postgres_version",
@@ -345,6 +366,7 @@ MSF_MODULE_CATALOG = [
         "category": "Database",
         "description": "PostgreSQL version detection",
         "profiles": ["thorough"],
+        "default_port": 5432,
     },
     {
         "id": "auxiliary/scanner/mssql/mssql_ping",
@@ -352,6 +374,7 @@ MSF_MODULE_CATALOG = [
         "category": "Database",
         "description": "MSSQL instance discovery",
         "profiles": ["thorough"],
+        "default_port": 1433,
     },
     {
         "id": "auxiliary/scanner/mongodb/mongodb_login",
@@ -359,6 +382,7 @@ MSF_MODULE_CATALOG = [
         "category": "Database",
         "description": "MongoDB unauthenticated access check",
         "profiles": ["thorough"],
+        "default_port": 27017,
     },
     {
         "id": "auxiliary/scanner/redis/redis_server",
@@ -366,6 +390,7 @@ MSF_MODULE_CATALOG = [
         "category": "Database",
         "description": "Redis open access check",
         "profiles": ["thorough"],
+        "default_port": 6379,
     },
     # --- Network Infrastructure (thorough only) ---
     {
@@ -374,6 +399,7 @@ MSF_MODULE_CATALOG = [
         "category": "Network Infrastructure",
         "description": "Telnet service detection",
         "profiles": ["thorough"],
+        "default_port": 23,
     },
     {
         "id": "auxiliary/scanner/snmp/snmp_enum",
@@ -381,6 +407,7 @@ MSF_MODULE_CATALOG = [
         "category": "Network Infrastructure",
         "description": "SNMP community string enumeration",
         "profiles": ["thorough"],
+        "default_port": 161,
     },
     {
         "id": "auxiliary/scanner/netbios/nbname",
@@ -388,6 +415,7 @@ MSF_MODULE_CATALOG = [
         "category": "Network Infrastructure",
         "description": "NetBIOS name resolution",
         "profiles": ["thorough"],
+        "default_port": 137,
     },
     {
         "id": "auxiliary/scanner/discovery/udp_sweep",
@@ -403,6 +431,7 @@ MSF_MODULE_CATALOG = [
         "category": "Remote Access",
         "description": "VNC no-authentication check",
         "profiles": ["thorough"],
+        "default_port": 5900,
     },
     # =================================================================
     # Additional modules (custom profile only — not in any preset)
@@ -457,6 +486,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "SMB default/weak credential check",
         "profiles": [],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/ssh/ssh_login",
@@ -464,6 +494,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "SSH default/weak credential check",
         "profiles": [],
+        "default_port": 22,
     },
     {
         "id": "auxiliary/scanner/ftp/ftp_login",
@@ -471,6 +502,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "FTP default/weak credential check",
         "profiles": [],
+        "default_port": 21,
     },
     {
         "id": "auxiliary/scanner/mysql/mysql_login",
@@ -478,6 +510,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "MySQL default/weak credential check",
         "profiles": [],
+        "default_port": 3306,
     },
     {
         "id": "auxiliary/scanner/postgres/postgres_login",
@@ -485,6 +518,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "PostgreSQL default/weak credential check",
         "profiles": [],
+        "default_port": 5432,
     },
     {
         "id": "auxiliary/scanner/mssql/mssql_login",
@@ -492,6 +526,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "MSSQL default/weak credential check",
         "profiles": [],
+        "default_port": 1433,
     },
     {
         "id": "auxiliary/scanner/vnc/vnc_login",
@@ -499,6 +534,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "VNC default/weak credential check",
         "profiles": [],
+        "default_port": 5900,
     },
     {
         "id": "auxiliary/scanner/telnet/telnet_login",
@@ -506,6 +542,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "Telnet default/weak credential check",
         "profiles": [],
+        "default_port": 23,
     },
     {
         "id": "auxiliary/scanner/snmp/snmp_login",
@@ -513,6 +550,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "SNMP community string brute-force",
         "profiles": [],
+        "default_port": 161,
     },
     {
         "id": "auxiliary/scanner/winrm/winrm_login",
@@ -520,6 +558,7 @@ MSF_MODULE_CATALOG = [
         "category": "Credential Checks",
         "description": "WinRM default/weak credential check",
         "profiles": [],
+        "default_port": 5985,
     },
     # --- Additional Web Application ---
     {
@@ -585,6 +624,7 @@ MSF_MODULE_CATALOG = [
         "category": "Windows/AD",
         "description": "SID enumeration for user discovery",
         "profiles": [],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/smb/smb2",
@@ -592,6 +632,7 @@ MSF_MODULE_CATALOG = [
         "category": "Windows/AD",
         "description": "SMBv2 protocol support detection",
         "profiles": [],
+        "default_port": 445,
     },
     {
         "id": "auxiliary/scanner/winrm/winrm_auth_methods",
@@ -599,6 +640,7 @@ MSF_MODULE_CATALOG = [
         "category": "Windows/AD",
         "description": "WinRM authentication method enumeration",
         "profiles": [],
+        "default_port": 5985,
     },
     {
         "id": "auxiliary/scanner/dcerpc/endpoint_mapper",
@@ -606,6 +648,7 @@ MSF_MODULE_CATALOG = [
         "category": "Windows/AD",
         "description": "DCERPC endpoint mapper enumeration",
         "profiles": [],
+        "default_port": 135,
     },
     {
         "id": "auxiliary/scanner/dcerpc/management",
@@ -613,6 +656,7 @@ MSF_MODULE_CATALOG = [
         "category": "Windows/AD",
         "description": "DCERPC management interface detection",
         "profiles": [],
+        "default_port": 135,
     },
     # --- Additional Network Infrastructure ---
     {
@@ -621,6 +665,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional Network",
         "description": "DNS amplification vulnerability check",
         "profiles": [],
+        "default_port": 53,
     },
     {
         "id": "auxiliary/scanner/ntp/ntp_monlist",
@@ -628,6 +673,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional Network",
         "description": "NTP monlist amplification check",
         "profiles": [],
+        "default_port": 123,
     },
     {
         "id": "auxiliary/scanner/ipmi/ipmi_version",
@@ -635,6 +681,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional Network",
         "description": "IPMI version and capability detection",
         "profiles": [],
+        "default_port": 623,
     },
     {
         "id": "auxiliary/scanner/nfs/nfsmount",
@@ -1021,6 +1068,7 @@ except Exception as e:
             custom_modules=request.custom_modules,
             openvas_config=request.openvas_config,
             openvas_families=request.openvas_families,
+            nmap_scripts=request.nmap_scripts,
             status=ScanStatus.RUNNING,
             started_at=datetime.utcnow(),
             tools=[
@@ -1368,7 +1416,7 @@ except Exception as e:
         """Run an Nmap scan via a temporary Kubernetes pod."""
         scan_id = self.current_scan.id
         pod_name = f"nmap-scan-{scan_id}"
-        flags = list(NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD]))
+        nmap_scripts = self.current_scan.nmap_scripts
 
         timeout = {
             ScanProfile.QUICK: NMAP_TIMEOUT_QUICK,
@@ -1378,10 +1426,25 @@ except Exception as e:
 
         # Parse host:port — nmap needs port via -p flag, not in target
         nmap_host, nmap_port = self._parse_target(target)
+
+        # Build flags: when an explicit port is given, drop --top-ports to avoid
+        # the nmap "no tcp ports specified" warning that skips the entire TCP scan.
         if nmap_port:
-            # Only add -p if not already specified in flags
-            if not any(f.startswith("-p") for f in flags):
-                flags.extend(["-p", str(nmap_port)])
+            base_flags = {
+                ScanProfile.QUICK: ["-T4"],
+                ScanProfile.STANDARD: ["-sV", "-sC"],
+                ScanProfile.THOROUGH: ["-sV", "-sC", "-A"],
+            }.get(profile, ["-sV", "-sC"])
+            flags = base_flags + ["-p", str(nmap_port)]
+        else:
+            flags = list(NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD]))
+
+        # Append custom NSE scripts when specified (e.g. ssl-heartbleed, dns-zone-transfer)
+        if nmap_scripts:
+            flags.extend(["--script", nmap_scripts])
+            await self.log("nmap", "info", f"NSE scripts: {nmap_scripts}")
+
+        if nmap_port:
             await self.log("nmap", "info",
                 f"Launching Nmap pod '{pod_name}' targeting {nmap_host} port {nmap_port} with flags: {' '.join(flags)}")
         else:
@@ -2580,12 +2643,26 @@ except Exception as e:
             }.get(profile, "-Pn -T4 -sV --top-ports 1000")
             lines.append(f"db_nmap {nmap_flags} {msf_host}")
 
-        # Helper to add a module block
-        def add_module(mod, extra_opts=None, needs_srvhost=False):
-            lines.append(f"use {mod}")
+        # Helper to add a module block.
+        # mod_entry: full catalog dict (or plain id string for backwards compat)
+        # RPORT is only overridden when:
+        #   - target has an explicit port, AND
+        #   - the module has no default_port (HTTP/generic — accepts any port), OR
+        #   - the module's default_port matches the target port
+        # This prevents SMB/RDP/SSH/DB modules from inheriting an HTTP target port
+        # and getting immediate connection refused errors.
+        def add_module(mod_entry, extra_opts=None, needs_srvhost=False):
+            if isinstance(mod_entry, dict):
+                mod_id = mod_entry["id"]
+                default_port = mod_entry.get("default_port")
+            else:
+                mod_id = mod_entry
+                default_port = None
+            lines.append(f"use {mod_id}")
             lines.append(f"set RHOSTS {msf_host}")
             if msf_port:
-                lines.append(f"set RPORT {msf_port}")
+                if default_port is None or default_port == msf_port:
+                    lines.append(f"set RPORT {msf_port}")
             lines.append(f"set THREADS 5")
             if needs_srvhost and srvhost:
                 lines.append(f"set SRVHOST {srvhost}")
@@ -2607,7 +2684,7 @@ except Exception as e:
             modules = [m for m in MSF_MODULE_CATALOG if profile.value in m["profiles"]]
 
         for mod in modules:
-            add_module(mod["id"], mod.get("extra_opts"), mod.get("needs_srvhost", False))
+            add_module(mod, mod.get("extra_opts"), mod.get("needs_srvhost", False))
 
         # Print discovered vulns summary
         lines.append("vulns")

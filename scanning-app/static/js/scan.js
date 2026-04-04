@@ -6,6 +6,7 @@ function scanManager() {
         target: '',
         selectedTools: ['nmap'],
         profile: 'standard',
+        nmapScripts: '',
 
         // Custom module state (Metasploit)
         customModules: [],
@@ -163,6 +164,9 @@ function scanManager() {
                 this.profile = 'custom';
                 this.customModules = params.get('msf_modules').split(',');
             }
+            if (params.get('nmap_scripts')) {
+                this.nmapScripts = params.get('nmap_scripts');
+            }
 
             await this.fetchStatus();
             await this.fetchHistory();
@@ -281,6 +285,9 @@ function scanManager() {
                 tools: this.selectedTools,
                 profile: this.profile
             };
+            if (this.nmapScripts) {
+                payload.nmap_scripts = this.nmapScripts;
+            }
             if (this.profile === 'custom' && this.customModules.length > 0) {
                 payload.custom_modules = this.customModules;
             }
