@@ -39,6 +39,11 @@ spec:
       ports:
         - protocol: TCP
           port: 55553
+    # Allow callback ingress from Vulhub targets (JNDI, reverse shells, etc.)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: vulhub-targets
 # =============================================================================
 # IMPORTANT: No egress policy is defined for Metasploit
 # =============================================================================

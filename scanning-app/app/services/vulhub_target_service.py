@@ -453,7 +453,9 @@ class VulhubTargetService:
         """Build the NetworkPolicy JSON for a Vulhub target namespace.
 
         Allows ingress from scanner namespaces only.
-        Allows egress to kube-system DNS + intra-namespace only.
+        Allows egress to kube-system DNS, intra-namespace, and scanner
+        namespaces (required for exploit-verification callbacks such as
+        Log4Shell JNDI lookups that connect back to the Metasploit pod).
         """
         policy = {
             "apiVersion": "networking.k8s.io/v1",
@@ -483,6 +485,13 @@ class VulhubTargetService:
                     # Intra-namespace (multi-container environments)
                     {
                         "to": [{"podSelector": {}}],
+                    },
+                    # Callback egress to scanner namespaces (e.g. JNDI→Metasploit)
+                    {
+                        "to": [
+                            {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": ns}}}
+                            for ns in ["metasploit", "nmap-scanner", "openvas"]
+                        ],
                     },
                 ],
             },
