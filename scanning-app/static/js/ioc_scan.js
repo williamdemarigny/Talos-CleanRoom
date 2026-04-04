@@ -271,6 +271,27 @@ function iocScanManager() {
         async startScan() {
             if (!this.canStart) return;
 
+            // Client-side credential validation
+            if (this.mountType === 'ssh') {
+                if (!this.sshUsername) {
+                    this.error = 'SSH username is required';
+                    return;
+                }
+                if (!this.sshPassword) {
+                    this.error = 'SSH password is required';
+                    return;
+                }
+            } else if (this.mountType === 'smb') {
+                if (!this.smbShare) {
+                    this.error = 'SMB share name is required';
+                    return;
+                }
+                if (!this.smbUsername || !this.smbPassword) {
+                    this.error = 'SMB username and password are required';
+                    return;
+                }
+            }
+
             const payload = {
                 target: this.target,
                 mount_type: this.mountType,

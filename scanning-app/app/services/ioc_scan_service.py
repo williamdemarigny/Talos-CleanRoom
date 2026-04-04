@@ -9,6 +9,7 @@ Results are parsed from JSONL output and uploaded to Faraday.
 import asyncio
 import json
 import logging
+import socket
 import uuid
 from datetime import datetime
 from typing import Optional, Callable, Awaitable, List
@@ -59,16 +60,22 @@ def _severity_to_faraday(severity: IocSeverity) -> str:
     }.get(severity, "medium")
 
 
-def _parse_jsonl_line(line: str) -> Optional[IocFinding]:
-    """Parse a single JSONL line from LOKI-RS output into an IocFinding.
+def _parse_jsonl_line(line_or_data) -> Optional[IocFinding]:
+    """Parse a JSONL line (or pre-parsed dict) from LOKI-RS into an IocFinding.
 
     LOKI-RS JSONL output contains various record types. We extract
     findings (matches) and ignore status/progress messages.
+
+    Args:
+        line_or_data: Either a raw JSON string or an already-parsed dict.
     """
-    try:
-        data = json.loads(line)
-    except (json.JSONDecodeError, ValueError):
-        return None
+    if isinstance(line_or_data, dict):
+        data = line_or_data
+    else:
+        try:
+            data = json.loads(line_or_data)
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     # LOKI-RS outputs different record types; findings have a level field
     level = data.get("level", "").lower()
@@ -320,10 +327,22 @@ class IocScanService(BaseServiceMixin):
             # Persist IOC findings to PostgreSQL
             try:
                 if db_engine._session_factory is not None and findings:
+                    # Resolve hostname to IP for DB host record (async to avoid blocking event loop)
+                    target_ip = request.target
+                    target_hostnames = None
+                    try:
+                        resolved = await asyncio.get_running_loop().run_in_executor(
+                            None, socket.gethostbyname, request.target)
+                        if resolved != request.target:
+                            target_ip = resolved
+                            target_hostnames = [request.target]
+                    except (socket.gaierror, OSError):
+                        pass  # Keep original target if resolution fails
+
                     async with db_engine._session_factory() as session:
-                        # Ensure host exists for the target
                         host_id = await result_store.persist_host(
-                            session, scan_id=scan.id, ip=request.target,
+                            session, scan_id=scan.id, ip=target_ip,
+                            hostnames=target_hostnames,
                         )
                         for finding in findings:
                             await result_store.persist_ioc_finding(
@@ -427,12 +446,43 @@ class IocScanService(BaseServiceMixin):
         finally:
             self._save_to_history()
 
+    async def _create_creds_secret(self, namespace: str, secret_name: str,
+                                    data: dict) -> bool:
+        """Create a temporary K8s Secret for scan credentials.
+
+        Uses ``kubectl create secret generic --from-literal`` to avoid needing
+        stdin piping (which ``run_command_simple`` does not support).
+
+        Returns True on success, False on failure.
+        """
+        cmd = [
+            "kubectl", "create", "secret", "generic", secret_name,
+            f"--namespace={namespace}",
+            "--dry-run=client", "-o", "json",
+        ]
+        # Build --from-literal args for each credential
+        for k, v in data.items():
+            if v:
+                cmd.extend([f"--from-literal={k}={v}"])
+
+        # Pipe through kubectl apply for idempotency (create --dry-run | apply)
+        # Use bash -c to chain the pipe since run_command_simple has no stdin support.
+        # shlex.quote handles credentials with special chars (quotes, spaces, etc.)
+        import shlex
+        dry_run_cmd = " ".join(shlex.quote(c) for c in cmd)
+        result = await self.process_manager.run_command_simple(
+            ["bash", "-c", f"{dry_run_cmd} | kubectl apply -f -"],
+            timeout=10
+        )
+        return result.success
+
     async def _run_loki_pod(self, request: IocScanRequest) -> Optional[str]:
         """Create and run the LOKI-RS scanner pod, return JSONL output."""
         scan = self.current_scan
         pod_name = f"loki-scan-{scan.id}"
+        secret_name = f"ioc-creds-{scan.id}"
 
-        # Build environment variables for the entrypoint script
+        # Build non-sensitive environment variables for the entrypoint script
         env_vars = {
             "TARGET": request.target,
             "MOUNT_TYPE": request.mount_type.value,
@@ -445,36 +495,73 @@ class IocScanService(BaseServiceMixin):
 
         if request.mount_type == MountType.SSH:
             env_vars["SSH_USER"] = request.ssh_username or "root"
-            env_vars["SSH_PASSWORD"] = request.ssh_password or ""
-            if request.ssh_key:
-                env_vars["SSH_KEY"] = request.ssh_key
         elif request.mount_type == MountType.SMB:
             env_vars["SMB_SHARE"] = request.smb_share or "C$"
             env_vars["SMB_USER"] = request.smb_username or ""
-            env_vars["SMB_PASSWORD"] = request.smb_password or ""
             env_vars["SMB_DOMAIN"] = request.smb_domain or "WORKGROUP"
+
+        # Create K8s Secret for sensitive credentials (passwords/keys)
+        # so they don't appear in pod spec env vars or kubectl describe output
+        secret_data = {}
+        if request.mount_type == MountType.SSH:
+            if request.ssh_key:
+                secret_data["ssh-key"] = request.ssh_key
+            if request.ssh_password:
+                secret_data["ssh-password"] = request.ssh_password
+        elif request.mount_type == MountType.SMB:
+            if request.smb_password:
+                secret_data["smb-password"] = request.smb_password
+
+        has_secret = False
+        if secret_data:
+            has_secret = await self._create_creds_secret(LOKI_NAMESPACE, secret_name, secret_data)
+            if not has_secret:
+                await self.log("warn", "Failed to create credentials secret, falling back to env vars")
+                # Fallback: inject credentials as env vars (less secure but functional)
+                if request.mount_type == MountType.SSH:
+                    if request.ssh_key:
+                        env_vars["SSH_KEY"] = request.ssh_key
+                    env_vars["SSH_PASSWORD"] = request.ssh_password or ""
+                elif request.mount_type == MountType.SMB:
+                    env_vars["SMB_PASSWORD"] = request.smb_password or ""
 
         # Build pod override spec (needed for privileged mode + env vars)
         env_list = [{"name": k, "value": v} for k, v in env_vars.items()]
+        container_spec = {
+            "name": pod_name,
+            "image": LOKI_IMAGE,
+            "env": env_list,
+            "securityContext": {
+                "privileged": True  # Required for FUSE/sshfs mounts
+            },
+            "resources": {
+                "requests": {"cpu": "500m", "memory": "512Mi"},
+                "limits": {"cpu": "2", "memory": "2Gi"}
+            }
+        }
+
+        volumes = []
+        if has_secret:
+            container_spec["volumeMounts"] = [{
+                "name": "creds",
+                "mountPath": "/var/secrets/ioc",
+                "readOnly": True
+            }]
+            volumes.append({
+                "name": "creds",
+                "secret": {"secretName": secret_name, "defaultMode": 0o400}
+            })
+
         pod_override = {
             "apiVersion": "v1",
             "spec": {
-                "containers": [{
-                    "name": pod_name,
-                    "image": LOKI_IMAGE,
-                    "env": env_list,
-                    "securityContext": {
-                        "privileged": True  # Required for FUSE/sshfs mounts
-                    },
-                    "resources": {
-                        "requests": {"cpu": "500m", "memory": "512Mi"},
-                        "limits": {"cpu": "2", "memory": "2Gi"}
-                    }
-                }],
+                "containers": [container_spec],
                 "restartPolicy": "Never",
                 "imagePullSecrets": [{"name": "harbor-pull-secret"}]
             }
         }
+        if volumes:
+            pod_override["spec"]["volumes"] = volumes
 
         override_json = json.dumps(pod_override)
 
@@ -515,6 +602,14 @@ class IocScanService(BaseServiceMixin):
                 break
             elif phase in ("Succeeded", "Failed"):
                 started = True
+                if phase == "Failed":
+                    # Retrieve pod logs to surface the actual mount error
+                    fail_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=15)
+                    if fail_logs.output:
+                        await self.log("error", "Pod failed during mount phase:")
+                        for fline in fail_logs.output.strip().splitlines()[-10:]:
+                            if fline.strip():
+                                await self.log("error", f"  {fline.strip()}")
                 break
             elif phase == "Pending":
                 # Check for container errors (e.g., ImagePullBackOff)
@@ -530,8 +625,15 @@ class IocScanService(BaseServiceMixin):
 
         if not started:
             await self.log("error", f"Pod did not start within {MOUNT_TIMEOUT}s")
+            # Retrieve pod logs for mount error diagnosis before cleanup
+            diag_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=10)
+            if diag_logs.output:
+                await self.log("error", "Pod output before timeout:")
+                for dline in diag_logs.output.strip().splitlines()[-10:]:
+                    if dline.strip():
+                        await self.log("error", f"  {dline.strip()}")
             scan.status = IocScanStatus.FAILED
-            scan.error_message = "Mount timeout"
+            scan.error_message = "Mount timeout — check target reachability and credentials"
             await self._cleanup_pod(pod_name)
             return None
 
@@ -586,19 +688,48 @@ class IocScanService(BaseServiceMixin):
         return output
 
     async def _cleanup_pod(self, pod_name: str):
-        """Delete a scanner pod."""
+        """Delete a scanner pod and its credentials secret."""
         await self.k8s.delete_pod(LOKI_NAMESPACE, pod_name, force=True, timeout=15)
+        # Clean up the temporary credentials secret
+        if self.current_scan:
+            secret_name = f"ioc-creds-{self.current_scan.id}"
+            await self.process_manager.run_command_simple(
+                ["kubectl", "delete", "secret", secret_name,
+                 f"--namespace={LOKI_NAMESPACE}", "--ignore-not-found"],
+                timeout=10
+            )
 
     def _parse_findings(self, jsonl_output: str) -> List[IocFinding]:
         """Parse JSONL output from LOKI-RS into findings."""
         findings = []
+        parse_errors = 0
+        status_lines = 0
+
         for line in jsonl_output.split("\n"):
             line = line.strip()
             if not line:
                 continue
-            finding = _parse_jsonl_line(line)
+
+            # Attempt JSON parse to categorize the line
+            try:
+                data = json.loads(line)
+                level = data.get("level", "").lower()
+                if level not in ("alert", "warning", "notice"):
+                    status_lines += 1
+                    continue
+            except (json.JSONDecodeError, ValueError):
+                parse_errors += 1
+                continue
+
+            # Pass already-parsed dict to avoid re-parsing
+            finding = _parse_jsonl_line(data)
             if finding:
                 findings.append(finding)
+
+        if parse_errors > 0:
+            logger.warning("IOC JSONL parse: %d unparseable lines dropped", parse_errors)
+        if status_lines > 0:
+            logger.debug("IOC JSONL parse: %d status/progress lines skipped", status_lines)
 
         # Sort by score descending (most severe first)
         findings.sort(key=lambda f: f.score, reverse=True)

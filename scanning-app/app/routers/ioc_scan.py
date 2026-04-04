@@ -87,11 +87,19 @@ async def start_ioc_scan(
     if not request.target.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target is required")
 
-    if request.mount_type.value == "ssh" and not request.ssh_username:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSH username is required for SSH mount")
+    if request.mount_type.value == "ssh":
+        if not request.ssh_username:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSH username is required for SSH mount")
+        if not request.ssh_password and not request.ssh_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSH password or SSH key is required for SSH mount")
 
-    if request.mount_type.value == "smb" and not request.smb_share:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SMB share name is required for SMB mount")
+    if request.mount_type.value == "smb":
+        if not request.smb_share:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SMB share name is required for SMB mount")
+        if not request.smb_username:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SMB username is required for SMB mount")
+        if not request.smb_password:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SMB password is required for SMB mount")
 
     try:
         scan = await service.start_scan(

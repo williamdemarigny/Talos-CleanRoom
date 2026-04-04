@@ -200,7 +200,7 @@ rules:
   verbs: ["get", "list", "create", "delete", "watch"]
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get"]
+  verbs: ["get", "create", "delete"]
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get"]
