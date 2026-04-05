@@ -15,6 +15,8 @@ from app.db.models import (
     FaradaySyncLog, AuditLog, CveCache,
 )
 
+_SENTINEL = object()  # distinguish "not provided" from explicit None
+
 
 # ── Scans ──────────────────────────────────────────────────────────
 
@@ -171,16 +173,18 @@ async def update_remediation(
     session: AsyncSession,
     vuln_id: int,
     status: str,
-    notes: Optional[str] = None,
+    notes: Optional[str] = _SENTINEL,
 ) -> None:
+    values = {
+        "remediation_status": status,
+        "remediation_updated_at": datetime.utcnow(),
+    }
+    if notes is not _SENTINEL:
+        values["remediation_notes"] = notes
     await session.execute(
         update(Vulnerability)
         .where(Vulnerability.id == vuln_id)
-        .values(
-            remediation_status=status,
-            remediation_notes=notes,
-            remediation_updated_at=datetime.utcnow(),
-        )
+        .values(**values)
     )
 
 
@@ -188,16 +192,18 @@ async def bulk_update_remediation(
     session: AsyncSession,
     vuln_ids: List[int],
     status: str,
-    notes: Optional[str] = None,
+    notes: Optional[str] = _SENTINEL,
 ) -> int:
+    values = {
+        "remediation_status": status,
+        "remediation_updated_at": datetime.utcnow(),
+    }
+    if notes is not _SENTINEL:
+        values["remediation_notes"] = notes
     result = await session.execute(
         update(Vulnerability)
         .where(Vulnerability.id.in_(vuln_ids))
-        .values(
-            remediation_status=status,
-            remediation_notes=notes,
-            remediation_updated_at=datetime.utcnow(),
-        )
+        .values(**values)
     )
     return result.rowcount
 

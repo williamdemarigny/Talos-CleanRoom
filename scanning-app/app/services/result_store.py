@@ -315,6 +315,10 @@ async def persist_vulns_batch(
         Number of vulnerabilities persisted.
     """
     for v in vulns:
+        extra = {}
+        ext_id = v.get("external_id")
+        if ext_id and ext_id.startswith("CVE-"):
+            extra["enrichment_status"] = v.get("enrichment_status", "pending")
         await repo.create_vulnerability(
             session,
             scan_id=scan_id,
@@ -326,9 +330,10 @@ async def persist_vulns_batch(
             refs=v.get("refs"),
             resolution=v.get("resolution"),
             data=v.get("data"),
-            external_id=v.get("external_id"),
+            external_id=ext_id,
             tags=v.get("tags"),
             tool_source=v.get("tool_source"),
+            **extra,
         )
     await session.commit()
     return len(vulns)
