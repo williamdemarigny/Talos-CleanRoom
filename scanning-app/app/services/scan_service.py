@@ -81,6 +81,12 @@ NMAP_SCRIPT_CWE_MAP = {
     "dns-zone-transfer": ["CWE-200"],
     "snmp-info": ["CWE-200"],
     "telnet-encryption": ["CWE-319"],
+    "mysql-vuln-cve2012-2122": ["CWE-305"],
+    "http-drupal-enum": ["CWE-200"],
+    "http-wordpress-enum": ["CWE-200"],
+    "http-put": ["CWE-749"],
+    "smb-os-discovery": ["CWE-200"],
+    "smb-protocols": ["CWE-200"],
 }
 
 # Scan timeout defaults (seconds)
@@ -247,6 +253,14 @@ MSF_MODULE_CATALOG = [
     },
     # --- Extended SSH (thorough only) ---
     {
+        "id": "auxiliary/scanner/ssh/libssh_auth_bypass",
+        "name": "libssh Auth Bypass (CVE-2018-10933)",
+        "category": "Extended SSH",
+        "description": "libssh server-side authentication bypass",
+        "profiles": ["standard", "thorough"],
+        "default_port": 2222,
+    },
+    {
         "id": "auxiliary/scanner/ssh/ssh_enumusers",
         "name": "SSH User Enumeration",
         "category": "Extended SSH",
@@ -355,13 +369,21 @@ MSF_MODULE_CATALOG = [
         "profiles": ["thorough"],
         "default_port": 110,
     },
-    # --- Database (thorough only) ---
+    # --- Database (standard + thorough) ---
     {
         "id": "auxiliary/scanner/mysql/mysql_version",
         "name": "MySQL Version",
         "category": "Database",
         "description": "MySQL version detection",
-        "profiles": ["thorough"],
+        "profiles": ["standard", "thorough"],
+        "default_port": 3306,
+    },
+    {
+        "id": "auxiliary/scanner/mysql/mysql_authbypass_hashdump",
+        "name": "MySQL Auth Bypass (CVE-2012-2122)",
+        "category": "Database",
+        "description": "MySQL/MariaDB authentication bypass via timing attack — dumps hashes on success",
+        "profiles": ["standard", "thorough"],
         "default_port": 3306,
     },
     {
