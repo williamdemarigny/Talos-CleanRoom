@@ -191,8 +191,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "tier": "tier1",
         "recommended_scan": {
             "tools": ["nmap", "metasploit"],
-            "profile": "standard",
-            "msf_modules": ["auxiliary/scanner/ssh/libssh_auth_bypass"],
+            "profile": "custom",
+            "nmap_scripts": "ssh2-enum-algos,sshv1",
+            "msf_modules": [
+                "auxiliary/scanner/ssh/libssh_auth_bypass",
+                "auxiliary/scanner/ssh/ssh_version",
+            ],
         },
     },
 

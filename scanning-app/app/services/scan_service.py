@@ -257,7 +257,7 @@ MSF_MODULE_CATALOG = [
         "name": "libssh Auth Bypass (CVE-2018-10933)",
         "category": "Extended SSH",
         "description": "libssh server-side authentication bypass",
-        "profiles": ["standard", "thorough"],
+        "profiles": ["thorough"],
         "default_port": 2222,
     },
     {
@@ -1201,6 +1201,7 @@ except Exception as e:
             scan = self.current_scan
             target = scan.target
             profile = scan.profile
+            self._msf_console_findings = []  # Clear stale findings from previous scans
 
             await self.log(None, "info", f"Starting security scan against {target}")
             await self.log(None, "info", f"Profile: {profile.value} | Tools: {', '.join(t.tool.value for t in scan.tools)}")
@@ -2663,6 +2664,11 @@ except Exception as e:
         lines.append("db_status")
         lines.append("db_rebuild_cache")
 
+        # Isolate this scan in its own workspace so db_export only includes
+        # hosts/services/vulns from THIS scan, not leftovers from previous scans
+        ws_name = f"scan-{scan_id}"
+        lines.append(f"workspace -a {ws_name}")
+
         # Phase 1: Network discovery via db_nmap
         # -Pn: skip host discovery (target VMs may block ICMP ping)
         # When an explicit port is given, drop --top-ports to avoid nmap conflict
@@ -2729,8 +2735,12 @@ except Exception as e:
         # Print discovered vulns summary
         lines.append("vulns")
 
-        # Export results
+        # Export results (workspace-scoped — only this scan's data)
         lines.append(f"db_export -f xml {xml_path}")
+
+        # Clean up workspace — switch to default first (can't delete current workspace)
+        lines.append("workspace default")
+        lines.append(f"workspace -d {ws_name}")
         lines.append("exit")
 
         return "\n".join(lines) + "\n"
@@ -2842,12 +2852,33 @@ except Exception as e:
         if module_count > 0:
             await self.log("metasploit", "info", f"Phase 2: Running {module_count} auxiliary scanner(s)...")
 
+        # Collect [+] positive findings from console output — many auxiliary
+        # scanners (libssh_auth_bypass, etc.) report results to stdout but
+        # don't call report_vuln(), so they're missing from db_export XML.
+        console_findings = []
+        current_module = [None]  # mutable container for closure
+
+        async def _capture_msf_line(line: str):
+            stripped = line.strip()
+            # Track which module is running — MSF echoes RC commands with
+            # prompt prefixes like "msf6 > use auxiliary/..." or just "use ..."
+            if "use auxiliary/" in stripped or "use exploit/" in stripped:
+                idx = stripped.find("use ")
+                if idx >= 0:
+                    current_module[0] = stripped[idx + 4:]
+            elif stripped.startswith("[+]") and current_module[0]:
+                console_findings.append({
+                    "module": current_module[0],
+                    "message": stripped,
+                })
+            await self._log_msf_line(line)
+
         # Run msfconsole with the resource script
         result = await self.process_manager.run_command(
             ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
              "-c", "metasploit", "--",
              "./msfconsole", "-q", "-r", rc_path],
-            on_output=lambda line: self._log_msf_line(line),
+            on_output=_capture_msf_line,
             timeout=msf_timeout
         )
 
@@ -2888,9 +2919,17 @@ except Exception as e:
             await self.log("metasploit", "info",
                 f"Metasploit found {host_count} host(s), {service_count} service(s), {vuln_count} vuln(s)")
 
+            # Store console [+] findings for persistence — many auxiliary modules
+            # report to stdout but don't call report_vuln() in the MSF DB
+            if console_findings:
+                await self.log("metasploit", "info",
+                    f"Additionally captured {len(console_findings)} positive finding(s) from console output")
+                self._msf_console_findings = console_findings
+
             for ts in self.current_scan.tools:
                 if ts.tool == ScanTool.METASPLOIT:
-                    ts.findings_count = vuln_count if vuln_count > 0 else host_count
+                    total_findings = vuln_count + len(console_findings)
+                    ts.findings_count = total_findings if total_findings > 0 else host_count
                     break
 
             return xml_content
@@ -3673,8 +3712,9 @@ except Exception as e:
                         elif "ssl" in sid_lower or "tls" in sid_lower:
                             severity = "medium"
 
-                        # Extract CVE references from output
-                        refs = re.findall(r"CVE-\d{4}-\d{4,}", script_output, re.IGNORECASE)
+                        # Extract CVE references from output (normalize to uppercase
+                        # so enrichment service's case-sensitive pattern matches them)
+                        refs = [c.upper() for c in re.findall(r"CVE-\d{4}-\d{4,}", script_output, re.IGNORECASE)]
 
                         # Set external_id from first CVE if available
                         external_id = refs[0] if refs else None
@@ -3953,8 +3993,9 @@ except Exception as e:
                         if ref_text:
                             refs.append(ref_text)
 
-                    # Determine severity from refs/name
-                    cves = re.findall(r"CVE-\d{4}-\d{4,}", " ".join(refs), re.IGNORECASE)
+                    # Determine severity from refs/name (normalize CVE IDs to uppercase
+                    # so enrichment service's case-sensitive pattern matches them)
+                    cves = [c.upper() for c in re.findall(r"CVE-\d{4}-\d{4,}", " ".join(refs), re.IGNORECASE)]
                     severity = "info"
                     all_text = (vuln_name + " " + " ".join(refs)).lower()
                     if any(kw in all_text for kw in MSF_CRITICAL_KEYWORDS):
@@ -3964,13 +4005,17 @@ except Exception as e:
                     elif any(kw in all_text for kw in MSF_MEDIUM_KEYWORDS):
                         severity = "medium"
 
-                    external_id = cves[0] if cves else None
+                    external_id = cves[0] if cves else None  # already uppercased above
 
                     # Build description from name + refs (db_export has no <info> element)
                     desc_parts = [vuln_name]
                     if refs:
                         desc_parts.append("Refs: " + ", ".join(refs))
                     description = " | ".join(desc_parts)
+
+                    extra_fields = {}
+                    if external_id:
+                        extra_fields["enrichment_status"] = "pending"
 
                     await result_store.persist_vulnerability(
                         session, scan_id=scan_id, host_id=host_db_ids[ip],
@@ -3981,8 +4026,56 @@ except Exception as e:
                         refs=refs or None,
                         external_id=external_id,
                         tool_source="metasploit",
+                        **extra_fields,
                     )
                     vulns_created += 1
+
+            # Persist console [+] findings that weren't in db_export XML.
+            # Many auxiliary scanners (libssh_auth_bypass, etc.) report positive
+            # results to stdout but don't call report_vuln() in the MSF database.
+            console_findings = getattr(self, "_msf_console_findings", [])
+            if console_findings:
+                # Get or create a host record for console findings
+                if host_db_ids:
+                    target_host_id = next(iter(host_db_ids.values()))
+                else:
+                    # XML had no hosts — create one from the scan target
+                    target_host, _ = self._parse_target(
+                        self.current_scan.target if self.current_scan else "unknown"
+                    )
+                    target_host_id = await result_store.persist_host(
+                        session, scan_id=scan_id, ip=target_host,
+                    )
+                    hosts_created += 1
+
+                for cf in console_findings:
+                    module_name = cf["module"]
+                    message = cf["message"]
+
+                    # Extract CVE references and normalize to uppercase
+                    cves = re.findall(r"CVE-\d{4}-\d{4,}", message, re.IGNORECASE)
+                    cves += re.findall(r"CVE-\d{4}-\d{4,}", module_name, re.IGNORECASE)
+                    cves = list(dict.fromkeys(c.upper() for c in cves))
+
+                    severity = "high"  # [+] findings are positive hits
+                    external_id = cves[0] if cves else None
+                    extra_fields = {}
+                    if external_id:
+                        extra_fields["enrichment_status"] = "pending"
+
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=target_host_id,
+                        service_id=None,
+                        name=module_name.split("/")[-1],
+                        severity=severity,
+                        description=f"{message} (module: {module_name})",
+                        refs=cves or None,
+                        external_id=external_id,
+                        tool_source="metasploit",
+                        **extra_fields,
+                    )
+                    vulns_created += 1
+                self._msf_console_findings = []
 
         await self._log_persist_summary("metasploit", hosts_created, services_created, vulns_created)
 
