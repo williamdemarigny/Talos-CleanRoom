@@ -105,6 +105,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "recommended_scan": {
             "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-vuln-cve2017-5638",
         },
     },
     "drupalgeddon2": {
@@ -121,6 +122,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "recommended_scan": {
             "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-drupal-enum,http-drupal-users",
         },
     },
     "wordpress-phpmailer": {
@@ -137,6 +139,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "recommended_scan": {
             "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-wordpress-enum,http-wordpress-users",
         },
     },
     "tomcat-put": {
@@ -153,6 +156,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "recommended_scan": {
             "tools": ["nmap", "openvas"],
             "profile": "standard",
+            "nmap_scripts": "http-methods,http-put",
         },
     },
 
@@ -242,8 +246,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "tier": "tier1",
         "recommended_scan": {
             "tools": ["nmap", "metasploit"],
-            "profile": "standard",
-            "msf_modules": ["auxiliary/scanner/mysql/mysql_version"],
+            "profile": "custom",
+            "nmap_scripts": "mysql-vuln-cve2012-2122,mysql-info,mysql-enum",
+            "msf_modules": [
+                "auxiliary/scanner/mysql/mysql_authbypass_hashdump",
+                "auxiliary/scanner/mysql/mysql_version",
+            ],
         },
     },
 
@@ -280,10 +288,13 @@ VULHUB_CATALOG: dict[str, dict] = {
         "tier": "tier2",
         "recommended_scan": {
             "tools": ["nmap", "metasploit"],
-            "profile": "thorough",
+            "profile": "custom",
+            "nmap_scripts": "smb-os-discovery,smb-protocols,smb-vuln-*",
             "msf_modules": [
+                "auxiliary/scanner/smb/smb_ms17_010",
                 "auxiliary/scanner/smb/smb_version",
                 "auxiliary/scanner/smb/smb_enumshares",
+                "auxiliary/scanner/smb/pipe_auditor",
             ],
         },
     },
@@ -316,8 +327,9 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "metasploit"],
-            "profile": "thorough",
+            "tools": ["nmap", "openvas"],
+            "profile": "standard",
+            "nmap_scripts": "http-title,http-methods,http-headers",
         },
     },
 
