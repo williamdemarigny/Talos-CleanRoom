@@ -11,6 +11,8 @@ from app.db import repository as repo
 
 router = APIRouter()
 
+_VALID_REMEDIATION_STATUSES = {"open", "in_progress", "resolved", "accepted", "false_positive"}
+
 
 @router.get("/summary")
 async def get_summary(
@@ -91,9 +93,11 @@ async def get_scan_detail(
                         "id": v.id,
                         "name": v.name,
                         "severity": v.severity,
+                        "description": v.description,
                         "external_id": v.external_id,
                         "tool_source": v.tool_source,
                         "remediation_status": v.remediation_status,
+                        "remediation_notes": v.remediation_notes,
                         "cvss_score": v.cvss_score,
                         "cvss_vector": v.cvss_vector,
                         "cvss_version": v.cvss_version,
@@ -234,10 +238,13 @@ async def list_vulns(
             "host_id": v.host_id,
             "name": v.name,
             "severity": v.severity,
+            "description": v.description,
             "external_id": v.external_id,
             "tool_source": v.tool_source,
             "remediation_status": v.remediation_status,
+            "remediation_notes": v.remediation_notes,
             "cvss_score": v.cvss_score,
+            "cvss_vector": v.cvss_vector,
             "cvss_version": v.cvss_version,
             "nvd_severity": v.nvd_severity,
             "epss_score": v.epss_score,
@@ -263,10 +270,13 @@ async def update_vuln_remediation(
     status_val = body.get("status")
     if not status_val:
         raise HTTPException(status_code=400, detail="status is required")
+    if status_val not in _VALID_REMEDIATION_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {', '.join(sorted(_VALID_REMEDIATION_STATUSES))}")
 
-    await repo.update_remediation(
-        session, vuln_id, status_val, notes=body.get("notes")
-    )
+    kwargs = {}
+    if "notes" in body:
+        kwargs["notes"] = body["notes"]
+    await repo.update_remediation(session, vuln_id, status_val, **kwargs)
     await session.commit()
     return {"success": True}
 
@@ -282,9 +292,14 @@ async def bulk_update_remediation(
     status_val = body.get("status")
     if not vuln_ids or not status_val:
         raise HTTPException(status_code=400, detail="vuln_ids and status are required")
+    if status_val not in _VALID_REMEDIATION_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {', '.join(sorted(_VALID_REMEDIATION_STATUSES))}")
 
+    kwargs = {}
+    if "notes" in body:
+        kwargs["notes"] = body["notes"]
     count = await repo.bulk_update_remediation(
-        session, vuln_ids, status_val, notes=body.get("notes")
+        session, vuln_ids, status_val, **kwargs
     )
     await session.commit()
     return {"success": True, "updated": count}

@@ -11,7 +11,7 @@ function reportsDashboard() {
 
         async fetchSummary() {
             try {
-                const resp = await fetch('/api/reports/summary');
+                const resp = await authFetch('/api/reports/summary');
                 this.summary = await resp.json();
             } catch (e) {
                 console.error('Failed to fetch summary:', e);
@@ -20,7 +20,7 @@ function reportsDashboard() {
 
         async fetchScans() {
             try {
-                const resp = await fetch('/api/reports/scans?limit=20');
+                const resp = await authFetch('/api/reports/scans?limit=20');
                 const data = await resp.json();
                 this.scans = data.scans || [];
             } catch (e) {
@@ -46,7 +46,7 @@ function reportsHosts() {
             try {
                 let url = `/api/reports/hosts?limit=${this.pageSize}&offset=${this.offset}`;
                 if (this.filterScanId) url += `&scan_id=${encodeURIComponent(this.filterScanId)}`;
-                const resp = await fetch(url);
+                const resp = await authFetch(url);
                 const data = await resp.json();
                 this.hosts = data.hosts || [];
             } catch (e) {
@@ -93,7 +93,7 @@ function reportsVulns() {
                 if (this.filterScanId) url += `&scan_id=${encodeURIComponent(this.filterScanId)}`;
                 if (this.filterEnrichment) url += `&enrichment_status=${encodeURIComponent(this.filterEnrichment)}`;
                 if (this.sortBy) url += `&sort_by=${this.sortBy}&sort_order=${this.sortOrder}`;
-                const resp = await fetch(url);
+                const resp = await authFetch(url);
                 const data = await resp.json();
                 this.vulns = data.vulns || [];
                 this.selectedVulns = [];
@@ -124,7 +124,7 @@ function reportsVulns() {
         async bulkUpdate() {
             if (!this.bulkStatus || this.selectedVulns.length === 0) return;
             try {
-                const resp = await fetch('/api/reports/vulns/bulk-remediation', {
+                const resp = await authFetch('/api/reports/vulns/bulk-remediation', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ vuln_ids: this.selectedVulns, status: this.bulkStatus })
@@ -168,7 +168,7 @@ function reportsAudit() {
                 let url = `/api/reports/audit?limit=${this.pageSize}&offset=${this.offset}`;
                 if (this.filterAction) url += `&action=${encodeURIComponent(this.filterAction)}`;
                 if (this.filterUser) url += `&audit_user=${encodeURIComponent(this.filterUser)}`;
-                const resp = await fetch(url);
+                const resp = await authFetch(url);
                 const data = await resp.json();
                 this.entries = data.entries || [];
             } catch (e) {
