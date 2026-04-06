@@ -2012,7 +2012,8 @@ def send_gmp(sock, xml_str, end_tag=None):
                     "create_task_response", "start_task_response",
                     "get_tasks_response", "get_reports_response",
                     "delete_target_response", "delete_task_response",
-                    "delete_config_response", "get_port_lists_response"]
+                    "delete_config_response", "get_port_lists_response",
+                    "get_scanners_response"]
     while True:
         try:
             chunk = sock.recv(131072)
@@ -2431,6 +2432,28 @@ try:
         sys.exit(1)
     print("STATUS: Authenticated with GVM", flush=True)
 
+    # Find the OpenVAS scanner (type 2) — required for network scanning.
+    # Without explicit scanner_id, gvmd may use the CVE scanner (type 3)
+    # which only does local CVE matching and never sends network probes,
+    # causing scans to stay at 0% forever.
+    scanner_id = ""
+    resp = send_gmp(sock, '<get_scanners/>')
+    try:
+        root = ET.fromstring(resp)
+        for sc in root.findall("scanner"):
+            sc_type = sc.findtext("type", "")
+            sc_name = sc.findtext("name", "")
+            sc_id = sc.attrib.get("id", "")
+            print(f"STATUS: Found scanner: {{sc_name}} (type={{sc_type}}, id={{sc_id}})", flush=True)
+            if sc_type == "2":  # type 2 = OpenVAS scanner (connected via ospd-openvas)
+                scanner_id = sc_id
+        if scanner_id:
+            print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
+        else:
+            print("STATUS: WARNING — No OpenVAS scanner (type 2) found, task may not scan", flush=True)
+    except ET.ParseError:
+        print("STATUS: WARNING — Could not parse scanner list", flush=True)
+
     # Find a valid port list — use profile-based preference, verify against GVM
     preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, "")
     port_list_id = preferred_id
@@ -2471,9 +2494,9 @@ try:
         sys.exit(1)
     print(f"STATUS: Created target {{target_id}}", flush=True)
 
-    # Create task
+    # Create task — include scanner_id to ensure OpenVAS (not CVE) scanner is used
     task_name = f"scan-{{SCAN_ID}}-task"
-    create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/></create_task>'
+    create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/><scanner id="{{scanner_id}}"/></create_task>' if scanner_id else f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/></create_task>'
     resp = send_gmp(sock, create_task)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
@@ -2573,6 +2596,27 @@ try:
         sys.exit(1)
     print("STATUS: Authenticated with GVM", flush=True)
 
+    # Find the OpenVAS scanner (type 2) — required for network scanning.
+    # Without explicit scanner_id, gvmd may use the CVE scanner (type 3)
+    # which only does local CVE matching and never sends network probes.
+    scanner_id = ""
+    resp = send_gmp(sock, '<get_scanners/>')
+    try:
+        root = ET.fromstring(resp)
+        for sc in root.findall("scanner"):
+            sc_type = sc.findtext("type", "")
+            sc_name = sc.findtext("name", "")
+            sc_id = sc.attrib.get("id", "")
+            print(f"STATUS: Found scanner: {{sc_name}} (type={{sc_type}}, id={{sc_id}})", flush=True)
+            if sc_type == "2":
+                scanner_id = sc_id
+        if scanner_id:
+            print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
+        else:
+            print("STATUS: WARNING — No OpenVAS scanner (type 2) found, task may not scan", flush=True)
+    except ET.ParseError:
+        print("STATUS: WARNING — Could not parse scanner list", flush=True)
+
     # Find a valid port list — use profile-based preference, verify against GVM
     preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, PORT_LISTS["all_tcp"])
     port_list_id = preferred_id
@@ -2635,9 +2679,9 @@ try:
         sys.exit(1)
     print(f"STATUS: Created target {{target_id}}", flush=True)
 
-    # Create task with custom config
+    # Create task with custom config — include scanner_id to ensure OpenVAS scanner is used
     task_name = f"scan-{{SCAN_ID}}-task"
-    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
+    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/><scanner id="{{scanner_id}}"/></create_task>\' if scanner_id else f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
     resp = send_gmp(sock, create_task)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
