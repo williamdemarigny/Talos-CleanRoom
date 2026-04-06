@@ -54,6 +54,7 @@ class ScanState(BaseModel):
     openvas_config: Optional[str] = None
     openvas_families: Optional[List[str]] = None
     nmap_scripts: Optional[str] = None
+    lab_env_id: Optional[str] = None
     tools: List[ScanToolState] = []
     status: ScanStatus = ScanStatus.IDLE
     started_at: Optional[datetime] = None
@@ -145,6 +146,7 @@ class ScanRequest(BaseModel):
     openvas_config: Optional[str] = None
     openvas_families: Optional[List[str]] = None
     nmap_scripts: Optional[str] = None
+    lab_env_id: Optional[str] = None
 
     @field_validator("target")
     @classmethod

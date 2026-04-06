@@ -296,6 +296,7 @@ function targetLab() {
             const env = this.catalog.find(e => e.env_id === envId);
             const params = new URLSearchParams();
             params.set('target', endpoint);
+            params.set('lab_env_id', envId);
 
             if (env && env.recommended_scan) {
                 const recipe = env.recommended_scan;

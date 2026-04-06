@@ -292,9 +292,10 @@ VULHUB_CATALOG: dict[str, dict] = {
         "tier": "tier2",
         "recommended_scan": {
             "tools": ["nmap", "metasploit"],
-            "profile": "custom",
+            "profile": "standard",
             "nmap_scripts": "smb-os-discovery,smb-protocols,smb-vuln-*",
             "msf_modules": [
+                "exploit/linux/samba/is_known_pipename",
                 "auxiliary/scanner/smb/smb_ms17_010",
                 "auxiliary/scanner/smb/smb_version",
                 "auxiliary/scanner/smb/smb_enumshares",

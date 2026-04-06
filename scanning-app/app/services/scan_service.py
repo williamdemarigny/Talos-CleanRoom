@@ -102,7 +102,7 @@ OPENVAS_TIMEOUTS = {
     ScanProfile.CUSTOM: 50400,      # 14h — custom family scans may be thorough
 }
 METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
-METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (11 vuln modules)
+METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (12 vuln modules)
 METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln modules)
 FARADAY_UPLOAD_TIMEOUT = 300   # 5 min for Faraday upload (one API call per result)
 
@@ -139,6 +139,10 @@ MSF_MODULE_CATALOG = [
     # explicit port (e.g. host:8983), RPORT is only overridden for modules whose
     # default_port matches the target port, or for HTTP modules (no default_port)
     # which accept whatever port the user specifies.
+    # cve_id: authoritative CVE for this module — used as external_id when the
+    #   db_export XML or console output doesn't contain CVE refs.
+    # check_only: if True, use "check" instead of "run" (for exploit modules
+    #   that support safe vulnerability verification without exploitation).
     {
         "id": "auxiliary/scanner/smb/smb_ms17_010",
         "name": "EternalBlue (MS17-010)",
@@ -146,6 +150,7 @@ MSF_MODULE_CATALOG = [
         "description": "SMB Remote Code Execution check",
         "profiles": ["standard", "thorough"],
         "default_port": 445,
+        "cve_id": "CVE-2017-0144",
     },
     {
         "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
@@ -154,6 +159,7 @@ MSF_MODULE_CATALOG = [
         "description": "RDP Remote Code Execution check",
         "profiles": ["standard", "thorough"],
         "default_port": 3389,
+        "cve_id": "CVE-2019-0708",
     },
     {
         "id": "auxiliary/scanner/ssl/openssl_heartbleed",
@@ -162,6 +168,7 @@ MSF_MODULE_CATALOG = [
         "description": "OpenSSL memory disclosure",
         "profiles": ["standard", "thorough"],
         "default_port": 443,
+        "cve_id": "CVE-2014-0160",
     },
     {
         "id": "auxiliary/scanner/http/log4shell_scanner",
@@ -170,6 +177,7 @@ MSF_MODULE_CATALOG = [
         "description": "Apache Log4j Remote Code Execution",
         "profiles": ["standard", "thorough"],
         "needs_srvhost": True,  # scanner sends JNDI payload; target calls back to SRVHOST
+        "cve_id": "CVE-2021-44228",
     },
     {
         "id": "auxiliary/scanner/http/apache_mod_cgi_bash_env",
@@ -177,6 +185,7 @@ MSF_MODULE_CATALOG = [
         "category": "Critical CVEs",
         "description": "Bash environment variable injection via CGI",
         "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2014-6271",
     },
     {
         "id": "auxiliary/scanner/http/ms15_034_http_sys_memory_dump",
@@ -184,6 +193,17 @@ MSF_MODULE_CATALOG = [
         "category": "Critical CVEs",
         "description": "IIS HTTP.sys memory disclosure",
         "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2015-1635",
+    },
+    {
+        "id": "exploit/linux/samba/is_known_pipename",
+        "name": "SambaCry (CVE-2017-7494)",
+        "category": "Critical CVEs",
+        "description": "Samba Remote Code Execution via writable share",
+        "profiles": ["standard", "thorough"],
+        "default_port": 445,
+        "cve_id": "CVE-2017-7494",
+        "check_only": True,  # safe check mode — verifies vuln without exploitation
     },
     # --- Service Detection (included in standard + thorough) ---
     {
@@ -259,6 +279,7 @@ MSF_MODULE_CATALOG = [
         "description": "libssh server-side authentication bypass",
         "profiles": ["thorough"],
         "default_port": 2222,
+        "cve_id": "CVE-2018-10933",
     },
     {
         "id": "auxiliary/scanner/ssh/ssh_enumusers",
@@ -385,6 +406,7 @@ MSF_MODULE_CATALOG = [
         "description": "MySQL/MariaDB authentication bypass via timing attack — dumps hashes on success",
         "profiles": ["standard", "thorough"],
         "default_port": 3306,
+        "cve_id": "CVE-2012-2122",
     },
     {
         "id": "auxiliary/scanner/postgres/postgres_version",
@@ -469,6 +491,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional CVEs",
         "description": "Exchange Server SSRF to RCE",
         "profiles": [],
+        "cve_id": "CVE-2021-26855",
     },
     {
         "id": "auxiliary/scanner/http/apache_normalize_path",
@@ -476,6 +499,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional CVEs",
         "description": "Apache HTTP Server path traversal",
         "profiles": [],
+        "cve_id": "CVE-2021-41773",
     },
     {
         "id": "auxiliary/scanner/http/citrix_dir_traversal",
@@ -483,6 +507,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional CVEs",
         "description": "Citrix ADC/Gateway directory traversal",
         "profiles": [],
+        "cve_id": "CVE-2019-19781",
     },
     {
         "id": "auxiliary/scanner/http/apache_optionsbleed",
@@ -490,6 +515,7 @@ MSF_MODULE_CATALOG = [
         "category": "Additional CVEs",
         "description": "Apache OPTIONS memory leak",
         "profiles": [],
+        "cve_id": "CVE-2017-9798",
     },
     {
         "id": "auxiliary/scanner/vmware/vmauthd_version",
@@ -841,6 +867,22 @@ MSF_MODULE_CATALOG = [
     },
 ]
 
+# Build module ID → CVE lookup from catalog entries that have cve_id.
+# Used during result persistence: if db_export XML or console output lacks
+# CVE refs, we fall back to this mapping so enrichment can still run.
+_MSF_MODULE_CVE_MAP = {
+    m["id"]: m["cve_id"]
+    for m in MSF_MODULE_CATALOG
+    if m.get("cve_id")
+}
+# Also index by short module name (last path segment, e.g. "smb_ms17_010")
+# because console findings use module_name.split("/")[-1] as the vuln name.
+_MSF_MODULE_CVE_MAP_SHORT = {
+    m["id"].rsplit("/", 1)[-1]: m["cve_id"]
+    for m in MSF_MODULE_CATALOG
+    if m.get("cve_id")
+}
+
 
 @dataclass
 class ScanService(BaseServiceMixin):
@@ -1095,6 +1137,7 @@ except Exception as e:
             openvas_config=request.openvas_config,
             openvas_families=request.openvas_families,
             nmap_scripts=request.nmap_scripts,
+            lab_env_id=request.lab_env_id,
             status=ScanStatus.RUNNING,
             started_at=datetime.utcnow(),
             tools=[
@@ -1221,6 +1264,7 @@ except Exception as e:
                             custom_modules=scan.custom_modules,
                             openvas_config=scan.openvas_config,
                             openvas_families=scan.openvas_families,
+                            lab_env_id=scan.lab_env_id,
                         )
                     await self.log(None, "info", "Scan recorded in database")
                 else:
@@ -1393,6 +1437,9 @@ except Exception as e:
                             )
                 except Exception as db_err:
                     await self.log(None, "warn", f"Failed to persist scan completion to database: {db_err}")
+
+                # Correlate with lab catalog expected CVEs (before enrichment)
+                await self._correlate_lab_findings(scan.id)
 
                 # Trigger background vulnerability enrichment (NVD/EPSS)
                 try:
@@ -2701,9 +2748,11 @@ except Exception as e:
             if isinstance(mod_entry, dict):
                 mod_id = mod_entry["id"]
                 default_port = mod_entry.get("default_port")
+                check_only = mod_entry.get("check_only", False)
             else:
                 mod_id = mod_entry
                 default_port = None
+                check_only = False
             lines.append(f"use {mod_id}")
             lines.append(f"set RHOSTS {msf_host}")
             if msf_port:
@@ -2716,7 +2765,9 @@ except Exception as e:
             if extra_opts:
                 for k, v in extra_opts.items():
                     lines.append(f"set {k} {v}")
-            lines.append(f"run")
+            # exploit modules with check_only use "check" to verify vulnerability
+            # without exploitation; auxiliary modules use "run"
+            lines.append("check" if check_only else "run")
             lines.append(f"back")
 
         # Select modules from catalog based on profile
@@ -3608,6 +3659,138 @@ except Exception as e:
                        f"Database: persisted {hosts} host(s), "
                        f"{services} service(s), {vulns} vuln(s)")
 
+    # ── Lab catalog correlation ──────────────────────────────────────
+
+    async def _correlate_lab_findings(self, scan_id: str):
+        """Cross-reference scan results with the Vulhub catalog's expected CVEs.
+
+        If the scan was launched against a known lab target (lab_env_id is set):
+        1. Checks whether scanners detected the expected CVE.
+        2. If detected — tags the finding as 'lab_expected'.
+        3. If NOT detected — creates a catalog-sourced finding with the CVE
+           so enrichment can fetch CVSS/EPSS data.
+        4. Logs lab coverage status.
+        """
+        env_id = self.current_scan.lab_env_id
+        if not env_id:
+            return
+
+        from app.services.vulhub_catalog import VULHUB_CATALOG
+        catalog_entry = VULHUB_CATALOG.get(env_id)
+        if not catalog_entry or "cve" not in catalog_entry:
+            return
+
+        expected_cve = catalog_entry["cve"]
+        catalog_name = catalog_entry.get("name", expected_cve)
+        catalog_desc = catalog_entry.get("description", "")
+        catalog_category = catalog_entry.get("category", "")
+
+        # Map catalog difficulty to severity
+        difficulty = catalog_entry.get("difficulty", "medium")
+        severity_map = {"easy": "high", "medium": "medium", "hard": "low"}
+        severity = severity_map.get(difficulty, "medium")
+
+        await self.log(None, "info", "")
+        await self.log(None, "info", f"=== Lab Coverage Check ({catalog_name}) ===")
+        await self.log(None, "info", f"Expected CVE: {expected_cve}")
+
+        try:
+            if db_engine._session_factory is None:
+                await self.log(None, "warn", "Database not available — skipping lab correlation")
+                return
+
+            from sqlalchemy import select
+            from app.db.models import Vulnerability, Host, Service
+
+            async with db_engine._session_factory() as session:
+                # Check if any scanner found this CVE
+                result = await session.execute(
+                    select(Vulnerability).where(
+                        Vulnerability.scan_id == scan_id,
+                        Vulnerability.external_id == expected_cve,
+                    )
+                )
+                detected_vulns = list(result.scalars().all())
+
+                if detected_vulns:
+                    # CVE was detected — tag it
+                    for v in detected_vulns:
+                        tags = list(v.tags) if v.tags else []
+                        if "lab_expected" not in tags:
+                            tags.append("lab_expected")
+                            v.tags = tags
+                    await session.commit()
+                    await self.log(None, "info",
+                                   f"Lab coverage: DETECTED — {expected_cve} found by "
+                                   f"{detected_vulns[0].tool_source or 'scanner'} "
+                                   f"({len(detected_vulns)} finding(s))")
+                else:
+                    # CVE not detected — create a catalog-sourced finding
+                    # Find the host from this scan
+                    host_result = await session.execute(
+                        select(Host).where(Host.scan_id == scan_id).limit(1)
+                    )
+                    host_row = host_result.scalar_one_or_none()
+                    if not host_row:
+                        await self.log(None, "warn",
+                                       "Lab correlation: no host found in scan results — "
+                                       "cannot create expected finding")
+                        return
+
+                    # Find a relevant service on the expected port(s)
+                    service_id = None
+                    expected_ports = catalog_entry.get("ports", [])
+                    if expected_ports:
+                        svc_result = await session.execute(
+                            select(Service).where(
+                                Service.host_id == host_row.id,
+                                Service.port.in_(expected_ports),
+                            ).limit(1)
+                        )
+                        svc_row = svc_result.scalar_one_or_none()
+                        if svc_row:
+                            service_id = svc_row.id
+                    if service_id is None:
+                        # Fall back to any service on this host
+                        svc_result = await session.execute(
+                            select(Service).where(
+                                Service.host_id == host_row.id
+                            ).limit(1)
+                        )
+                        svc_row = svc_result.scalar_one_or_none()
+                        if svc_row:
+                            service_id = svc_row.id
+
+                    await result_store.persist_vulnerability(
+                        session,
+                        scan_id=scan_id,
+                        host_id=host_row.id,
+                        service_id=service_id,
+                        name=catalog_name,
+                        severity=severity,
+                        description=(
+                            f"{catalog_desc}\n\n"
+                            f"[Expected vulnerability from lab catalog — "
+                            f"not detected by scanners]"
+                        ),
+                        refs=[expected_cve],
+                        external_id=expected_cve,
+                        tool_source="lab_expected",
+                        tags=["lab_expected", "not_detected"],
+                        enrichment_status="pending",
+                    )
+
+                    await self.log(None, "warn",
+                                   f"Lab coverage: NOT DETECTED — {expected_cve} was not found "
+                                   f"by scanners. Catalog finding created for enrichment.")
+                    await self.log(None, "info",
+                                   f"Category: {catalog_category} | Severity: {severity} | "
+                                   f"Enrichment will fetch CVSS/EPSS data")
+
+        except Exception as err:
+            logger.error("Lab correlation failed for scan %s: %s", scan_id, err)
+            await self.log(None, "warn", f"Lab correlation failed: {err}")
+
     async def _persist_tool_results(self, xml_content: str, tool_name: str, scan_id: str):
         """Dispatch XML persistence to the appropriate tool-specific parser."""
         if tool_name == "nmap":
@@ -4007,6 +4190,17 @@ except Exception as e:
 
                     external_id = cves[0] if cves else None  # already uppercased above
 
+                    # Fall back to catalog CVE mapping when XML refs lack CVE IDs.
+                    # The vuln name in db_export is typically the MSF module path or
+                    # short name, so we check both full and short lookups.
+                    if not external_id:
+                        external_id = (
+                            _MSF_MODULE_CVE_MAP.get(vuln_name)
+                            or _MSF_MODULE_CVE_MAP_SHORT.get(vuln_name)
+                        )
+                        if external_id and not cves:
+                            cves = [external_id]
+
                     # Build description from name + refs (db_export has no <info> element)
                     desc_parts = [vuln_name]
                     if refs:
@@ -4059,6 +4253,17 @@ except Exception as e:
 
                     severity = "high"  # [+] findings are positive hits
                     external_id = cves[0] if cves else None
+
+                    # Fall back to catalog CVE mapping when console output
+                    # doesn't contain CVE refs
+                    if not external_id:
+                        external_id = (
+                            _MSF_MODULE_CVE_MAP.get(module_name)
+                            or _MSF_MODULE_CVE_MAP_SHORT.get(module_name.rsplit("/", 1)[-1])
+                        )
+                        if external_id and not cves:
+                            cves = [external_id]
+
                     extra_fields = {}
                     if external_id:
                         extra_fields["enrichment_status"] = "pending"
