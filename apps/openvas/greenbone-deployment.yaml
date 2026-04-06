@@ -403,8 +403,8 @@ spec:
 
       # 4. OSPD-OpenVAS (Scanner Protocol Daemon)
       - name: ospd-openvas
-        image: registry.community.greenbone.net/community/ospd-openvas:stable
-        imagePullPolicy: Always
+        image: harbor.knowledgeondemand.net/cleanroom/ospd-openvas:stable
+        imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c"]
         args:
           - |
