@@ -319,7 +319,15 @@ for entry in "${IMAGES[@]}"; do
                     IMAGE_OK=true
                     break 2  # break both loops
                 else
-                    echo "    FAILED push (attempt ${attempt}/3)"
+                    echo "    FAILED push (attempt ${attempt}/3) — trying buildx manifest copy"
+                    if docker buildx imagetools create --tag "$DST" "$SRC" 2>&1; then
+                        echo "    OK via buildx (from ${registry})"
+                        SUCCEEDED=$((SUCCEEDED + 1))
+                        IMAGE_OK=true
+                        break 2
+                    else
+                        echo "    FAILED buildx push (attempt ${attempt}/3)"
+                    fi
                 fi
             else
                 # Show the actual error from Docker for diagnostics
@@ -359,6 +367,14 @@ for entry in "${IMAGES[@]}"; do
                         SUCCEEDED=$((SUCCEEDED + 1))
                         IMAGE_OK=true
                         break
+                    else
+                        echo "    FAILED fallback push — trying buildx manifest copy"
+                        if docker buildx imagetools create --tag "$DST" "$FALLBACK_SRC" 2>&1; then
+                            echo "    OK via buildx fallback (${FALLBACK_TAG})"
+                            SUCCEEDED=$((SUCCEEDED + 1))
+                            IMAGE_OK=true
+                            break
+                        fi
                     fi
                 else
                     LAST_LINE=$(echo "$PULL_OUTPUT" | tail -1)
@@ -402,3 +418,7 @@ fi
 echo ""
 echo "  Mirrored images: ${DEST_REGISTRY}/<name>:<tag>"
 echo ""
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+    exit 1
+fi
