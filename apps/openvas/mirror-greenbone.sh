@@ -56,9 +56,12 @@ done
 # Greenbone images mirrored to Harbor.
 # Format: "source_name:source_tag:dest_name:dest_tag"
 #
-# NOT mirrored (kept on Greenbone registry in the deployment manifest):
-#   - gpg-data         — only exists on Greenbone registry, not on Docker Hub or GHCR
-#   - openvas-scanner  — persistent CDN issues on all mirrors; K8s retries handle it
+# ALL Greenbone images are mirrored — the upstream CDN is unreliable.
+# The deployment manifest references Harbor exclusively.
+#
+# NOTE: The :stable tag on the Greenbone registry has known corrupted blobs.
+# For ospd-openvas and openvas-scanner, we pull specific version tags and
+# tag them as :stable in Harbor. Update the version tags below when upgrading.
 #
 IMAGES=(
     # Feed / data init containers (no upstream tag = latest)
@@ -70,12 +73,19 @@ IMAGES=(
     "data-objects::data-objects:latest"
     "report-formats::report-formats:latest"
     "redis-server::redis-server:latest"
-    # Service containers (:stable upstream)
+    "gpg-data::gpg-data:latest"
+    # Service containers (:stable upstream, or pinned version if :stable is broken)
     "pg-gvm:stable:pg-gvm:stable"
     "gvmd:stable:gvmd:stable"
-    "ospd-openvas:stable:ospd-openvas:stable"
     "gsa:stable:gsa:stable"
+    "openvas-scanner:stable:openvas-scanner:stable"
+    "ospd-openvas:stable:ospd-openvas:stable"
 )
+
+# Fallback version tags — used when the :stable tag has corrupted layers.
+# skopeo in-cluster mirror uses these directly (see mirror-greenbone-incluster.sh).
+OSPD_OPENVAS_VERSION="v22.9.1-amd64"
+OPENVAS_SCANNER_VERSION="v23.41.3-amd64"
 
 PULL_SECRET_NAMESPACES=("openvas")
 
@@ -321,8 +331,45 @@ for entry in "${IMAGES[@]}"; do
         echo "    exhausted retries for ${registry}"
     done
 
+    # Fallback: if :stable tag failed, try pinned version tag (avoids corrupted layers)
     if ! $IMAGE_OK; then
-        echo "    FAILED from all sources"
+        FALLBACK_TAG=""
+        case "$src_name" in
+            ospd-openvas)    FALLBACK_TAG="$OSPD_OPENVAS_VERSION" ;;
+            openvas-scanner) FALLBACK_TAG="$OPENVAS_SCANNER_VERSION" ;;
+        esac
+
+        if [ -n "$FALLBACK_TAG" ]; then
+            echo "    trying fallback version tag: ${FALLBACK_TAG}"
+            FALLBACK_SRC="${SOURCE_REGISTRIES[0]}/${src_name}:${FALLBACK_TAG}"
+            echo "    trying: ${FALLBACK_SRC}"
+
+            for attempt in 1 2 3; do
+                if [ $attempt -gt 1 ]; then
+                    WAIT=$((attempt * 15))
+                    echo "    fallback retry ${attempt}/3 after ${WAIT}s..."
+                    sleep $WAIT
+                fi
+
+                PULL_OUTPUT=$(docker pull "$FALLBACK_SRC" 2>&1) && PULL_OK=true || PULL_OK=false
+                if $PULL_OK; then
+                    docker tag "$FALLBACK_SRC" "$DST"
+                    if docker push "$DST" 2>&1; then
+                        echo "    OK (from fallback ${FALLBACK_TAG})"
+                        SUCCEEDED=$((SUCCEEDED + 1))
+                        IMAGE_OK=true
+                        break
+                    fi
+                else
+                    LAST_LINE=$(echo "$PULL_OUTPUT" | tail -1)
+                    echo "    FAILED fallback pull (attempt ${attempt}/3): ${LAST_LINE}"
+                fi
+            done
+        fi
+    fi
+
+    if ! $IMAGE_OK; then
+        echo "    FAILED from all sources (including fallback)"
         FAILED+=("$dest_name:$dest_tag")
     fi
 done
@@ -343,9 +390,11 @@ if [ ${#FAILED[@]} -gt 0 ]; then
         echo "    - ${f}"
     done
     echo ""
-    echo "  WARNING: Failed images will pull from the Greenbone registry directly."
-    echo "  The deployment manifest uses the original registry as fallback for these."
-    echo "  Re-run this script later to retry mirroring when the upstream recovers."
+    echo "  ERROR: Failed images will prevent OpenVAS from starting."
+    echo "  The deployment manifest references Harbor exclusively — there is no"
+    echo "  upstream fallback. Re-run this script (or with --force) to retry."
+    echo "  If :stable tags are broken upstream, update the pinned version variables"
+    echo "  (OSPD_OPENVAS_VERSION, OPENVAS_SCANNER_VERSION) at the top of this script."
 else
     echo "  Failed:    0"
 fi
