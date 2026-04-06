@@ -36,6 +36,7 @@ async def persist_scan_start(
     custom_modules: Optional[list] = None,
     openvas_config: Optional[str] = None,
     openvas_families: Optional[list] = None,
+    lab_env_id: Optional[str] = None,
 ) -> Scan:
     """Create a scan row when a scan starts."""
     scan = await repo.create_scan(
@@ -52,6 +53,7 @@ async def persist_scan_start(
         custom_modules=custom_modules,
         openvas_config=openvas_config,
         openvas_families=openvas_families,
+        lab_env_id=lab_env_id,
     )
     await session.commit()
     return scan

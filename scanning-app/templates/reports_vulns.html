@@ -178,7 +178,15 @@
                                     <span class="text-gray-500">-</span>
                                 </template>
                             </td>
-                            <td class="py-3 text-gray-400 capitalize" x-text="v.tool_source || '-'"></td>
+                            <td class="py-3">
+                                <template x-if="v.tool_source === 'lab_expected'">
+                                    <span class="px-2 py-0.5 rounded text-xs bg-amber-600/30 text-amber-300"
+                                          title="Expected from lab catalog — not detected by scanners">Lab Expected</span>
+                                </template>
+                                <template x-if="v.tool_source !== 'lab_expected'">
+                                    <span class="text-gray-400 capitalize" x-text="v.tool_source || '-'"></span>
+                                </template>
+                            </td>
                             <td class="py-3">
                                 <span class="px-2 py-1 rounded text-xs"
                                       :class="{

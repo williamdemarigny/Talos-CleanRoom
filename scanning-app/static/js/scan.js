@@ -21,6 +21,9 @@ function scanManager() {
         openvasCustomMode: 'preset',
         openvasDataLoaded: false,
 
+        // Lab target context (set when launched from Target Lab)
+        labEnvId: null,
+
         // Scan state
         status: 'idle',
         scanTarget: '',
@@ -167,6 +170,9 @@ function scanManager() {
             if (params.get('nmap_scripts')) {
                 this.nmapScripts = params.get('nmap_scripts');
             }
+            if (params.get('lab_env_id')) {
+                this.labEnvId = params.get('lab_env_id');
+            }
 
             await this.fetchStatus();
             await this.fetchHistory();
@@ -287,6 +293,9 @@ function scanManager() {
             };
             if (this.nmapScripts) {
                 payload.nmap_scripts = this.nmapScripts;
+            }
+            if (this.labEnvId) {
+                payload.lab_env_id = this.labEnvId;
             }
             if (this.profile === 'custom' && this.customModules.length > 0) {
                 payload.custom_modules = this.customModules;

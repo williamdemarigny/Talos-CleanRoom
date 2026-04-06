@@ -71,6 +71,7 @@ async def get_scan_detail(
         "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
         "error_message": scan.error_message,
         "tools_json": scan.tools_json,
+        "lab_env_id": scan.lab_env_id,
         "hosts": [
             {
                 "id": h.id,

@@ -35,6 +35,7 @@ class Scan(Base):
     custom_modules = Column(JSONB, nullable=True)
     openvas_config = Column(String, nullable=True)
     openvas_families = Column(JSONB, nullable=True)
+    lab_env_id = Column(String, nullable=True)  # Vulhub catalog env_id (e.g. "bind9-tsig")
 
     hosts = relationship("Host", back_populates="scan", cascade="all, delete-orphan")
     vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")
