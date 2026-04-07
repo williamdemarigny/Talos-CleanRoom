@@ -32,3 +32,12 @@ metadata:
     kubernetes.io/metadata.name: loki-scanner
     app.kubernetes.io/name: loki-scanner
     app.kubernetes.io/managed-by: scanning-console
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wpscan-scanner
+  labels:
+    kubernetes.io/metadata.name: wpscan-scanner
+    app.kubernetes.io/name: wpscan-scanner
+    app.kubernetes.io/managed-by: scanning-console
