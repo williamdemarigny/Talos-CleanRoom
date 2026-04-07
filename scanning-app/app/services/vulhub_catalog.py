@@ -137,7 +137,7 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier3",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "openvas", "wpscan"],
             "profile": "standard",
             "nmap_scripts": "http-wordpress-enum,http-wordpress-users",
         },

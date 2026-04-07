@@ -63,6 +63,16 @@
                         <p class="text-xs text-gray-400 mt-1">Vulnerability scanning with auxiliary modules (EternalBlue, BlueKeep, Heartbleed, etc).</p>
                     </div>
                 </label>
+
+                <!-- WPScan -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('wpscan') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="wpscan" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">WPScan</span>
+                        <p class="text-xs text-gray-400 mt-1">WordPress vulnerability scanner. Plugin, theme & core version detection with CVE matching.</p>
+                    </div>
+                </label>
             </div>
         </div>
 
