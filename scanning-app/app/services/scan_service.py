@@ -1627,11 +1627,12 @@ except Exception as e:
     async def _run_openvas_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
         """Run an OpenVAS scan via GMP protocol inside the gvmd container."""
         # OpenVAS GMP <hosts> element accepts only hostnames/IPs, not host:port.
-        # Extract port if present — OpenVAS scans use port lists, not target ports.
+        # Extract port if present — when set, a custom port list is created with
+        # just that port instead of scanning the entire profile port range.
         ov_host, ov_port = self._parse_target(target)
         if ov_port:
             await self.log("openvas", "info",
-                f"Target includes port {ov_port} — OpenVAS will scan {ov_host} using profile port list")
+                f"Target includes port {ov_port} — OpenVAS will create a focused port list for {ov_host}:{ov_port}")
         target = ov_host  # Pass only host to GMP scripts
 
         scan_id = self.current_scan.id
@@ -1663,9 +1664,9 @@ except Exception as e:
         # Python GMP script that runs inside the gvmd container
         # Uses stdlib only: socket + xml.etree.ElementTree
         if use_custom_families:
-            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families, profile)
+            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families, profile, target_port=ov_port)
         else:
-            gmp_script = self._build_gmp_script(scan_id, target, config_id, profile)
+            gmp_script = self._build_gmp_script(scan_id, target, config_id, profile, target_port=ov_port)
 
         if use_custom_families:
             await self.log("openvas", "info", f"Creating custom config with {len(openvas_families)} NVT families for {target}...")
@@ -1693,10 +1694,11 @@ except Exception as e:
                            f"GMP script exited with code {result.return_code} — last output:\n{last_lines}")
             # Still try to extract results in case the script wrote the report before dying
 
-        # Parse task_id, target_id, and report_id from output (needed for recovery)
+        # Parse task_id, target_id, port_list_id, and report_id from output (needed for recovery/cleanup)
         gmp_task_id = ""
         gmp_target_id = ""
         gmp_report_id = ""
+        gmp_port_list_id = ""
         for line in output.split("\n"):
             line = line.strip()
             if "Created target " in line:
@@ -1714,6 +1716,11 @@ except Exception as e:
                 parts = line.split("(report ")
                 if len(parts) >= 2:
                     gmp_report_id = parts[-1].rstrip(")")
+            elif "Created custom port list for port " in line:
+                # STATUS: Created custom port list for port 80 (<uuid>)
+                parts = line.split("(")
+                if len(parts) >= 2:
+                    gmp_port_list_id = parts[-1].rstrip(")")
 
         # Parse status lines from the script
         if "SCAN:FAILED" in output:
@@ -1784,7 +1791,7 @@ except Exception as e:
                             ts.findings_count = result_count
                             break
                     # Report successfully transferred — now safe to clean up GVM
-                    await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password)
+                    await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password, gmp_port_list_id)
                     return xml_content
                 except Exception as decode_err:
                     await self.log("openvas", "error", f"Failed to decode report: {decode_err}")
@@ -1805,7 +1812,7 @@ except Exception as e:
                 if ts.tool == ScanTool.OPENVAS:
                     ts.findings_count = result_count
                     break
-            await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password)
+            await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password, gmp_port_list_id)
             return xml_content
 
         output_len = len(output)
@@ -1838,13 +1845,13 @@ except Exception as e:
         return None
 
     async def _cleanup_gvm_task(self, task_id: str, target_id: str,
-                                openvas_password: str):
-        """Delete a scan task and target from GVM after the report has been transferred.
+                                openvas_password: str, port_list_id: str = ""):
+        """Delete a scan task, target, and custom port list from GVM after report transfer.
 
         Runs a short GMP script via kubectl exec. Failures are non-fatal — orphaned
         tasks/targets in GVM are harmless and can be cleaned up manually.
         """
-        if not task_id and not target_id:
+        if not task_id and not target_id and not port_list_id:
             return
 
         delete_cmds = []
@@ -1852,6 +1859,8 @@ except Exception as e:
             delete_cmds.append(f'send_gmp(sock, \'<delete_task task_id="{task_id}" ultimate="1"/>\')')
         if target_id:
             delete_cmds.append(f'send_gmp(sock, \'<delete_target target_id="{target_id}" ultimate="1"/>\')')
+        if port_list_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_port_list port_list_id="{port_list_id}" ultimate="1"/>\')')
         delete_block = "\n    ".join(delete_cmds)
 
         cleanup_script = f'''
@@ -2013,7 +2022,8 @@ def send_gmp(sock, xml_str, end_tag=None):
                     "get_tasks_response", "get_reports_response",
                     "delete_target_response", "delete_task_response",
                     "delete_config_response", "get_port_lists_response",
-                    "get_scanners_response"]
+                    "get_scanners_response", "create_port_list_response",
+                    "delete_port_list_response"]
     while True:
         try:
             chunk = sock.recv(131072)
@@ -2182,6 +2192,10 @@ def reconnect_gmp(old_sock, password, max_retries=3):
                         scan_done = True
                         break
                     print(f"SCAN:FAILED:Task ended with status {task_status}", flush=True)
+                    sys.exit(1)
+                # Early abort if stuck at 0% for 10 minutes (likely scanner issue)
+                if progress_int <= 0 and result_count == 0 and stale_count >= 60:  # 60 x 10s = 10 min
+                    print("SCAN:FAILED:Scan stuck at 0% for 10 minutes — OpenVAS scanner may not be functioning. Check ospd-openvas logs.", flush=True)
                     sys.exit(1)
                 if stale_count >= stale_limit:
                     elapsed_total = poll_count * 10
@@ -2388,7 +2402,8 @@ except Exception as e:
 '''
 
     def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
-                          profile: ScanProfile = ScanProfile.STANDARD) -> str:
+                          profile: ScanProfile = ScanProfile.STANDARD,
+                          target_port: int = None) -> str:
         """Build a self-contained Python GMP script for OpenVAS scanning."""
         port_list_pref = {
             ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
@@ -2411,6 +2426,7 @@ CONFIG_ID = "{config_id}"
 SCAN_ID = "{scan_id}"
 REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
 PREFERRED_PORT_LIST = "{port_list_pref}"
+TARGET_PORT = {target_port if target_port else 0}
 PORT_LISTS = {{
     "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
@@ -2450,31 +2466,54 @@ try:
         if scanner_id:
             print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
         else:
-            print("STATUS: WARNING — No OpenVAS scanner (type 2) found, task may not scan", flush=True)
+            print("SCAN:FAILED:No OpenVAS scanner (type 2) found — ospd-openvas may not be running or connected to gvmd", flush=True)
+            sys.exit(1)
     except ET.ParseError:
-        print("STATUS: WARNING — Could not parse scanner list", flush=True)
+        print("SCAN:FAILED:Could not parse scanner list — gvmd may be unavailable", flush=True)
+        sys.exit(1)
 
-    # Find a valid port list — use profile-based preference, verify against GVM
-    preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, "")
-    port_list_id = preferred_id
-    resp = send_gmp(sock, '<get_port_lists/>')
-    try:
-        root = ET.fromstring(resp)
-        available_pls = {{}}
-        for pl in root.findall("port_list"):
-            available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
-        if preferred_id and preferred_id in available_pls:
-            port_list_id = preferred_id
-            print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+    # Port list selection — when TARGET_PORT is set (e.g. lab targets), create a
+    # custom port list with just that port for a focused scan. Otherwise use the
+    # profile-based port list (all_tcp, all_tcp_udp, etc.).
+    custom_port_list_id = ""
+    if TARGET_PORT:
+        pl_name = f"scan-{{SCAN_ID}}-ports"
+        create_pl = f'<create_port_list><name>{{pl_name}}</name><port_range>T:{{TARGET_PORT}}</port_range></create_port_list>'
+        resp = send_gmp(sock, create_pl)
+        status, status_text = get_status_info(resp)
+        if status in ("200", "201"):
+            try:
+                root = ET.fromstring(resp)
+                custom_port_list_id = root.attrib.get("id", "")
+                port_list_id = custom_port_list_id
+                print(f"STATUS: Created custom port list for port {{TARGET_PORT}} ({{custom_port_list_id}})", flush=True)
+            except ET.ParseError:
+                print(f"STATUS: Warning — could not parse port list response, falling back to profile port list", flush=True)
+                custom_port_list_id = ""
         else:
-            fallback = PORT_LISTS.get("all_tcp", "")
-            if fallback in available_pls:
-                port_list_id = fallback
-            elif available_pls:
-                port_list_id = next(iter(available_pls))
-            print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
-    except ET.ParseError:
-        print(f"STATUS: Using default port list {{port_list_id}}", flush=True)
+            print(f"STATUS: Warning — create port list failed ({{status}}): {{status_text}}, falling back to profile port list", flush=True)
+
+    if not custom_port_list_id:
+        preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, "")
+        port_list_id = preferred_id
+        resp = send_gmp(sock, '<get_port_lists/>')
+        try:
+            root = ET.fromstring(resp)
+            available_pls = {{}}
+            for pl in root.findall("port_list"):
+                available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
+            if preferred_id and preferred_id in available_pls:
+                port_list_id = preferred_id
+                print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+            else:
+                fallback = PORT_LISTS.get("all_tcp", "")
+                if fallback in available_pls:
+                    port_list_id = fallback
+                elif available_pls:
+                    port_list_id = next(iter(available_pls))
+                print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
+        except ET.ParseError:
+            print(f"STATUS: Using default port list {{port_list_id}}", flush=True)
 
     # Create target — alive_tests="Consider Alive" skips host discovery probes.
     # K8s ClusterIP services only forward traffic on defined service ports, so
@@ -2496,7 +2535,7 @@ try:
 
     # Create task — include scanner_id to ensure OpenVAS (not CVE) scanner is used
     task_name = f"scan-{{SCAN_ID}}-task"
-    create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/><scanner id="{{scanner_id}}"/></create_task>' if scanner_id else f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/></create_task>'
+    create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/><scanner id="{{scanner_id}}"/></create_task>'
     resp = send_gmp(sock, create_task)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
@@ -2538,7 +2577,8 @@ except Exception as e:
 
     def _build_gmp_custom_families_script(self, scan_id: str, target: str,
                                             families: List[str],
-                                            profile: ScanProfile = ScanProfile.STANDARD) -> str:
+                                            profile: ScanProfile = ScanProfile.STANDARD,
+                                            target_port: int = None) -> str:
         """Build a GMP script that creates a custom config with selected NVT families."""
         # Build the family XML for modify_config
         family_xml_parts = []
@@ -2573,6 +2613,7 @@ REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
 BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
 # Profile-based port list preference
 PREFERRED_PORT_LIST = "{port_list_pref}"
+TARGET_PORT = {target_port if target_port else 0}
 PORT_LISTS = {{
     "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
     "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
@@ -2613,29 +2654,50 @@ try:
         if scanner_id:
             print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
         else:
-            print("STATUS: WARNING — No OpenVAS scanner (type 2) found, task may not scan", flush=True)
+            print("SCAN:FAILED:No OpenVAS scanner (type 2) found — ospd-openvas may not be running or connected to gvmd", flush=True)
+            sys.exit(1)
     except ET.ParseError:
-        print("STATUS: WARNING — Could not parse scanner list", flush=True)
+        print("SCAN:FAILED:Could not parse scanner list — gvmd may be unavailable", flush=True)
+        sys.exit(1)
 
-    # Find a valid port list — use profile-based preference, verify against GVM
-    preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, PORT_LISTS["all_tcp"])
-    port_list_id = preferred_id
-    resp = send_gmp(sock, '<get_port_lists/>')
-    try:
-        root = ET.fromstring(resp)
-        available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
-        if preferred_id in available_pls:
-            port_list_id = preferred_id
-            print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+    # Port list selection — when TARGET_PORT is set (e.g. lab targets), create a
+    # custom port list with just that port for a focused scan.
+    custom_port_list_id = ""
+    if TARGET_PORT:
+        pl_name = f"scan-{{SCAN_ID}}-ports"
+        create_pl = f\'<create_port_list><name>{{pl_name}}</name><port_range>T:{{TARGET_PORT}}</port_range></create_port_list>\'
+        resp = send_gmp(sock, create_pl)
+        status, status_text = get_status_info(resp)
+        if status in ("200", "201"):
+            try:
+                root = ET.fromstring(resp)
+                custom_port_list_id = root.attrib.get("id", "")
+                port_list_id = custom_port_list_id
+                print(f"STATUS: Created custom port list for port {{TARGET_PORT}} ({{custom_port_list_id}})", flush=True)
+            except ET.ParseError:
+                custom_port_list_id = ""
         else:
-            fallback = PORT_LISTS.get("all_tcp", "")
-            if fallback in available_pls:
-                port_list_id = fallback
-            elif available_pls:
-                port_list_id = next(iter(available_pls))
-            print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
-    except ET.ParseError:
-        pass
+            print(f"STATUS: Warning — create port list failed ({{status}}): {{status_text}}, falling back to profile port list", flush=True)
+
+    if not custom_port_list_id:
+        preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, PORT_LISTS["all_tcp"])
+        port_list_id = preferred_id
+        resp = send_gmp(sock, '<get_port_lists/>')
+        try:
+            root = ET.fromstring(resp)
+            available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
+            if preferred_id in available_pls:
+                port_list_id = preferred_id
+                print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+            else:
+                fallback = PORT_LISTS.get("all_tcp", "")
+                if fallback in available_pls:
+                    port_list_id = fallback
+                elif available_pls:
+                    port_list_id = next(iter(available_pls))
+                print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
+        except ET.ParseError:
+            pass
 
     # Create custom config by cloning base
     config_name = f"scan-{{SCAN_ID}}-custom-config"
@@ -2681,7 +2743,7 @@ try:
 
     # Create task with custom config — include scanner_id to ensure OpenVAS scanner is used
     task_name = f"scan-{{SCAN_ID}}-task"
-    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/><scanner id="{{scanner_id}}"/></create_task>\' if scanner_id else f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/></create_task>\'
+    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/><scanner id="{{scanner_id}}"/></create_task>\'
     resp = send_gmp(sock, create_task)
     status, status_text = get_status_info(resp)
     if status not in ("200", "201"):
