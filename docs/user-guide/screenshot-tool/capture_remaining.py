@@ -407,6 +407,106 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
     await page.close()
 
 
+async def capture_target_lab_mocked(context: BrowserContext, output: Path) -> None:
+    """Capture Target Lab screenshots using route interception."""
+    print("\n=== Target Lab (Mocked States) ===")
+    scan = SCANNING_URL
+
+    mock_catalog = [
+        {"env_id": "apache-cve-2021-41773", "name": "Apache 2.4.49 Path Traversal",
+         "cve": "CVE-2021-41773", "category": "web", "difficulty": "easy", "tier": "tier1",
+         "description": "Path traversal and RCE via crafted URI in Apache HTTP Server 2.4.49.",
+         "services": ["80/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "quick"}},
+        {"env_id": "log4j-cve-2021-44228", "name": "Log4Shell (Log4j RCE)",
+         "cve": "CVE-2021-44228", "category": "rce", "difficulty": "medium", "tier": "tier2",
+         "description": "Remote code execution via JNDI injection in Apache Log4j 2.x.",
+         "services": ["8080/tcp", "8983/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
+        {"env_id": "spring4shell-cve-2022-22965", "name": "Spring4Shell",
+         "cve": "CVE-2022-22965", "category": "rce", "difficulty": "medium", "tier": "tier1",
+         "description": "RCE via data binding in Spring Framework on JDK 9+.",
+         "services": ["8080/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "standard"}},
+        {"env_id": "mysql-cve-2012-2122", "name": "MySQL Auth Bypass",
+         "cve": "CVE-2012-2122", "category": "database", "difficulty": "easy", "tier": "tier1",
+         "description": "Authentication bypass in MySQL/MariaDB due to improper password comparison.",
+         "services": ["3306/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "quick"}},
+        {"env_id": "redis-cve-2022-0543", "name": "Redis Lua Sandbox Escape",
+         "cve": "CVE-2022-0543", "category": "database", "difficulty": "hard", "tier": "tier2",
+         "description": "Lua sandbox escape leading to RCE in Redis on Debian-based systems.",
+         "services": ["6379/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
+        {"env_id": "wordpress-cve-2022-21661", "name": "WordPress SQLi (WP_Query)",
+         "cve": "CVE-2022-21661", "category": "web", "difficulty": "medium", "tier": "tier3",
+         "description": "SQL injection via WP_Query in WordPress before 5.8.3.",
+         "services": ["80/tcp", "3306/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "standard"}},
+    ]
+
+    mock_targets_active = [
+        {"id": "tgt-001", "env_id": "apache-cve-2021-41773", "name": "Apache 2.4.49 Path Traversal",
+         "cve_id": "CVE-2021-41773", "category": "web",
+         "service_endpoint": "10.83.3.220:32001", "status": "running",
+         "created_at": "2025-01-01T12:00:00", "ttl_expires_at": "2025-01-01T14:00:00",
+         "error_message": None},
+        {"id": "tgt-002", "env_id": "log4j-cve-2021-44228", "name": "Log4Shell (Log4j RCE)",
+         "cve_id": "CVE-2021-44228", "category": "rce",
+         "service_endpoint": "10.83.3.220:32002", "status": "deploying",
+         "created_at": "2025-01-01T12:05:00", "ttl_expires_at": "2025-01-01T14:05:00",
+         "error_message": None},
+    ]
+
+    mock_deploy_logs = {
+        "tgt-002": [
+            {"timestamp": "2025-01-01T12:05:01", "step": "create_namespace", "level": "INFO",
+             "message": "Creating namespace target-log4j-cve-2021-44228"},
+            {"timestamp": "2025-01-01T12:05:03", "step": "apply_manifests", "level": "INFO",
+             "message": "Applying Vulhub manifests for log4j-cve-2021-44228"},
+            {"timestamp": "2025-01-01T12:05:08", "step": "wait_ready", "level": "INFO",
+             "message": "Waiting for pods to become ready (0/2 ready)..."},
+        ],
+    }
+
+    # --- Catalog + active targets ---
+    page = await context.new_page()
+
+    async def handle_catalog(route: Route) -> None:
+        await route.fulfill(status=200, content_type="application/json",
+                            body=json.dumps(mock_catalog))
+
+    async def handle_targets(route: Route) -> None:
+        await route.fulfill(status=200, content_type="application/json",
+                            body=json.dumps(mock_targets_active))
+
+    async def handle_capacity(route: Route) -> None:
+        await route.fulfill(status=200, content_type="application/json",
+                            body=json.dumps({"enabled": True, "used": 2, "max": 5}))
+
+    async def handle_deploy_logs(route: Route) -> None:
+        await route.fulfill(status=200, content_type="application/json",
+                            body=json.dumps(mock_deploy_logs))
+
+    await page.route("**/api/target-lab/catalog", handle_catalog)
+    await page.route("**/api/target-lab/targets", handle_targets)
+    await page.route("**/api/target-lab/capacity", handle_capacity)
+    await page.route("**/api/target-lab/deploy-logs**", handle_deploy_logs)
+    await page.route("**/ws/**", lambda r: r.abort())
+
+    await login(page, scan, SCANNING_PASSWORD)
+    await page.goto(f"{scan}/target-lab", wait_until="networkidle")
+    await wait_for_alpine(page)
+    await page.wait_for_timeout(1500)
+    await capture(page, output / "scanning", "scanning-target-lab-active.jpg", full_page=True)
+
+    # Expand the deploying target's logs
+    try:
+        logs_btn = page.locator("button:has-text('Logs')").first
+        if await logs_btn.is_visible(timeout=3000):
+            await logs_btn.click()
+            await page.wait_for_timeout(800)
+            await capture(page, output / "scanning", "scanning-target-lab-deploying.jpg", full_page=True)
+    except Exception as e:
+        print(f"  [WARN] Could not expand deploy logs: {e}")
+
+    await page.close()
+
+
 async def capture_scanning_interactions(context: BrowserContext, output: Path) -> None:
     """Capture scanning screenshots requiring real UI interaction."""
     print("\n=== Scanning (Interactions) ===")
@@ -484,6 +584,7 @@ async def main(args: argparse.Namespace) -> None:
         await capture_deployment_mocked(context, output)
         await capture_deployment_interactions(context, output)
         await capture_scanning_mocked(context, output)
+        await capture_target_lab_mocked(context, output)
         await capture_scanning_interactions(context, output)
 
         await context.close()

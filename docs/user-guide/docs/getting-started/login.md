@@ -35,6 +35,10 @@ You can also go directly to each app by entering its URL in your browser:
 
 When accessing apps directly, you will need to log in with your username and password on each app separately.
 
+## Video Walkthrough
+
+![type:video](../videos/01-getting-started.mp4)
+
 ## What's Next?
 
 Learn how to navigate the platform in [Navigating the Platform](navigation.md), or jump straight to:

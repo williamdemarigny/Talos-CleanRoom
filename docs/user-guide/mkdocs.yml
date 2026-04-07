@@ -76,6 +76,7 @@ nav:
     - Vulnerability Scanning: scanning/vulnerability-scan.md
     - Enrichment: scanning/enrichment.md
     - IOC Scanning: scanning/ioc-scan.md
+    - Target Lab: scanning/target-lab.md
     - Remediation Tracking: scanning/remediation.md
     - Exporting Results: scanning/export.md
   - Reports:

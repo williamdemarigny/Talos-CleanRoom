@@ -268,6 +268,345 @@ async def record_reports_tour(output: Path) -> Path:
     return Path(video_path)
 
 
+async def record_deployment(output: Path) -> Path:
+    """Video 2: Deployment walkthrough — start deployment, watch progress, completion (~30-60 min raw, condensed in post).
+
+    Must be run DURING a live deployment or just before starting one.
+    The video captures: idle state -> click Start -> steps progressing -> completion banner.
+    Post-process with FFmpeg to speed up the long middle section.
+    """
+    print("\n=== Recording: Video 2 — Deployment Walkthrough ===")
+    subs = SubtitleGenerator()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport=VIEWPORT,
+            ignore_https_errors=True,
+            record_video_dir=str(output / "raw"),
+            record_video_size=VIEWPORT,
+        )
+        page = await context.new_page()
+
+        await api_login(page, DEPLOYMENT_URL, PASSWORD)
+        subs.start()
+
+        # 1. Dashboard overview
+        subs.add("Open the Deployment Console dashboard")
+        await page.goto(DEPLOYMENT_URL, wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+
+        # 2. Navigate to deployment page
+        subs.add("Navigate to the Deployment tab")
+        await page.goto(f"{DEPLOYMENT_URL}/deployment", wait_until="networkidle")
+        await page.wait_for_timeout(2500)
+
+        # 3. Click Start Deployment
+        subs.add("Click Start Deployment to begin the 23-step process")
+        try:
+            start_btn = page.locator("button:has-text('Start Deployment')").first
+            if await start_btn.is_visible(timeout=5000):
+                await start_btn.click()
+                await page.wait_for_timeout(2000)
+
+                # 4. Confirm if prompted
+                try:
+                    confirm_btn = page.locator("button:has-text('Confirm'), button:has-text('Yes')").first
+                    if await confirm_btn.is_visible(timeout=3000):
+                        subs.add("Confirm the deployment")
+                        await confirm_btn.click()
+                        await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+            else:
+                subs.add("Deployment is already in progress — monitoring")
+        except Exception:
+            subs.add("Deployment is already in progress — monitoring")
+
+        # 5. Watch progress — poll until deployment finishes or timeout
+        subs.add("The deployment runs 23 automated steps")
+        max_poll_minutes = 75  # Safety timeout
+        poll_interval = 15  # seconds
+        total_polls = (max_poll_minutes * 60) // poll_interval
+        last_step = -1
+
+        for i in range(total_polls):
+            await page.wait_for_timeout(poll_interval * 1000)
+
+            # Check current status via page content
+            try:
+                status_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[x-data]');
+                    if (el) {
+                        const data = Alpine.$data(el);
+                        return JSON.stringify({status: data.status, step: data.currentStep});
+                    }
+                    return '{}';
+                }""")
+                import json as _json
+                status = _json.loads(status_text)
+
+                current_step = status.get("step", -1)
+                if current_step != last_step and current_step >= 0:
+                    subs.add(f"Step {current_step + 1} of 23 in progress")
+                    last_step = current_step
+
+                if status.get("status") in ("completed", "failed"):
+                    break
+            except Exception:
+                pass
+
+        # 6. Final state
+        await page.wait_for_timeout(3000)
+        try:
+            status_text = await page.evaluate("""() => {
+                const el = document.querySelector('[x-data]');
+                if (el) { return Alpine.$data(el).status; }
+                return '';
+            }""")
+            if status_text == "completed":
+                subs.add("Deployment completed successfully!")
+            elif status_text == "failed":
+                subs.add("Deployment encountered an error — see Recovery guide")
+            else:
+                subs.add("Deployment is still running — video recording ended")
+        except Exception:
+            subs.add("Deployment recording complete")
+
+        await page.wait_for_timeout(3000)
+
+        video_path = await page.video.path()
+        await page.close()
+        await context.close()
+        await browser.close()
+
+    subs.save(output / "02-deployment.srt")
+    print(f"  Video recorded: {video_path}")
+    print("  NOTE: This video is likely very long. Speed up with:")
+    print("    ffmpeg -i raw/video.webm -filter:v \"setpts=0.1*PTS\" -an 02-deployment-fast.mp4")
+    return Path(video_path)
+
+
+async def record_vuln_scan(output: Path) -> Path:
+    """Video 3: Vulnerability scan walkthrough — configure and run a Quick scan (~5 min)."""
+    print("\n=== Recording: Video 3 — Vulnerability Scan Walkthrough ===")
+    subs = SubtitleGenerator()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport=VIEWPORT,
+            ignore_https_errors=True,
+            record_video_dir=str(output / "raw"),
+            record_video_size=VIEWPORT,
+        )
+        page = await context.new_page()
+
+        await api_login(page, SCANNING_URL, SCANNING_PASSWORD)
+        subs.start()
+
+        # 1. Navigate to Scan page
+        subs.add("Open the Scan page in the Scanning Console")
+        await page.goto(f"{SCANNING_URL}/scan", wait_until="networkidle")
+        await page.wait_for_timeout(2500)
+
+        # 2. Fill in target
+        subs.add("Enter a target IP address or CIDR range")
+        try:
+            target_input = page.locator("input[placeholder*='target'], input[placeholder*='IP'], #target").first
+            if await target_input.is_visible(timeout=3000):
+                await target_input.fill("10.83.3.10")
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # 3. Select tools
+        subs.add("Select the scanning tools: Nmap and OpenVAS")
+        try:
+            for tool_label in ["Nmap", "OpenVAS"]:
+                checkbox = page.locator(f"text={tool_label}").first
+                if await checkbox.is_visible(timeout=2000):
+                    await checkbox.click()
+                    await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        # 4. Select Quick profile
+        subs.add("Choose the Quick profile for a fast initial scan")
+        try:
+            quick_btn = page.locator("button:has-text('Quick')").first
+            if await quick_btn.is_visible(timeout=2000):
+                await quick_btn.click()
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        await page.wait_for_timeout(1500)
+
+        # 5. Start scan
+        subs.add("Click Start Scan to begin")
+        try:
+            start_btn = page.locator("button:has-text('Start Scan')").first
+            if await start_btn.is_visible(timeout=3000):
+                await start_btn.click()
+                await page.wait_for_timeout(3000)
+        except Exception:
+            pass
+
+        # 6. Watch progress — poll for up to 10 minutes
+        subs.add("The scan shows real-time progress for each tool")
+        max_polls = 40  # 40 * 15s = 10 min
+        for i in range(max_polls):
+            await page.wait_for_timeout(15000)
+
+            try:
+                status_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[x-data]');
+                    if (el) { return Alpine.$data(el).status || ''; }
+                    return '';
+                }""")
+                if status_text in ("completed", "failed"):
+                    break
+            except Exception:
+                pass
+
+            # Add periodic subtitles
+            if i == 2:
+                subs.add("Nmap discovers open ports and running services")
+            elif i == 6:
+                subs.add("OpenVAS performs deep vulnerability testing")
+
+        # 7. Completion
+        await page.wait_for_timeout(3000)
+        subs.add("Scan complete — results are shown with findings per tool")
+        await page.wait_for_timeout(2500)
+
+        # 8. Scroll to show enrichment
+        subs.add("Enrichment adds CVSS scores and EPSS exploit probability data")
+        await page.evaluate("window.scrollBy(0, 300)")
+        await page.wait_for_timeout(3000)
+
+        subs.add("Click 'Reports' to view detailed findings")
+        await page.wait_for_timeout(2000)
+
+        video_path = await page.video.path()
+        await page.close()
+        await context.close()
+        await browser.close()
+
+    subs.save(output / "03-vuln-scan.srt")
+    print(f"  Video recorded: {video_path}")
+    return Path(video_path)
+
+
+async def record_ioc_scan(output: Path) -> Path:
+    """Video 4: IOC scan walkthrough — configure and run an IOC scan (~2-3 min)."""
+    print("\n=== Recording: Video 4 — IOC Scan Walkthrough ===")
+    subs = SubtitleGenerator()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport=VIEWPORT,
+            ignore_https_errors=True,
+            record_video_dir=str(output / "raw"),
+            record_video_size=VIEWPORT,
+        )
+        page = await context.new_page()
+
+        await api_login(page, SCANNING_URL, SCANNING_PASSWORD)
+        subs.start()
+
+        # 1. Navigate to IOC Scan page
+        subs.add("Open the IOC Scan page in the Scanning Console")
+        await page.goto(f"{SCANNING_URL}/ioc-scan", wait_until="networkidle")
+        await page.wait_for_timeout(2500)
+
+        # 2. Fill in target host
+        subs.add("Enter the target host IP address")
+        try:
+            host_input = page.locator("input[placeholder*='host'], input[placeholder*='IP'], #target-host").first
+            if await host_input.is_visible(timeout=3000):
+                await host_input.fill("10.83.3.15")
+                await page.wait_for_timeout(800)
+        except Exception:
+            pass
+
+        # 3. SSH is default, fill credentials
+        subs.add("Enter SSH credentials for the target server")
+        try:
+            user_input = page.locator("#ssh-username, input[placeholder*='username']").first
+            if await user_input.is_visible(timeout=2000):
+                await user_input.fill("root")
+                await page.wait_for_timeout(500)
+
+            pass_input = page.locator("#ssh-password, input[placeholder*='password']").first
+            if await pass_input.is_visible(timeout=2000):
+                await pass_input.fill("password")
+                await page.wait_for_timeout(500)
+
+            path_input = page.locator("#remote-path, input[placeholder*='path']").first
+            if await path_input.is_visible(timeout=2000):
+                await path_input.fill("/var")
+                await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        await page.wait_for_timeout(1500)
+
+        # 4. Start scan
+        subs.add("Click Start IOC Scan")
+        try:
+            start_btn = page.locator("button:has-text('Start IOC Scan')").first
+            if await start_btn.is_visible(timeout=3000):
+                await start_btn.click()
+                await page.wait_for_timeout(3000)
+        except Exception:
+            pass
+
+        # 5. Watch phases
+        subs.add("The scan progresses through four phases: Prepare, Mount, Scan, Cleanup")
+        max_polls = 24  # 24 * 15s = 6 min
+        for i in range(max_polls):
+            await page.wait_for_timeout(15000)
+
+            try:
+                status_text = await page.evaluate("""() => {
+                    const el = document.querySelector('[x-data]');
+                    if (el) { return Alpine.$data(el).status || ''; }
+                    return '';
+                }""")
+                if status_text in ("completed", "failed"):
+                    break
+            except Exception:
+                pass
+
+            if i == 1:
+                subs.add("LOKI-RS scans files against YARA rules and known threat hashes")
+
+        # 6. Completion and findings
+        await page.wait_for_timeout(3000)
+        subs.add("Scan complete — findings are categorized by severity")
+        await page.wait_for_timeout(2500)
+
+        # Scroll to show findings table
+        subs.add("Alerts (red) require immediate investigation")
+        await page.evaluate("window.scrollBy(0, 400)")
+        await page.wait_for_timeout(3000)
+
+        subs.add("Click any finding to see file hashes, matched rules, and tags")
+        await page.wait_for_timeout(2500)
+
+        video_path = await page.video.path()
+        await page.close()
+        await context.close()
+        await browser.close()
+
+    subs.save(output / "04-ioc-scan.srt")
+    print(f"  Video recorded: {video_path}")
+    return Path(video_path)
+
+
 def convert_to_mp4(webm_path: Path, mp4_path: Path, srt_path: Path = None) -> bool:
     """Convert WebM to MP4, optionally burning in subtitles."""
     ffmpeg = "ffmpeg"
@@ -313,9 +652,32 @@ async def main(args: argparse.Namespace) -> None:
 
     print(f"Recording videos to {output.resolve()}")
 
-    # Record Videos 1 and 5
-    v1_webm = await record_getting_started(output)
-    v5_webm = await record_reports_tour(output)
+    videos_to_record = args.videos.split(",") if args.videos else ["1", "5"]
+
+    recorded = {}
+
+    for vid in videos_to_record:
+        vid = vid.strip()
+        if vid == "1":
+            recorded["1"] = await record_getting_started(output)
+        elif vid == "2":
+            recorded["2"] = await record_deployment(output)
+        elif vid == "3":
+            recorded["3"] = await record_vuln_scan(output)
+        elif vid == "4":
+            recorded["4"] = await record_ioc_scan(output)
+        elif vid == "5":
+            recorded["5"] = await record_reports_tour(output)
+        elif vid == "all":
+            recorded["1"] = await record_getting_started(output)
+            recorded["5"] = await record_reports_tour(output)
+            print("\n" + "=" * 60)
+            print("Videos 2-4 require live operations.")
+            print("Record them individually with --videos 2, --videos 3, --videos 4")
+            print("=" * 60)
+            break
+        else:
+            print(f"  [WARN] Unknown video number: {vid}")
 
     # Convert to MP4 if FFmpeg is available
     print("\n=== Post-Processing ===")
@@ -325,22 +687,27 @@ async def main(args: argparse.Namespace) -> None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         has_ffmpeg = False
 
+    video_names = {
+        "1": "01-getting-started",
+        "2": "02-deployment",
+        "3": "03-vuln-scan",
+        "4": "04-ioc-scan",
+        "5": "05-reports-tour",
+    }
+
     if has_ffmpeg:
-        convert_to_mp4(v1_webm, output / "01-getting-started.mp4",
-                        output / "01-getting-started.srt")
-        convert_to_mp4(v5_webm, output / "05-reports-tour.mp4",
-                        output / "05-reports-tour.srt")
+        for vid_num, webm_path in recorded.items():
+            name = video_names.get(vid_num, f"video-{vid_num}")
+            convert_to_mp4(webm_path, output / f"{name}.mp4",
+                            output / f"{name}.srt")
     else:
         print("  FFmpeg not found — skipping MP4 conversion.")
         print("  Raw WebM files are in the 'raw/' subdirectory.")
         print("  Convert manually: ffmpeg -i video.webm -c:v libx264 -crf 23 output.mp4")
 
-    print("\n" + "=" * 60)
-    print("Videos 2-4 require live operations:")
-    print("  Video 2 (Deployment): Run during a fresh deployment")
-    print("  Video 3 (Vuln Scan):  Run during a Quick scan")
-    print("  Video 4 (IOC Scan):   Run during an IOC scan")
-    print("=" * 60)
+    if "2" in recorded:
+        print("\n  NOTE: Video 2 (Deployment) is likely very long.")
+        print("  Speed up: ffmpeg -i 02-deployment.mp4 -filter:v \"setpts=0.1*PTS\" -an 02-deployment-fast.mp4")
 
 
 if __name__ == "__main__":
@@ -352,5 +719,8 @@ if __name__ == "__main__":
     parser.add_argument("--username", default=USERNAME)
     parser.add_argument("--password", default=PASSWORD)
     parser.add_argument("--scanning-password", default=None)
+    parser.add_argument("--videos", default=None,
+                        help="Comma-separated video numbers to record (1-5 or 'all'). "
+                             "Default: 1,5. Videos 2-4 require live operations.")
     args = parser.parse_args()
     asyncio.run(main(args))

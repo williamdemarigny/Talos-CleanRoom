@@ -232,6 +232,23 @@ async def capture_scanning(context: BrowserContext, output: Path) -> None:
     await page.close()
 
 
+async def capture_target_lab(context: BrowserContext, output: Path) -> None:
+    """Capture Target Lab screenshots."""
+    print("\n=== Target Lab ===")
+    page = await context.new_page()
+    scan = SCANNING_URL
+
+    await login(page, scan, SCANNING_PASSWORD)
+
+    # Target Lab catalog
+    await page.goto(f"{scan}/target-lab", wait_until="networkidle")
+    await wait_for_alpine(page)
+    await page.wait_for_timeout(1000)
+    await capture(page, output / "scanning", "scanning-target-lab-catalog.jpg", full_page=True)
+
+    await page.close()
+
+
 async def capture_reports(context: BrowserContext, output: Path) -> None:
     """Capture Reports screenshots."""
     print("\n=== Reports ===")
@@ -317,6 +334,7 @@ async def main(args: argparse.Namespace) -> None:
         await capture_portal(context, output)
         await capture_deployment(context, output)
         await capture_scanning(context, output)
+        await capture_target_lab(context, output)
         await capture_reports(context, output)
 
         await context.close()

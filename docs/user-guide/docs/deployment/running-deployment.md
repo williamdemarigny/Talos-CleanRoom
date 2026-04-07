@@ -60,6 +60,10 @@ You can now:
 !!! note "Time expectations by step"
     Some steps are fast (seconds), while others take several minutes. Steps 2-3 (Terraform deploy + VM boot) and steps 8-15 (installing all applications) are typically the longest. See [Deployment Steps Reference](../reference/deployment-steps.md) for details.
 
+## Video Walkthrough
+
+![type:video](../videos/02-deployment.mp4)
+
 ## What's Next?
 
 - [Recovery](recovery.md) — what to do if a step fails

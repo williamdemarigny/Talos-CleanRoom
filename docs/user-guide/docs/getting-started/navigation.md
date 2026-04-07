@@ -23,12 +23,13 @@ The Deployment Console has four main sections, accessible from the navigation ba
 | **Logs** | Search and filter deployment log entries |
 
 ### Scanning Console
-The Scanning Console has three main sections:
+The Scanning Console has four main sections:
 
 | Tab | Purpose |
 |---|---|
 | **Scan** | Run vulnerability scans using Nmap, OpenVAS, and Metasploit |
 | **IOC Scan** | Scan file systems for malware indicators (Indicators of Compromise) |
+| **Target Lab** | Deploy Vulhub vulnerable environments for scan testing and validation |
 | **Reports** | View scan results, compare scans, browse vulnerabilities, and export data |
 
 ## Switching Between Apps
