@@ -288,39 +288,39 @@ async def record_deployment(output: Path) -> Path:
         )
         page = await context.new_page()
 
-        await api_login(page, DEPLOYMENT_URL, PASSWORD)
+        logged_in = await api_login(page, DEPLOYMENT_URL, PASSWORD)
+        print(f"  Login: {'OK' if logged_in else 'FAILED'}")
         subs.start()
 
         # 1. Dashboard overview
         subs.add("Open the Deployment Console dashboard")
         await page.goto(DEPLOYMENT_URL, wait_until="networkidle")
+        print(f"  Navigated to dashboard: {page.url}")
         await page.wait_for_timeout(3000)
 
         # 2. Navigate to deployment page
         subs.add("Navigate to the Deployment tab")
         await page.goto(f"{DEPLOYMENT_URL}/deployment", wait_until="networkidle")
+        print(f"  Navigated to deployment: {page.url}")
         await page.wait_for_timeout(2500)
+
+        # Auto-accept window.confirm() dialogs (deployment uses confirm())
+        page.on("dialog", lambda dialog: dialog.accept())
 
         # 3. Click Start Deployment
         subs.add("Click Start Deployment to begin the 23-step process")
         try:
             start_btn = page.locator("button:has-text('Start Deployment')").first
             if await start_btn.is_visible(timeout=5000):
+                print("  Clicking 'Start Deployment'...")
                 await start_btn.click()
-                await page.wait_for_timeout(2000)
-
-                # 4. Confirm if prompted
-                try:
-                    confirm_btn = page.locator("button:has-text('Confirm'), button:has-text('Yes')").first
-                    if await confirm_btn.is_visible(timeout=3000):
-                        subs.add("Confirm the deployment")
-                        await confirm_btn.click()
-                        await page.wait_for_timeout(2000)
-                except Exception:
-                    pass
+                await page.wait_for_timeout(3000)
+                print("  Deployment started (confirm dialog auto-accepted)")
             else:
+                print("  [WARN] 'Start Deployment' button not visible — may already be running")
                 subs.add("Deployment is already in progress — monitoring")
-        except Exception:
+        except Exception as e:
+            print(f"  [WARN] Could not click Start Deployment: {e}")
             subs.add("Deployment is already in progress — monitoring")
 
         # 5. Watch progress — poll until deployment finishes or timeout
@@ -329,6 +329,7 @@ async def record_deployment(output: Path) -> Path:
         poll_interval = 15  # seconds
         total_polls = (max_poll_minutes * 60) // poll_interval
         last_step = -1
+        print(f"  Polling deployment status (every {poll_interval}s, up to {max_poll_minutes} min)...")
 
         for i in range(total_polls):
             await page.wait_for_timeout(poll_interval * 1000)
@@ -343,18 +344,22 @@ async def record_deployment(output: Path) -> Path:
                     }
                     return '{}';
                 }""")
-                import json as _json
-                status = _json.loads(status_text)
+                status = json.loads(status_text)
 
                 current_step = status.get("step", -1)
+                deploy_status = status.get("status", "unknown")
+
                 if current_step != last_step and current_step >= 0:
+                    print(f"  Step {current_step + 1}/23 — status: {deploy_status}")
                     subs.add(f"Step {current_step + 1} of 23 in progress")
                     last_step = current_step
 
-                if status.get("status") in ("completed", "failed"):
+                if deploy_status in ("completed", "failed"):
+                    print(f"  Deployment {deploy_status}!")
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                if i == 0:
+                    print(f"  [WARN] Could not read Alpine state: {e}")
 
         # 6. Final state
         await page.wait_for_timeout(3000)
