@@ -16,6 +16,7 @@ Talos CleanRoom is a security platform that helps you deploy infrastructure and 
 | Check deployment status | **Deployment Console** → Dashboard | [Dashboard](deployment/dashboard.md) |
 | Scan a network for vulnerabilities | **Scanning Console** → Scan | [Vulnerability Scanning](scanning/vulnerability-scan.md) |
 | Check a server for malware/IOCs | **Scanning Console** → IOC Scan | [IOC Scanning](scanning/ioc-scan.md) |
+| Deploy a vulnerable test target | **Scanning Console** → Target Lab | [Target Lab](scanning/target-lab.md) |
 | View or export scan results | **Scanning Console** → Reports | [Reports Dashboard](reports/dashboard.md) |
 | Compare two scans | **Scanning Console** → Reports → Compare | [Comparing Scans](reports/compare.md) |
 | Track vulnerability remediation | **Scanning Console** → Reports → Vulnerabilities | [Remediation Tracking](scanning/remediation.md) |
@@ -33,6 +34,6 @@ Talos CleanRoom is a security platform that helps you deploy infrastructure and 
 
 - **[Getting Started](getting-started/prerequisites.md)** — Login, navigation, credentials, and security basics
 - **[Deployment Console](deployment/dashboard.md)** — Deploying and managing the platform infrastructure
-- **[Scanning](scanning/vulnerability-scan.md)** — Running vulnerability and IOC scans, enrichment, remediation, export
+- **[Scanning](scanning/vulnerability-scan.md)** — Running vulnerability and IOC scans, Target Lab, enrichment, remediation, export
 - **[Reports](reports/dashboard.md)** — Viewing scan results, comparing scans, audit trail
 - **[Reference](reference/scan-profiles.md)** — Scan profiles, deployment steps, glossary, FAQ, troubleshooting

@@ -83,8 +83,13 @@ Click on any finding row to expand it and see:
 
 Previous IOC scans are listed at the bottom of the page, showing target, protocol, status, and findings count.
 
+## Video Walkthrough
+
+![type:video](../videos/04-ioc-scan.mp4)
+
 ## What's Next?
 
 - [Remediation Tracking](remediation.md) — track actions taken on findings
+- [Target Lab](target-lab.md) — deploy vulnerable test targets
 - [Reports Dashboard](../reports/dashboard.md) — view all scan results
 - [Exporting Results](export.md) — download findings as CSV or JSON

@@ -1,5 +1,11 @@
-"""Capture the 2 remaining IOC scan screenshots using mocked data."""
+"""Capture the 2 remaining IOC scan screenshots using mocked data.
 
+Usage:
+    python capture_ioc.py
+    python capture_ioc.py --scanning-password "yourpassword" --output ../docs/img
+"""
+
+import argparse
 import asyncio
 import json
 from pathlib import Path
@@ -7,7 +13,7 @@ from playwright.async_api import async_playwright
 
 SCANNING_URL = "https://scan.knowledgeondemand.net"
 USERNAME = "admin"
-SCANNING_PASSWORD = "wGOAUYX2P8SLbPyD"
+SCANNING_PASSWORD = "admin"
 VIEWPORT = {"width": 1280, "height": 800}
 OUTPUT = Path("../docs/img")
 
@@ -86,7 +92,13 @@ IOC_COMPLETED = {
 }
 
 
-async def main():
+async def main(args: argparse.Namespace = None):
+    global SCANNING_URL, SCANNING_PASSWORD, OUTPUT
+    if args:
+        SCANNING_URL = args.scanning.rstrip("/")
+        SCANNING_PASSWORD = args.scanning_password
+        OUTPUT = Path(args.output)
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -154,4 +166,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Capture IOC scan screenshots with mocked data")
+    parser.add_argument("--scanning", default=SCANNING_URL, help="Scanning Console URL")
+    parser.add_argument("--scanning-password", default=SCANNING_PASSWORD, help="Scanning Console password")
+    parser.add_argument("--output", default=str(OUTPUT), help="Output directory for screenshots")
+    args = parser.parse_args()
+    asyncio.run(main(args))
