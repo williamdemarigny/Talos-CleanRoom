@@ -388,8 +388,12 @@ async def record_deployment(output: Path) -> Path:
 
 
 async def record_vuln_scan(output: Path) -> Path:
-    """Video 3: Vulnerability scan walkthrough — configure and run a Quick scan (~5 min)."""
-    print("\n=== Recording: Video 3 — Vulnerability Scan Walkthrough ===")
+    """Video 3: Target Lab deploy + vulnerability scan walkthrough.
+
+    Flow: Target Lab catalog → deploy a target → wait for running →
+    click Scan (pre-fills target) → run Quick scan → completion.
+    """
+    print("\n=== Recording: Video 3 — Target Lab + Vulnerability Scan ===")
     subs = SubtitleGenerator()
 
     async with async_playwright() as p:
@@ -405,45 +409,126 @@ async def record_vuln_scan(output: Path) -> Path:
         await api_login(page, SCANNING_URL, SCANNING_PASSWORD)
         subs.start()
 
-        # 1. Navigate to Scan page
-        subs.add("Open the Scan page in the Scanning Console")
-        await page.goto(f"{SCANNING_URL}/scan", wait_until="networkidle")
-        await page.wait_for_timeout(2500)
+        # ── Part 1: Target Lab ──────────────────────────────────
 
-        # 2. Fill in target
-        subs.add("Enter a target IP address or CIDR range")
+        # 1. Navigate to Target Lab
+        subs.add("Open the Target Lab to deploy a vulnerable test environment")
+        await page.goto(f"{SCANNING_URL}/target-lab", wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+
+        # 2. Browse the catalog
+        subs.add("The catalog shows Vulhub environments with CVE info and difficulty")
+        await page.wait_for_timeout(3000)
+
+        # 3. Deploy the first available environment
+        subs.add("Click Deploy on an environment to create it in the cluster")
+        target_deployed = False
         try:
-            target_input = page.locator("input[placeholder*='target'], input[placeholder*='IP'], #target").first
-            if await target_input.is_visible(timeout=3000):
-                await target_input.fill("10.83.3.10")
-                await page.wait_for_timeout(1000)
+            deploy_btn = page.locator("button:has-text('Deploy')").first
+            if await deploy_btn.is_visible(timeout=5000):
+                await deploy_btn.click()
+                await page.wait_for_timeout(2000)
+                target_deployed = True
+
+                subs.add("The target is being created — watch the status change")
+                await page.wait_for_timeout(2000)
+
+                # 4. Scroll down to show Active Targets table
+                await page.evaluate("window.scrollBy(0, 400)")
+                await page.wait_for_timeout(2000)
+
+                # 5. Expand deploy logs if visible
+                try:
+                    logs_btn = page.locator("button:has-text('Logs')").first
+                    if await logs_btn.is_visible(timeout=3000):
+                        subs.add("Click Logs to watch the deployment progress")
+                        await logs_btn.click()
+                        await page.wait_for_timeout(3000)
+                except Exception:
+                    pass
+
+                # 6. Wait for target to reach "running" status (poll up to 3 min)
+                subs.add("Waiting for the target to become ready...")
+                for i in range(18):  # 18 * 10s = 3 min
+                    await page.wait_for_timeout(10000)
+                    try:
+                        has_running = await page.evaluate("""() => {
+                            const el = document.querySelector('[x-data]');
+                            if (el) {
+                                const data = Alpine.$data(el);
+                                return (data.targets || []).some(t => t.status === 'running');
+                            }
+                            return false;
+                        }""")
+                        if has_running:
+                            break
+                    except Exception:
+                        pass
+                    # Refresh the page periodically to pick up status changes
+                    if i % 3 == 2:
+                        await page.goto(f"{SCANNING_URL}/target-lab", wait_until="networkidle")
+                        await page.wait_for_timeout(1000)
+                        await page.evaluate("window.scrollBy(0, 400)")
+
+                await page.wait_for_timeout(2000)
+
+                # 7. Click Scan on the running target
+                subs.add("Target is running — click Scan to start scanning it")
+                try:
+                    scan_btn = page.locator("button:has-text('Scan')").first
+                    if await scan_btn.is_visible(timeout=5000):
+                        await scan_btn.click()
+                        await page.wait_for_load_state("networkidle")
+                        await page.wait_for_timeout(2500)
+
+                        subs.add("The Scan page opens with the target and recommended profile pre-filled")
+                        await page.wait_for_timeout(2500)
+                except Exception:
+                    pass
         except Exception:
             pass
 
-        # 3. Select tools
-        subs.add("Select the scanning tools: Nmap and OpenVAS")
-        try:
-            for tool_label in ["Nmap", "OpenVAS"]:
-                checkbox = page.locator(f"text={tool_label}").first
-                if await checkbox.is_visible(timeout=2000):
-                    await checkbox.click()
-                    await page.wait_for_timeout(500)
-        except Exception:
-            pass
+        # ── Part 2: Vulnerability Scan ──────────────────────────
 
-        # 4. Select Quick profile
-        subs.add("Choose the Quick profile for a fast initial scan")
-        try:
-            quick_btn = page.locator("button:has-text('Quick')").first
-            if await quick_btn.is_visible(timeout=2000):
-                await quick_btn.click()
-                await page.wait_for_timeout(1000)
-        except Exception:
-            pass
+        # If Target Lab wasn't available, fall back to manual scan setup
+        if not target_deployed:
+            subs.add("Open the Scan page in the Scanning Console")
+            await page.goto(f"{SCANNING_URL}/scan", wait_until="networkidle")
+            await page.wait_for_timeout(2500)
 
-        await page.wait_for_timeout(1500)
+            subs.add("Enter a target IP address or CIDR range")
+            try:
+                target_input = page.locator(
+                    "input[placeholder*='target'], input[placeholder*='IP'], #target"
+                ).first
+                if await target_input.is_visible(timeout=3000):
+                    await target_input.fill("10.83.3.10")
+                    await page.wait_for_timeout(1000)
+            except Exception:
+                pass
 
-        # 5. Start scan
+            subs.add("Select the scanning tools: Nmap and OpenVAS")
+            try:
+                for tool_label in ["Nmap", "OpenVAS"]:
+                    checkbox = page.locator(f"text={tool_label}").first
+                    if await checkbox.is_visible(timeout=2000):
+                        await checkbox.click()
+                        await page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+            subs.add("Choose the Quick profile for a fast initial scan")
+            try:
+                quick_btn = page.locator("button:has-text('Quick')").first
+                if await quick_btn.is_visible(timeout=2000):
+                    await quick_btn.click()
+                    await page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            await page.wait_for_timeout(1500)
+
+        # 8. Start scan (target may already be pre-filled from Target Lab)
         subs.add("Click Start Scan to begin")
         try:
             start_btn = page.locator("button:has-text('Start Scan')").first
@@ -453,7 +538,7 @@ async def record_vuln_scan(output: Path) -> Path:
         except Exception:
             pass
 
-        # 6. Watch progress — poll for up to 10 minutes
+        # 9. Watch progress — poll for up to 10 minutes
         subs.add("The scan shows real-time progress for each tool")
         max_polls = 40  # 40 * 15s = 10 min
         for i in range(max_polls):
@@ -470,18 +555,17 @@ async def record_vuln_scan(output: Path) -> Path:
             except Exception:
                 pass
 
-            # Add periodic subtitles
             if i == 2:
                 subs.add("Nmap discovers open ports and running services")
             elif i == 6:
                 subs.add("OpenVAS performs deep vulnerability testing")
 
-        # 7. Completion
+        # 10. Completion
         await page.wait_for_timeout(3000)
         subs.add("Scan complete — results are shown with findings per tool")
         await page.wait_for_timeout(2500)
 
-        # 8. Scroll to show enrichment
+        # 11. Scroll to show enrichment
         subs.add("Enrichment adds CVSS scores and EPSS exploit probability data")
         await page.evaluate("window.scrollBy(0, 300)")
         await page.wait_for_timeout(3000)
