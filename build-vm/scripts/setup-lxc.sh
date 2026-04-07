@@ -70,25 +70,13 @@ apt-get install -y \
     containerd.io \
     docker-buildx-plugin
 
-# Configure Docker to trust Harbor with staging (Let's Encrypt) certificates
-# The wildcard cert uses letsencrypt-staging by default, which is not trusted
-# by Docker. This marks Harbor as an insecure registry.
-# Remove this when switching to letsencrypt-prod.
-mkdir -p /etc/docker
-cat > /etc/docker/daemon.json <<'DOCKER_EOF'
-{
-  "insecure-registries": ["harbor.knowledgeondemand.net"]
-}
-DOCKER_EOF
-
-# Enable and restart Docker (restart required — apt install auto-starts Docker
-# before daemon.json is written, so 'start' would be a no-op)
+# Enable and start Docker
 systemctl enable docker
-systemctl restart docker
+systemctl start docker
 
 # Verify Docker
 docker --version
-echo "Docker installed and running (Harbor configured as insecure registry for staging certs)."
+echo "Docker installed and running."
 
 # Install kubectl
 echo "[4/5] Installing kubectl (v1.32)..."

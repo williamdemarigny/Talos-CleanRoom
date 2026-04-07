@@ -268,16 +268,107 @@ async def record_reports_tour(output: Path) -> Path:
     return Path(video_path)
 
 
-async def record_deployment(output: Path) -> Path:
-    """Video 2: Deployment walkthrough — start deployment, watch progress, completion (~30-60 min raw, condensed in post).
+def _generate_transition_frame(output: Path, duration: float = 4.0) -> Path:
+    """Generate a title-card video clip using FFmpeg with text overlay."""
+    frame_path = output / "raw" / "transition.mp4"
+    text_lines = [
+        "Deployment in progress...",
+        "",
+        "23 automated steps configure infrastructure,",
+        "bootstrap Talos Linux, and deploy all services.",
+        "",
+        "(Sped up for brevity — typically 30-45 minutes)",
+    ]
+    # FFmpeg drawtext filter: white text on dark background
+    drawtext_parts = []
+    y_start = 280  # vertical center offset for 800px height
+    for i, line in enumerate(text_lines):
+        if not line:
+            continue
+        escaped = line.replace("'", "\\'").replace(":", "\\:")
+        fontsize = 32 if i == 0 else 22
+        y = y_start + i * 40
+        drawtext_parts.append(
+            f"drawtext=text='{escaped}':fontsize={fontsize}:fontcolor=white"
+            f":x=(w-text_w)/2:y={y}"
+        )
+    vf = ",".join(drawtext_parts)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=0x1a1a2e:s=1280x800:d={duration}",
+        "-vf", vf,
+        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+        "-pix_fmt", "yuv420p",
+        str(frame_path),
+    ]
+    print("  Generating transition title card...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  [WARN] Transition frame generation failed: {result.stderr[-200:]}")
+    return frame_path
 
-    Must be run DURING a live deployment or just before starting one.
-    The video captures: idle state -> click Start -> steps progressing -> completion banner.
-    Post-process with FFmpeg to speed up the long middle section.
+
+def _stitch_clips(clip_a: Path, transition: Path, clip_b: Path, final_out: Path) -> bool:
+    """Concatenate three MP4 clips into one using FFmpeg concat demuxer."""
+    concat_list = final_out.parent / "raw" / "concat_list.txt"
+    # Convert all clips to same format first
+    intermediates = []
+    for i, clip in enumerate([clip_a, transition, clip_b]):
+        intermediate = final_out.parent / "raw" / f"segment_{i}.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-i", str(clip),
+            "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+            "-pix_fmt", "yuv420p",
+            "-vf", f"scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2",
+            "-r", "25", "-an",
+            str(intermediate),
+        ]
+        subprocess.run(cmd, capture_output=True, text=True)
+        intermediates.append(intermediate)
+
+    # Write concat list
+    with open(concat_list, "w") as f:
+        for seg in intermediates:
+            f.write(f"file '{seg.resolve()}'\n")
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", str(concat_list),
+        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+        str(final_out),
+    ]
+    print(f"  Stitching 3 clips -> {final_out.name}...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  [ERROR] Stitching failed: {result.stderr[-300:]}")
+        return False
+
+    # Clean up intermediates
+    for seg in intermediates:
+        seg.unlink(missing_ok=True)
+    concat_list.unlink(missing_ok=True)
+
+    print(f"  [OK] {final_out.name}")
+    return True
+
+
+async def record_deployment(output: Path) -> Path:
+    """Video 2: Deployment walkthrough — two short clips stitched with a transition.
+
+    Records in two phases to avoid long Chromium sessions:
+      Clip A (~40s): Login -> dashboard -> click Start Deployment -> first 2-3 steps
+      Transition:    FFmpeg-generated title card ("sped up for brevity")
+      Clip B (~30s): Completed deployment state -> banner -> summary
+
+    Can be run in two modes:
+      - "start" mode: deployment is idle, records clip A, then waits for completion
+      - "completed" mode: deployment already finished, records clip B only (clip A reused)
     """
     print("\n=== Recording: Video 2 — Deployment Walkthrough ===")
     subs = SubtitleGenerator()
 
+    # ── Clip A: Start deployment ─────────────────────────────
+    print("\n  --- Clip A: Recording deployment start ---")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -292,20 +383,18 @@ async def record_deployment(output: Path) -> Path:
         print(f"  Login: {'OK' if logged_in else 'FAILED'}")
         subs.start()
 
-        # 1. Dashboard overview
+        # Auto-accept confirm dialogs
+        page.on("dialog", lambda dialog: dialog.accept())
+
+        # 1. Dashboard
         subs.add("Open the Deployment Console dashboard")
         await page.goto(DEPLOYMENT_URL, wait_until="networkidle")
-        print(f"  Navigated to dashboard: {page.url}")
         await page.wait_for_timeout(3000)
 
         # 2. Navigate to deployment page
         subs.add("Navigate to the Deployment tab")
         await page.goto(f"{DEPLOYMENT_URL}/deployment", wait_until="networkidle")
-        print(f"  Navigated to deployment: {page.url}")
         await page.wait_for_timeout(2500)
-
-        # Auto-accept window.confirm() dialogs (deployment uses confirm())
-        page.on("dialog", lambda dialog: dialog.accept())
 
         # 3. Click Start Deployment
         subs.add("Click Start Deployment to begin the 23-step process")
@@ -315,81 +404,133 @@ async def record_deployment(output: Path) -> Path:
                 print("  Clicking 'Start Deployment'...")
                 await start_btn.click()
                 await page.wait_for_timeout(3000)
-                print("  Deployment started (confirm dialog auto-accepted)")
+                print("  Deployment started")
             else:
-                print("  [WARN] 'Start Deployment' button not visible — may already be running")
-                subs.add("Deployment is already in progress — monitoring")
+                print("  [INFO] Start button not visible — deployment may already be running")
+                subs.add("Deployment is already in progress")
         except Exception as e:
             print(f"  [WARN] Could not click Start Deployment: {e}")
-            subs.add("Deployment is already in progress — monitoring")
 
-        # 5. Watch progress — poll until deployment finishes or timeout
+        # 4. Watch first 2-3 steps (~30s of progress)
         subs.add("The deployment runs 23 automated steps")
-        max_poll_minutes = 75  # Safety timeout
-        poll_interval = 15  # seconds
-        total_polls = (max_poll_minutes * 60) // poll_interval
         last_step = -1
-        print(f"  Polling deployment status (every {poll_interval}s, up to {max_poll_minutes} min)...")
-
-        for i in range(total_polls):
-            await page.wait_for_timeout(poll_interval * 1000)
-
-            # Check current status via page content
+        for i in range(6):  # 6 * 8s = ~48s of recording
+            await page.wait_for_timeout(8000)
             try:
-                status_text = await page.evaluate("""() => {
-                    const el = document.querySelector('[x-data]');
-                    if (el) {
-                        const data = Alpine.$data(el);
-                        return JSON.stringify({status: data.status, step: data.currentStep});
-                    }
-                    return '{}';
-                }""")
-                status = json.loads(status_text)
+                resp = await page.request.get(f"{DEPLOYMENT_URL}/api/deployment/status")
+                if resp.status == 200:
+                    status = await resp.json()
+                    current_step = status.get("current_step", -1)
+                    if current_step != last_step and current_step >= 0:
+                        print(f"  Step {current_step + 1}/23 in progress")
+                        subs.add(f"Step {current_step + 1} of 23: {status.get('current_step_name', '')}")
+                        last_step = current_step
+            except Exception:
+                pass
 
-                current_step = status.get("step", -1)
-                deploy_status = status.get("status", "unknown")
-
-                if current_step != last_step and current_step >= 0:
-                    print(f"  Step {current_step + 1}/23 — status: {deploy_status}")
-                    subs.add(f"Step {current_step + 1} of 23 in progress")
-                    last_step = current_step
-
-                if deploy_status in ("completed", "failed"):
-                    print(f"  Deployment {deploy_status}!")
-                    break
-            except Exception as e:
-                if i == 0:
-                    print(f"  [WARN] Could not read Alpine state: {e}")
-
-        # 6. Final state
-        await page.wait_for_timeout(3000)
-        try:
-            status_text = await page.evaluate("""() => {
-                const el = document.querySelector('[x-data]');
-                if (el) { return Alpine.$data(el).status; }
-                return '';
-            }""")
-            if status_text == "completed":
-                subs.add("Deployment completed successfully!")
-            elif status_text == "failed":
-                subs.add("Deployment encountered an error — see Recovery guide")
-            else:
-                subs.add("Deployment is still running — video recording ended")
-        except Exception:
-            subs.add("Deployment recording complete")
-
+        subs.add("Each step runs automatically — infrastructure, Talos, then applications")
         await page.wait_for_timeout(3000)
 
-        video_path = await page.video.path()
+        clip_a_path = await page.video.path()
         await page.close()
         await context.close()
         await browser.close()
 
+    print(f"  Clip A saved: {clip_a_path}")
+
+    # ── Wait for deployment to finish (poll REST API via urllib, no browser) ──
+    print("\n  --- Waiting for deployment to complete (polling REST, no browser) ---")
+    import urllib.request
+    import urllib.error
+
+    max_wait_minutes = 75
+    poll_interval = 30
+    total_polls = (max_wait_minutes * 60) // poll_interval
+    deploy_status = "unknown"
+
+    for i in range(total_polls):
+        await asyncio.sleep(poll_interval)
+        try:
+            req = urllib.request.Request(f"{DEPLOYMENT_URL}/api/deployment/status")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode())
+                    current_step = data.get("current_step", -1)
+                    deploy_status = data.get("status", "unknown")
+                    elapsed_min = (i + 1) * poll_interval // 60
+                    print(f"  [{elapsed_min}m] Step {current_step + 1}/23 — {deploy_status}")
+                    if deploy_status in ("completed", "failed"):
+                        break
+        except Exception as e:
+            if i == 0:
+                print(f"  [WARN] Poll failed: {e}")
+
+    print(f"  Deployment finished: {deploy_status}")
+
+    # ── Clip B: Completion state ─────────────────────────────
+    print("\n  --- Clip B: Recording completion state ---")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport=VIEWPORT,
+            ignore_https_errors=True,
+            record_video_dir=str(output / "raw"),
+            record_video_size=VIEWPORT,
+        )
+        page = await context.new_page()
+
+        await api_login(page, DEPLOYMENT_URL, PASSWORD)
+
+        # Show completed deployment page
+        if deploy_status == "completed":
+            subs.add("All 23 steps completed successfully!")
+        else:
+            subs.add(f"Deployment finished with status: {deploy_status}")
+
+        await page.goto(f"{DEPLOYMENT_URL}/deployment", wait_until="networkidle")
+        await page.wait_for_timeout(3500)
+
+        subs.add("The deployment page shows all steps completed with green checkmarks")
+        await page.wait_for_timeout(3000)
+
+        # Scroll down to show more completed steps
+        await page.evaluate("window.scrollBy(0, 300)")
+        await page.wait_for_timeout(2500)
+
+        # Navigate to dashboard to show final state
+        subs.add("The Dashboard now shows the cluster is fully operational")
+        await page.goto(DEPLOYMENT_URL, wait_until="networkidle")
+        await page.wait_for_timeout(3500)
+
+        subs.add("Your Talos Kubernetes cluster is ready to use!")
+        await page.wait_for_timeout(2500)
+
+        clip_b_path = await page.video.path()
+        await page.close()
+        await context.close()
+        await browser.close()
+
+    print(f"  Clip B saved: {clip_b_path}")
+
+    # ── Generate transition + stitch ─────────────────────────
+    transition_path = _generate_transition_frame(output)
+
+    final_mp4 = output / "02-deployment.mp4"
+    success = _stitch_clips(
+        Path(clip_a_path), transition_path, Path(clip_b_path), final_mp4
+    )
+
     subs.save(output / "02-deployment.srt")
-    print(f"  Video recorded: {video_path}")
-    print("  NOTE: This video is likely very long. Speed up with:")
-    print("    ffmpeg -i raw/video.webm -filter:v \"setpts=0.1*PTS\" -an 02-deployment-fast.mp4")
-    return Path(video_path)
+
+    if success:
+        print(f"  Final video: {final_mp4}")
+        # Clean up transition frame
+        transition_path.unlink(missing_ok=True)
+        return final_mp4
+    else:
+        # Fall back to returning clip A if stitching failed
+        print("  [WARN] Stitching failed — returning clip A only")
+        return Path(clip_a_path)
 
 
 async def record_vuln_scan(output: Path) -> Path:
@@ -787,16 +928,16 @@ async def main(args: argparse.Namespace) -> None:
     if has_ffmpeg:
         for vid_num, webm_path in recorded.items():
             name = video_names.get(vid_num, f"video-{vid_num}")
-            convert_to_mp4(webm_path, output / f"{name}.mp4",
-                            output / f"{name}.srt")
+            mp4_path = output / f"{name}.mp4"
+            # Video 2 already produces a stitched MP4 — skip conversion
+            if vid_num == "2" and webm_path.suffix == ".mp4":
+                print(f"  Video 2 already stitched as MP4: {webm_path.name}")
+                continue
+            convert_to_mp4(webm_path, mp4_path, output / f"{name}.srt")
     else:
         print("  FFmpeg not found — skipping MP4 conversion.")
         print("  Raw WebM files are in the 'raw/' subdirectory.")
         print("  Convert manually: ffmpeg -i video.webm -c:v libx264 -crf 23 output.mp4")
-
-    if "2" in recorded:
-        print("\n  NOTE: Video 2 (Deployment) is likely very long.")
-        print("  Speed up: ffmpeg -i 02-deployment.mp4 -filter:v \"setpts=0.1*PTS\" -an 02-deployment-fast.mp4")
 
 
 if __name__ == "__main__":
