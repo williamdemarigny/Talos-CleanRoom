@@ -24,6 +24,7 @@ class ScanTool(str, Enum):
     NMAP = "nmap"
     OPENVAS = "openvas"
     METASPLOIT = "metasploit"
+    WPSCAN = "wpscan"
 
 
 class ScanProfile(str, Enum):

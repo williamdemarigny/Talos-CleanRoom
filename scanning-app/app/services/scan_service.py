@@ -7,6 +7,7 @@ for consolidated vulnerability management.
 
 import asyncio
 import base64
+import json
 import logging
 import re
 import uuid
@@ -104,6 +105,9 @@ OPENVAS_TIMEOUTS = {
 METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
 METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (12 vuln modules)
 METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln modules)
+WPSCAN_TIMEOUT_QUICK = 120          # 2 min for version detection only
+WPSCAN_TIMEOUT_STANDARD = 600       # 10 min for plugin/theme enumeration
+WPSCAN_TIMEOUT_THOROUGH = 1800      # 30 min for aggressive enumeration
 FARADAY_UPLOAD_TIMEOUT = 300   # 5 min for Faraday upload (one API call per result)
 
 # Nmap flags per profile
@@ -1304,6 +1308,8 @@ except Exception as e:
                         xml_result = await self._run_openvas_scan(target, profile)
                     elif tool == ScanTool.METASPLOIT:
                         xml_result = await self._run_metasploit_scan(target, profile)
+                    elif tool == ScanTool.WPSCAN:
+                        xml_result = await self._run_wpscan_scan(target, profile)
 
                     if xml_result and scan.status == ScanStatus.RUNNING:
                         await self._update_tool_state(tool, status=ScanStatus.COMPLETED, completed_at=datetime.utcnow())
@@ -3124,6 +3130,170 @@ except Exception as e:
             await self.log("metasploit", "info", line)
 
     # =========================================================================
+    # WPSCAN
+    # =========================================================================
+
+    async def _run_wpscan_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run a WPScan scan via a temporary Kubernetes pod.
+
+        WPScan is a WordPress-specific vulnerability scanner that detects outdated
+        core/plugin/theme versions and known CVEs. It outputs JSON which we return
+        as-is for parsing by _persist_wpscan_results.
+        """
+        scan_id = self.current_scan.id
+        pod_name = f"wpscan-scan-{scan_id}"
+
+        timeout = {
+            ScanProfile.QUICK: WPSCAN_TIMEOUT_QUICK,
+            ScanProfile.STANDARD: WPSCAN_TIMEOUT_STANDARD,
+            ScanProfile.THOROUGH: WPSCAN_TIMEOUT_THOROUGH,
+        }.get(profile, WPSCAN_TIMEOUT_STANDARD)
+
+        # Parse host:port — build target URL for WPScan
+        wp_host, wp_port = self._parse_target(target)
+        if wp_port and wp_port == 443:
+            target_url = f"https://{wp_host}:{wp_port}"
+        elif wp_port:
+            target_url = f"http://{wp_host}:{wp_port}"
+        else:
+            target_url = f"http://{wp_host}"
+
+        # Build WPScan flags based on profile
+        # --no-banner: suppress ASCII art header
+        # --format json: machine-readable output
+        # --random-user-agent: avoid bot detection
+        # --disable-tls-checks: K8s internal certs are self-signed
+        base_flags = [
+            "--url", target_url,
+            "--format", "json",
+            "--no-banner",
+            "--random-user-agent",
+            "--disable-tls-checks",
+        ]
+
+        if profile == ScanProfile.QUICK:
+            # Version detection only — no plugin/theme enumeration
+            flags = base_flags
+        elif profile == ScanProfile.THOROUGH:
+            # Aggressive enumeration: all plugins, all themes, users, config backups
+            flags = base_flags + [
+                "--enumerate", "ap,at,u,cb,dbe",
+                "--plugins-detection", "aggressive",
+            ]
+        else:
+            # Standard: popular plugins + themes + users
+            flags = base_flags + [
+                "--enumerate", "vp,vt,u",
+                "--plugins-detection", "mixed",
+            ]
+
+        await self.log("wpscan", "info",
+            f"Launching WPScan pod '{pod_name}' targeting {target_url} ({profile.value} profile)")
+
+        # Create pod in wpscan-scanner namespace
+        wpscan_ns = "wpscan-scanner"
+        await self.k8s.ensure_namespace(wpscan_ns)
+
+        create_result = await self.process_manager.run_command_simple(
+            ["kubectl", "run", pod_name,
+             "--image=wpscanteam/wpscan:latest",
+             "--restart=Never",
+             f"--namespace={wpscan_ns}",
+             "--"] + flags,
+            timeout=30
+        )
+
+        if not create_result.success:
+            await self.log("wpscan", "error", f"Failed to create WPScan pod: {create_result.output}")
+            return None
+
+        await self.log("wpscan", "info", "WPScan pod created, waiting for scan to complete...")
+
+        # Wait for pod to complete
+        await self.process_manager.run_command_simple(
+            ["kubectl", "wait", "--for=condition=Ready=false",
+             f"pod/{pod_name}", f"--namespace={wpscan_ns}",
+             f"--timeout={timeout}s"],
+            timeout=timeout + 30
+        )
+
+        # Poll for pod phase (Succeeded/Failed)
+        poll_attempts = timeout // 5
+        pod_done = False
+        for attempt in range(poll_attempts):
+            phase = await self.k8s.get_pod_phase(wpscan_ns, pod_name)
+            if phase in ("Succeeded", "Failed"):
+                pod_done = True
+                await self.log("wpscan", "info", f"WPScan pod finished (phase: {phase})")
+                break
+            elif phase is None or phase == "":
+                pod_done = True
+                break
+            await asyncio.sleep(5)
+
+        if not pod_done:
+            await self.log("wpscan", "error", f"WPScan scan timed out after {timeout}s")
+            await self.k8s.delete_pod(wpscan_ns, pod_name, force=True, timeout=15)
+            return None
+
+        # Read the pod logs (contains WPScan JSON output)
+        logs_result = await self.k8s.get_pod_logs(wpscan_ns, pod_name, timeout=30)
+
+        # Clean up the pod
+        await self.k8s.delete_pod(wpscan_ns, pod_name, force=True, timeout=15)
+
+        output = logs_result.output or ""
+
+        # WPScan JSON output starts with { and ends with }
+        json_start = output.find("{")
+        json_end = output.rfind("}")
+
+        if json_start >= 0 and json_end > json_start:
+            json_content = output[json_start:json_end + 1]
+            try:
+                data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                await self.log("wpscan", "error", f"Failed to parse WPScan JSON: {e}")
+                return None
+
+            # Count findings
+            vuln_count = 0
+            # WordPress core vulns
+            wp_version = data.get("version", {})
+            if wp_version:
+                vuln_count += len(wp_version.get("vulnerabilities", []))
+            # Plugin vulns
+            for plugin_data in data.get("plugins", {}).values():
+                vuln_count += len(plugin_data.get("vulnerabilities", []))
+            # Theme vulns
+            for theme_data in data.get("themes", {}).values():
+                vuln_count += len(theme_data.get("vulnerabilities", []))
+
+            await self.log("wpscan", "info",
+                f"WPScan found {vuln_count} vulnerability(ies)")
+
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.WPSCAN:
+                    ts.findings_count = vuln_count
+                    break
+
+            return json_content
+        else:
+            # No JSON found — log raw output for debugging
+            await self.log("wpscan", "warn",
+                f"Could not extract JSON from WPScan output ({len(output)} bytes)")
+            # WPScan exits non-zero when target isn't WordPress
+            if "does not seem to be running WordPress" in output:
+                await self.log("wpscan", "warn",
+                    "Target does not appear to be running WordPress — skipping WPScan")
+            else:
+                for line in output.split("\n")[-20:]:
+                    line = line.strip()
+                    if line:
+                        await self.log("wpscan", "info", f"  {line}")
+            return None
+
+    # =========================================================================
     # FARADAY UPLOAD
     # =========================================================================
 
@@ -3168,6 +3338,7 @@ except Exception as e:
             "nmap": "nmap",
             "openvas": "openvas",
             "metasploit": "metasploit",
+            "wpscan": "wpscan",
         }
         plugin_name = plugin_map.get(tool_name, tool_name)
 
@@ -3905,6 +4076,8 @@ except Exception as e:
             await self._persist_openvas_results(xml_content, scan_id)
         elif tool_name == "metasploit":
             await self._persist_metasploit_results(xml_content, scan_id)
+        elif tool_name == "wpscan":
+            await self._persist_wpscan_results(xml_content, scan_id)
         else:
             await self.log(tool_name, "warn", f"No DB persistence parser for tool: {tool_name}")
 
@@ -4389,6 +4562,128 @@ except Exception as e:
                 self._msf_console_findings = []
 
         await self._log_persist_summary("metasploit", hosts_created, services_created, vulns_created)
+
+    async def _persist_wpscan_results(self, json_content: str, scan_id: str):
+        """Parse WPScan JSON and persist hosts, services, and vulns to PostgreSQL.
+
+        WPScan JSON structure:
+        {
+          "target_url": "http://host:port/",
+          "version": {"number": "4.6", "vulnerabilities": [...]},
+          "main_theme": {"slug": "...", "vulnerabilities": [...]},
+          "plugins": {"plugin-name": {"slug": "...", "version": {...}, "vulnerabilities": [...]}},
+          "themes": {"theme-name": {"slug": "...", "vulnerabilities": [...]}},
+        }
+        """
+        try:
+            data = json.loads(json_content)
+        except json.JSONDecodeError as e:
+            await self.log("wpscan", "warn", f"Failed to parse WPScan JSON for DB persistence: {e}")
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        # Extract target info
+        target_url = data.get("target_url", "")
+        # Parse IP/hostname from URL
+        import urllib.parse
+        parsed = urllib.parse.urlparse(target_url)
+        ip = parsed.hostname or "unknown"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        async with db_engine._session_factory() as session:
+            # Create host
+            host_id = await result_store.persist_host(
+                session, scan_id=scan_id, ip=ip,
+            )
+            hosts_created += 1
+
+            # Create HTTP service
+            wp_version = data.get("version", {})
+            version_str = f"WordPress {wp_version.get('number', 'unknown')}" if wp_version else None
+            service_id = await result_store.persist_service(
+                session, host_id=host_id, scan_id=scan_id,
+                port=port, protocol="tcp", name="http",
+                version=version_str, status="open",
+            )
+            services_created += 1
+
+            # WordPress core vulnerabilities
+            if wp_version:
+                for vuln in wp_version.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r.get("url", "") for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=vuln.get("title", "WordPress Core Vulnerability"),
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+            # Plugin vulnerabilities
+            for plugin_slug, plugin_data in data.get("plugins", {}).items():
+                for vuln in plugin_data.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=f"[Plugin: {plugin_slug}] {vuln.get('title', 'Unknown')}",
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+            # Theme vulnerabilities
+            for theme_slug, theme_data in data.get("themes", {}).items():
+                for vuln in theme_data.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=f"[Theme: {theme_slug}] {vuln.get('title', 'Unknown')}",
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+        await self._log_persist_summary("wpscan", hosts_created, services_created, vulns_created)
+
+    @staticmethod
+    def _wpscan_vuln_severity(vuln: dict) -> str:
+        """Map WPScan vuln type to severity string."""
+        vuln_type = vuln.get("vuln_type", "").lower()
+        if "rce" in vuln_type or "sqli" in vuln_type or "sql injection" in vuln_type:
+            return "critical"
+        elif "xss" in vuln_type or "auth" in vuln_type or "bypass" in vuln_type:
+            return "high"
+        elif "csrf" in vuln_type or "redirect" in vuln_type:
+            return "medium"
+        elif "disclosure" in vuln_type or "information" in vuln_type:
+            return "low"
+        # Default: if it has CVEs, it's at least medium
+        cves = vuln.get("references", {}).get("cve", [])
+        return "medium" if cves else "low"
 
     def _save_to_history(self):
         """Save current scan summary to history."""
