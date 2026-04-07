@@ -3,12 +3,7 @@
 # This certificate covers all subdomains and the apex domain.
 # Uses Let's Encrypt with DNS-01 challenge via Cloudflare.
 #
-# Initially configured for staging - switch to letsencrypt-prod after testing.
-#
-# To switch to production:
-#   1. Update issuerRef.name to "letsencrypt-prod"
-#   2. Delete the existing certificate secret: kubectl delete secret knowledgeondemand-wildcard-tls -n traefik
-#   3. Wait for cert-manager to issue new certificate
+# Uses letsencrypt-prod for trusted certificates.
 #
 ---
 apiVersion: cert-manager.io/v1
@@ -22,10 +17,9 @@ spec:
   # Secret name where the certificate will be stored
   secretName: knowledgeondemand-wildcard-tls
 
-  # Certificate issuer - using staging to avoid rate limits during testing
-  # Switch to letsencrypt-prod for trusted certificates in production
+  # Certificate issuer - production Let's Encrypt (trusted by all systems)
   issuerRef:
-    name: letsencrypt-staging
+    name: letsencrypt-prod
     kind: ClusterIssuer
 
   # Common name (primary domain)

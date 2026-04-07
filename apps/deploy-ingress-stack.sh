@@ -140,8 +140,7 @@ echo ""
 # Apply Wildcard Certificate
 echo "[10/13] Applying Wildcard Certificate..."
 kubectl apply -f "${SCRIPT_DIR}/cert-manager/wildcard-certificate.yaml"
-echo "✓ Wildcard certificate applied (uses letsencrypt-staging by default)"
-echo "  Note: Switch to letsencrypt-prod after testing"
+echo "✓ Wildcard certificate applied (letsencrypt-prod)"
 echo ""
 
 # Deploy Ceph CSI RBD
