@@ -26,19 +26,25 @@ spec:
       protocol: TCP
       name: http
 ---
-# Endpoints pointing to the LXC container IP
-apiVersion: v1
-kind: Endpoints
+# EndpointSlice pointing to the LXC container IP
+# Using EndpointSlice instead of Endpoints to prevent K8s endpoints controller
+# from garbage-collecting manually-managed endpoints for a selector-less Service
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
 metadata:
-  name: deployment-console
+  name: deployment-console-external
   namespace: deployment-console
   labels:
     app.kubernetes.io/name: deployment-console
     app.kubernetes.io/component: web-ui
-subsets:
+    kubernetes.io/service-name: deployment-console
+addressType: IPv4
+ports:
+  - port: 8000
+    protocol: TCP
+    name: http
+endpoints:
   - addresses:
-      - ip: 10.83.3.190
-    ports:
-      - port: 8000
-        protocol: TCP
-        name: http
+      - "10.83.3.190"
+    conditions:
+      ready: true

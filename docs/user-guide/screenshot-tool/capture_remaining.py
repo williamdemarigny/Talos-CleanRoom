@@ -13,6 +13,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 
 from playwright.async_api import async_playwright, Page, BrowserContext, Route
@@ -282,34 +283,36 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
     scan = SCANNING_URL
 
     # --- Scan running ---
+    # Use elasticsearch-groovy Vulhub target for realistic screenshots
+    es_target = "elasticsearch-groovy.vulhub-elasticsearch-groovy-1434ad.svc.cluster.local:9200"
     page = await context.new_page()
     running_state = {
-        "id": "scan-001", "target": "10.83.3.0/24", "profile": "standard",
+        "id": "97a676ca", "target": es_target, "profile": "standard",
         "tools": [
             {"tool": "nmap", "status": "completed",
-             "started_at": "2025-01-01T12:00:00", "completed_at": "2025-01-01T12:02:00",
-             "error_message": None, "findings_count": 47, "uploaded_to_faraday": True},
+             "started_at": "2026-04-08T14:00:00", "completed_at": "2026-04-08T14:01:30",
+             "error_message": None, "findings_count": 3, "uploaded_to_faraday": True},
             {"tool": "openvas", "status": "running",
-             "started_at": "2025-01-01T12:02:00", "completed_at": None,
-             "error_message": None, "findings_count": 23, "uploaded_to_faraday": False},
+             "started_at": "2026-04-08T14:01:35", "completed_at": None,
+             "error_message": None, "findings_count": 8, "uploaded_to_faraday": False},
             {"tool": "metasploit", "status": "idle",
              "started_at": None, "completed_at": None,
              "error_message": None, "findings_count": 0, "uploaded_to_faraday": False},
         ],
         "status": "running",
-        "started_at": "2025-01-01T12:00:00", "completed_at": None,
+        "started_at": "2026-04-08T14:00:00", "completed_at": None,
     }
     mock_logs = [
-        {"tool": "nmap", "level": "INFO", "message": "Nmap scan completed: 47 findings across 12 hosts",
-         "timestamp": "2025-01-01T12:02:00"},
+        {"tool": "nmap", "level": "INFO", "message": f"Starting Nmap scan against {es_target}",
+         "timestamp": "2026-04-08T14:00:00"},
+        {"tool": "nmap", "level": "INFO", "message": "Nmap scan completed: 3 findings (1 host, 1 open port: 9200/tcp Elasticsearch)",
+         "timestamp": "2026-04-08T14:01:30"},
         {"tool": "nmap", "level": "INFO", "message": "Results uploaded to Faraday workspace 'pentest'",
-         "timestamp": "2025-01-01T12:02:05"},
+         "timestamp": "2026-04-08T14:01:35"},
         {"tool": "openvas", "level": "INFO", "message": "OpenVAS scan started with Full and Fast config",
-         "timestamp": "2025-01-01T12:02:10"},
-        {"tool": "openvas", "level": "INFO", "message": "Scan progress: 42% | Active hosts: 8 | Results: 23",
-         "timestamp": "2025-01-01T12:04:00"},
-        {"tool": "openvas", "level": "INFO", "message": "Scan progress: 58% | Active hosts: 6 | Results: 31",
-         "timestamp": "2025-01-01T12:05:00"},
+         "timestamp": "2026-04-08T14:01:40"},
+        {"tool": "openvas", "level": "INFO", "message": "Scan progress: 34% | Active hosts: 1 | Results: 8 | Elapsed: 4m 12s",
+         "timestamp": "2026-04-08T14:05:52"},
     ]
 
     async def handle_status(route: Route) -> None:
@@ -337,20 +340,20 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
     # --- Scan completed with enrichment ---
     page = await context.new_page()
     completed_state = {
-        "id": "scan-001", "target": "10.83.3.0/24", "profile": "standard",
+        "id": "97a676ca", "target": es_target, "profile": "standard",
         "tools": [
             {"tool": "nmap", "status": "completed",
-             "started_at": "2025-01-01T12:00:00", "completed_at": "2025-01-01T12:02:00",
-             "error_message": None, "findings_count": 47, "uploaded_to_faraday": True},
+             "started_at": "2026-04-08T14:00:00", "completed_at": "2026-04-08T14:01:30",
+             "error_message": None, "findings_count": 3, "uploaded_to_faraday": True},
             {"tool": "openvas", "status": "completed",
-             "started_at": "2025-01-01T12:02:00", "completed_at": "2025-01-01T12:45:00",
-             "error_message": None, "findings_count": 89, "uploaded_to_faraday": True},
+             "started_at": "2026-04-08T14:01:35", "completed_at": "2026-04-08T14:38:00",
+             "error_message": None, "findings_count": 14, "uploaded_to_faraday": True},
             {"tool": "metasploit", "status": "completed",
-             "started_at": "2025-01-01T12:45:00", "completed_at": "2025-01-01T12:52:00",
-             "error_message": None, "findings_count": 12, "uploaded_to_faraday": True},
+             "started_at": "2026-04-08T14:38:05", "completed_at": "2026-04-08T14:42:30",
+             "error_message": None, "findings_count": 2, "uploaded_to_faraday": True},
         ],
         "status": "completed",
-        "started_at": "2025-01-01T12:00:00", "completed_at": "2025-01-01T12:52:00",
+        "started_at": "2026-04-08T14:00:00", "completed_at": "2026-04-08T14:42:30",
     }
 
     async def handle_completed(route: Route) -> None:
@@ -378,8 +381,8 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
 
     # Mock enrichment status
     enrichment_status = {
-        "running": True, "scan_id": "scan-001",
-        "progress": 67, "total": 148, "status": "running",
+        "running": True, "scan_id": "97a676ca",
+        "progress": 11, "total": 19, "status": "running",
     }
     await page.route("**/api/enrichment/status**", lambda r: r.fulfill(
         status=200, content_type="application/json",
@@ -397,8 +400,8 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
             const data = Alpine.$data(el);
             if (data) {
                 data.enrichmentStatus = 'running';
-                data.enrichmentProgress = 67;
-                data.enrichmentTotal = 148;
+                data.enrichmentProgress = 11;
+                data.enrichmentTotal = 19;
             }
         }
     }""")
@@ -413,6 +416,10 @@ async def capture_target_lab_mocked(context: BrowserContext, output: Path) -> No
     scan = SCANNING_URL
 
     mock_catalog = [
+        {"env_id": "elasticsearch-groovy", "name": "Elasticsearch Groovy RCE",
+         "cve": "CVE-2015-1427", "category": "rce", "difficulty": "easy", "tier": "tier1",
+         "description": "Remote code execution via Groovy scripting engine in Elasticsearch 1.3.x before 1.3.8 and 1.4.x before 1.4.3.",
+         "services": ["9200/tcp"], "recommended_scan": {"tools": ["nmap", "openvas", "metasploit"], "profile": "standard"}},
         {"env_id": "apache-cve-2021-41773", "name": "Apache 2.4.49 Path Traversal",
          "cve": "CVE-2021-41773", "category": "web", "difficulty": "easy", "tier": "tier1",
          "description": "Path traversal and RCE via crafted URI in Apache HTTP Server 2.4.49.",
@@ -433,32 +440,29 @@ async def capture_target_lab_mocked(context: BrowserContext, output: Path) -> No
          "cve": "CVE-2022-0543", "category": "database", "difficulty": "hard", "tier": "tier2",
          "description": "Lua sandbox escape leading to RCE in Redis on Debian-based systems.",
          "services": ["6379/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
-        {"env_id": "wordpress-cve-2022-21661", "name": "WordPress SQLi (WP_Query)",
-         "cve": "CVE-2022-21661", "category": "web", "difficulty": "medium", "tier": "tier3",
-         "description": "SQL injection via WP_Query in WordPress before 5.8.3.",
-         "services": ["80/tcp", "3306/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "standard"}},
     ]
 
     mock_targets_active = [
-        {"id": "tgt-001", "env_id": "apache-cve-2021-41773", "name": "Apache 2.4.49 Path Traversal",
-         "cve_id": "CVE-2021-41773", "category": "web",
-         "service_endpoint": "10.83.3.220:32001", "status": "running",
-         "created_at": "2025-01-01T12:00:00", "ttl_expires_at": "2025-01-01T14:00:00",
+        {"id": "1434ad", "env_id": "elasticsearch-groovy", "name": "Elasticsearch Groovy RCE",
+         "cve_id": "CVE-2015-1427", "category": "rce",
+         "service_endpoint": "elasticsearch-groovy.vulhub-elasticsearch-groovy-1434ad.svc.cluster.local:9200",
+         "status": "running",
+         "created_at": "2026-04-08T13:45:00", "ttl_expires_at": "2026-04-08T15:45:00",
          "error_message": None},
         {"id": "tgt-002", "env_id": "log4j-cve-2021-44228", "name": "Log4Shell (Log4j RCE)",
          "cve_id": "CVE-2021-44228", "category": "rce",
          "service_endpoint": "10.83.3.220:32002", "status": "deploying",
-         "created_at": "2025-01-01T12:05:00", "ttl_expires_at": "2025-01-01T14:05:00",
+         "created_at": "2026-04-08T14:05:00", "ttl_expires_at": "2026-04-08T16:05:00",
          "error_message": None},
     ]
 
     mock_deploy_logs = {
         "tgt-002": [
-            {"timestamp": "2025-01-01T12:05:01", "step": "create_namespace", "level": "INFO",
+            {"timestamp": "2026-04-08T14:05:01", "step": "create_namespace", "level": "INFO",
              "message": "Creating namespace target-log4j-cve-2021-44228"},
-            {"timestamp": "2025-01-01T12:05:03", "step": "apply_manifests", "level": "INFO",
+            {"timestamp": "2026-04-08T14:05:03", "step": "apply_manifests", "level": "INFO",
              "message": "Applying Vulhub manifests for log4j-cve-2021-44228"},
-            {"timestamp": "2025-01-01T12:05:08", "step": "wait_ready", "level": "INFO",
+            {"timestamp": "2026-04-08T14:05:08", "step": "wait_ready", "level": "INFO",
              "message": "Waiting for pods to become ready (0/2 ready)..."},
         ],
     }
@@ -537,22 +541,12 @@ async def capture_scanning_interactions(context: BrowserContext, output: Path) -
         await capture(page, output / "scanning", "scanning-vuln-remediation.jpg", full_page=True)
         print(f"  [INFO] Captured vulns page as fallback: {e}")
 
-    # Scan detail page — retry with viewport screenshot instead of full_page
-    await page.goto(f"{scan}/reports", wait_until="networkidle")
+    # Scan detail page — navigate directly to known scan ID
+    scan_detail_id = os.environ.get("SCAN_DETAIL_ID", "97a676ca")
+    await page.goto(f"{scan}/reports/scan/{scan_detail_id}", wait_until="networkidle")
     await wait_for_alpine(page)
     await page.wait_for_timeout(1000)
-
-    try:
-        first_detail = page.locator("text=View Details").first
-        if await first_detail.is_visible(timeout=3000):
-            await first_detail.click()
-            await page.wait_for_load_state("networkidle")
-            await wait_for_alpine(page)
-            await page.wait_for_timeout(1000)
-            # Use viewport screenshot (not full_page) to avoid rendering issues
-            await capture(page, output / "reports", "reports-scan-detail.jpg", full_page=False)
-    except Exception as e:
-        print(f"  [WARN] Could not capture scan detail: {e}")
+    await capture(page, output / "reports", "reports-scan-detail.jpg", full_page=True)
 
     await page.close()
 
@@ -603,5 +597,10 @@ if __name__ == "__main__":
     parser.add_argument("--username", default=USERNAME)
     parser.add_argument("--password", default=PASSWORD)
     parser.add_argument("--scanning-password", default=None)
+    parser.add_argument("--scan-detail-id", default="97a676ca", help="Scan ID for detail screenshot")
     args = parser.parse_args()
+
+    if args.scan_detail_id:
+        os.environ["SCAN_DETAIL_ID"] = args.scan_detail_id
+
     asyncio.run(main(args))
