@@ -6,7 +6,7 @@ The Target Lab lets you deploy **Vulhub vulnerable environments** directly into 
 
 - **Testing scan profiles** — validate that Quick, Standard, or Thorough profiles detect known vulnerabilities
 - **Training** — practice running scans and interpreting results against known targets
-- **Verifying tool coverage** — confirm that Nmap, OpenVAS, and Metasploit detect the CVEs in each environment
+- **Verifying tool coverage** — confirm that Nmap, OpenVAS, Metasploit, and WPScan detect the CVEs in each environment
 
 ## Browsing the Catalog
 

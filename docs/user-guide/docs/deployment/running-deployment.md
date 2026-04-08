@@ -1,6 +1,6 @@
 # Running a Deployment
 
-The deployment process runs 23 automated steps to set up the entire platform — from creating virtual machines to deploying all security tools. The whole process typically takes **30 to 60 minutes**.
+The deployment process runs 26 automated steps to set up the entire platform — from creating virtual machines to deploying all security tools. The whole process typically takes **30 to 60 minutes**.
 
 ## Starting a Deployment
 
@@ -22,7 +22,7 @@ Once running, the page shows real-time progress:
 
 ### Step List
 
-Each of the 23 steps is shown in the left panel with a status icon:
+Each of the 26 steps is shown in the left panel with a status icon:
 
 | Icon | Status | Meaning |
 |---|---|---|
@@ -58,7 +58,7 @@ You can now:
 - Navigate to the [Scanning Console](../scanning/vulnerability-scan.md) to start scanning
 
 !!! note "Time expectations by step"
-    Some steps are fast (seconds), while others take several minutes. Steps 2-3 (Terraform deploy + VM boot) and steps 8-15 (installing all applications) are typically the longest. See [Deployment Steps Reference](../reference/deployment-steps.md) for details.
+    Some steps are fast (seconds), while others take several minutes. Steps 2-3 (Terraform deploy + VM boot) and steps 9-17 (infrastructure and application deployment) are typically the longest. See [Deployment Steps Reference](../reference/deployment-steps.md) for details.
 
 ## Video Walkthrough
 

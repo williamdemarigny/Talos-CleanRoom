@@ -712,6 +712,8 @@
       
         
       
+        
+      
     
     
     
@@ -830,6 +832,34 @@
     
   
     IOC Scanning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scanning/target-lab/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Lab
   
 
     
@@ -1356,6 +1386,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#wpscan-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WPScan Details
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#custom-profile" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1643,6 +1684,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#wpscan-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WPScan Details
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#custom-profile" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1707,8 +1759,8 @@
 <tbody>
 <tr>
 <td><strong>Duration</strong></td>
-<td>~5 minutes</td>
-<td>~1-2 hours</td>
+<td>~5-15 min (Nmap) / ~2 hrs (with OpenVAS)</td>
+<td>~2-8 hours</td>
 <td>~4-14 hours</td>
 </tr>
 <tr>
@@ -1734,6 +1786,12 @@
 <td>Not available</td>
 <td>11 core modules</td>
 <td>39 modules (comprehensive)</td>
+</tr>
+<tr>
+<td><strong>WPScan</strong></td>
+<td>Version detection only</td>
+<td>Vulnerable plugins + themes, user detection</td>
+<td>Aggressive enumeration of all plugins, themes, users, and config backups</td>
 </tr>
 </tbody>
 </table>
@@ -1813,6 +1871,30 @@
 <li>Database scanners (MySQL, PostgreSQL, MSSQL)</li>
 <li>Additional service fingerprinting</li>
 </ul>
+<h2 id="wpscan-details">WPScan Details<a class="headerlink" href="#wpscan-details" title="Permanent link">¶</a></h2>
+<p>WPScan is a WordPress-specific vulnerability scanner. It runs as a temporary Kubernetes pod using the <code>wpscanteam/wpscan</code> image. If the target is not running WordPress, WPScan automatically skips and reports no findings.</p>
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>What It Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Quick</td>
+<td>Detects WordPress version only</td>
+</tr>
+<tr>
+<td>Standard</td>
+<td>Enumerates vulnerable plugins and themes, detects users</td>
+</tr>
+<tr>
+<td>Thorough</td>
+<td>Aggressive enumeration of all plugins, themes, users, and config backups</td>
+</tr>
+</tbody>
+</table>
 <h2 id="custom-profile">Custom Profile<a class="headerlink" href="#custom-profile" title="Permanent link">¶</a></h2>
 <p>The Custom profile lets you pick exactly which tools and modules to run:</p>
 <ul>
@@ -1828,6 +1910,7 @@
 <th>Nmap</th>
 <th>OpenVAS</th>
 <th>Metasploit</th>
+<th>WPScan</th>
 </tr>
 </thead>
 <tbody>
@@ -1836,18 +1919,21 @@
 <td>5 min</td>
 <td>2 hr 5 min</td>
 <td>15 min</td>
+<td>2 min</td>
 </tr>
 <tr>
 <td>Standard</td>
 <td>15 min</td>
 <td>8 hr</td>
 <td>1 hr 30 min</td>
+<td>10 min</td>
 </tr>
 <tr>
 <td>Thorough</td>
 <td>1 hr</td>
 <td>14 hr</td>
 <td>3 hr</td>
+<td>30 min</td>
 </tr>
 </tbody>
 </table>

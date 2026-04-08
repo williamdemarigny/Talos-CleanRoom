@@ -11,7 +11,7 @@ Each vulnerability can be assigned one of these statuses:
 | **Open** | Default — the vulnerability has been found but no action taken yet |
 | **In Progress** | Someone is actively working on a fix |
 | **Resolved** | The vulnerability has been fixed or patched |
-| **False Positive** | The finding is incorrect — the vulnerability does not actually exist |
+| **False Positive** | The finding is incorrect — the vulnerability does not actually exist (set via API) |
 | **Accepted** | The risk is acknowledged but will not be fixed (e.g., low risk, mitigating controls in place) |
 
 ## Updating a Single Vulnerability

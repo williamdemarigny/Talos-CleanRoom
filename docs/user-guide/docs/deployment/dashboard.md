@@ -18,7 +18,7 @@ At the top of the Dashboard, you will see three status cards:
 
 Below the status cards, you will find action buttons:
 
-- **Start Deployment** — begins the 23-step deployment process (see [Running a Deployment](running-deployment.md))
+- **Start Deployment** — begins the 26-step deployment process (see [Running a Deployment](running-deployment.md))
 - **View Progress** — jumps to the Deployment page to watch a running deployment
 - **Edit Configuration** — opens the Configuration page to review or change settings
 - **Download Kubeconfig** — downloads the cluster access file (only available after a successful deployment)

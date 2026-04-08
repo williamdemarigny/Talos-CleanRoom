@@ -21,6 +21,10 @@ At the top, key scan metadata:
 - **Duration** — how long the scan took
 - **Status** — whether it completed successfully
 
+### Target Lab Coverage
+
+When viewing a scan that targeted a Target Lab environment, a **Lab Coverage** banner appears showing which expected CVEs were detected by the scanners and which were missed. This helps validate scanner effectiveness against known vulnerabilities.
+
 ### Hosts Discovered
 
 A list of all IP addresses (hosts) that the scan found, with:
