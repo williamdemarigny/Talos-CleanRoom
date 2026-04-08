@@ -35,11 +35,40 @@ IOC (Indicator of Compromise) scanning checks a remote file system for signs of 
     - **Password** — Windows password
     - **Domain** — Windows domain (optional)
 
-4. Optionally expand **Advanced Options**:
+4. **Ensure the target allows inbound connections** from the Kubernetes worker subnet:
+
+    === "Windows (SMB — port 445)"
+
+        The scanner connects via SMB from the Kubernetes workers (`10.83.3.0/24`). If Windows Firewall is blocking port 445, the mount will fail with `Operation now in progress`. Open an **elevated PowerShell** and run:
+
+        ```powershell
+        New-NetFirewallRule -DisplayName "Allow SMB from K8s VLAN" `
+            -Direction Inbound -Protocol TCP -LocalPort 445 `
+            -RemoteAddress 10.83.3.0/24 -Action Allow
+        ```
+
+    === "Linux (SSH — port 22)"
+
+        The scanner connects via SSH from the Kubernetes workers (`10.83.3.0/24`). If `iptables` or `ufw` is blocking port 22, allow it:
+
+        **Using ufw:**
+        ```bash
+        sudo ufw allow from 10.83.3.0/24 to any port 22 proto tcp
+        ```
+
+        **Using iptables:**
+        ```bash
+        sudo iptables -A INPUT -p tcp --dport 22 -s 10.83.3.0/24 -j ACCEPT
+        ```
+
+    !!! tip "Scope the rule to the K8s subnet"
+        The examples above only allow access from `10.83.3.0/24` (the Kubernetes VLAN), not from all networks. Adjust the subnet if your cluster uses a different IP range.
+
+5. Optionally expand **Advanced Options**:
     - **Max file size** — skip files larger than this (default: 100 MB)
     - **Scan archives** — check inside ZIP/TAR files
 
-5. Click **Start IOC Scan**
+6. Click **Start IOC Scan**
 
 !!! note "Credentials are transmitted securely"
     Your SSH or SMB credentials are sent over an encrypted HTTPS connection and are not stored after the scan completes.

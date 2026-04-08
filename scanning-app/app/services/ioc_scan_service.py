@@ -713,9 +713,48 @@ class IocScanService(BaseServiceMixin):
                 pod_done = True
                 break
 
-            # Stream any new log lines periodically for user feedback
-            if attempt > 0 and attempt % 6 == 0:  # Every 30s
-                await self.log("info", f"Scan in progress... ({attempt * poll_interval}s elapsed)")
+            # Stream live LOKI-RS output every 15s for progress visibility
+            if attempt > 0 and attempt % 3 == 0:
+                try:
+                    live_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=10)
+                    if live_logs.output:
+                        lines = live_logs.output.strip().splitlines()
+                        # Count findings so far from JSONL output
+                        finding_count = 0
+                        files_scanned = 0
+                        last_status = ""
+                        for ln in lines:
+                            ln = ln.strip()
+                            if not ln:
+                                continue
+                            try:
+                                data = json.loads(ln)
+                                level = data.get("level", "").lower()
+                                if level in ("alert", "warning", "notice"):
+                                    finding_count += 1
+                                elif level == "info":
+                                    msg = data.get("message", "")
+                                    if "files scanned" in msg.lower() or "scanning" in msg.lower():
+                                        last_status = msg
+                                    # Track progress lines
+                                    files_val = data.get("files_scanned", data.get("files", 0))
+                                    if isinstance(files_val, int) and files_val > files_scanned:
+                                        files_scanned = files_val
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+
+                        elapsed = attempt * poll_interval
+                        parts = [f"{elapsed}s elapsed"]
+                        if finding_count > 0:
+                            parts.append(f"{finding_count} finding(s) so far")
+                        if files_scanned > 0:
+                            parts.append(f"{files_scanned} files scanned")
+                        if last_status:
+                            parts.append(last_status)
+                        await self.log("info", f"Scan in progress... ({', '.join(parts)})")
+                except Exception:
+                    elapsed = attempt * poll_interval
+                    await self.log("info", f"Scan in progress... ({elapsed}s elapsed)")
 
             await asyncio.sleep(poll_interval)
 
