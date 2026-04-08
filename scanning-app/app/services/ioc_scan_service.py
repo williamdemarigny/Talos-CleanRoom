@@ -285,7 +285,7 @@ class IocScanService(BaseServiceMixin):
             await self._broadcast_state()
             await self.log("info", "Creating LOKI-RS scanner pod...")
 
-            jsonl_output = await self._run_loki_pod(request)
+            jsonl_output, pod_failed = await self._run_loki_pod(request)
 
             if jsonl_output is None:
                 if scan.status not in (IocScanStatus.ABORTED, IocScanStatus.FAILED):
@@ -322,6 +322,25 @@ class IocScanService(BaseServiceMixin):
             await self.log("info",
                 f"Found {total} IOC(s): {scan.alerts_count} alerts, "
                 f"{scan.warnings_count} warnings, {scan.notices_count} notices")
+
+            # If the pod failed and we found no IOC findings, mark the scan as failed
+            if pod_failed and total == 0:
+                scan.status = IocScanStatus.FAILED
+                scan.error_message = "Scanner pod failed — see log output above for details"
+                scan.completed_at = datetime.utcnow()
+                await self._broadcast_state()
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session, scan_id=scan.id,
+                                status="failed",
+                                error_message=scan.error_message,
+                            )
+                except Exception as exc:
+                    logger.warning("DB persistence failed: %s", exc)
+                self._save_to_history()
+                return
             await self._broadcast_state()
 
             # Persist IOC findings to PostgreSQL
@@ -344,21 +363,24 @@ class IocScanService(BaseServiceMixin):
                             session, scan_id=scan.id, ip=target_ip,
                             hostnames=target_hostnames,
                         )
-                        for finding in findings:
-                            await result_store.persist_ioc_finding(
-                                session,
-                                scan_id=scan.id,
-                                host_id=host_id,
-                                severity=finding.severity.value,
-                                score=finding.score,
-                                file_path=finding.file_path,
-                                rule_name=finding.rule_name,
-                                description=finding.description,
-                                matched_strings=finding.matched_strings,
-                                hash_md5=finding.hash_md5,
-                                hash_sha256=finding.hash_sha256,
-                                tags=finding.tags,
-                            )
+                        batch_data = [
+                            {
+                                "severity": f.severity.value,
+                                "score": f.score,
+                                "file_path": f.file_path,
+                                "rule_name": f.rule_name,
+                                "description": f.description,
+                                "matched_strings": f.matched_strings,
+                                "hash_md5": f.hash_md5,
+                                "hash_sha256": f.hash_sha256,
+                                "tags": f.tags,
+                            }
+                            for f in findings
+                        ]
+                        await result_store.persist_ioc_findings_batch(
+                            session, scan_id=scan.id,
+                            findings=batch_data, host_id=host_id,
+                        )
                     await self.log("info", f"Persisted {total} IOC finding(s) to database")
             except Exception as exc:
                 logger.warning("DB persist IOC findings failed: %s", exc)
@@ -476,10 +498,11 @@ class IocScanService(BaseServiceMixin):
         )
         return result.success
 
-    async def _run_loki_pod(self, request: IocScanRequest) -> Optional[str]:
-        """Create and run the LOKI-RS scanner pod, return JSONL output."""
+    async def _run_loki_pod(self, request: IocScanRequest) -> tuple[Optional[str], bool]:
+        """Create and run the LOKI-RS scanner pod, return (JSONL output, pod_failed)."""
         scan = self.current_scan
         pod_name = f"loki-scan-{scan.id}"
+        pod_failed = False
         secret_name = f"ioc-creds-{scan.id}"
 
         # Build non-sensitive environment variables for the entrypoint script
@@ -578,7 +601,7 @@ class IocScanService(BaseServiceMixin):
             await self.log("error", f"Failed to create LOKI-RS pod: {create_result.output}")
             scan.status = IocScanStatus.FAILED
             scan.error_message = f"Pod creation failed: {create_result.output}"
-            return None
+            return None, True
 
         await self.log("info", f"Scanner pod '{pod_name}' created")
 
@@ -590,7 +613,7 @@ class IocScanService(BaseServiceMixin):
         started = False
         for _ in range(MOUNT_TIMEOUT // 5):
             if scan.status == IocScanStatus.ABORTED:
-                return None
+                return None, False
 
             phase = await self.k8s.get_pod_phase(LOKI_NAMESPACE, pod_name)
 
@@ -603,6 +626,7 @@ class IocScanService(BaseServiceMixin):
             elif phase in ("Succeeded", "Failed"):
                 started = True
                 if phase == "Failed":
+                    pod_failed = True
                     # Retrieve pod logs to surface the actual mount error
                     fail_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=15)
                     if fail_logs.output:
@@ -619,7 +643,7 @@ class IocScanService(BaseServiceMixin):
                     scan.status = IocScanStatus.FAILED
                     scan.error_message = f"Container error: {reason}"
                     await self._cleanup_pod(pod_name)
-                    return None
+                    return None, True
 
             await asyncio.sleep(5)
 
@@ -635,7 +659,7 @@ class IocScanService(BaseServiceMixin):
             scan.status = IocScanStatus.FAILED
             scan.error_message = "Mount timeout — check target reachability and credentials"
             await self._cleanup_pod(pod_name)
-            return None
+            return None, True
 
         # Poll until pod completes
         scan.status = IocScanStatus.SCANNING
@@ -647,7 +671,7 @@ class IocScanService(BaseServiceMixin):
 
         for attempt in range(max_polls):
             if scan.status == IocScanStatus.ABORTED:
-                return None
+                return None, False
 
             phase = await self.k8s.get_pod_phase(LOKI_NAMESPACE, pod_name)
 
@@ -655,7 +679,35 @@ class IocScanService(BaseServiceMixin):
                 pod_done = True
                 await self.log("info", f"Scanner pod finished (phase: {phase})")
                 if phase == "Failed":
-                    await self.log("warn", "Pod exited with failure — checking logs for partial results")
+                    pod_failed = True
+                    # Surface termination details (exit code, reason)
+                    term_info = await self.k8s.get_pod_termination_info(LOKI_NAMESPACE, pod_name)
+                    if term_info:
+                        exit_code = term_info.get("exit_code")
+                        reason = term_info.get("reason", "")
+                        message = term_info.get("message", "")
+                        detail_parts = []
+                        if exit_code is not None:
+                            detail_parts.append(f"exit code {exit_code}")
+                        if reason:
+                            detail_parts.append(reason)
+                        if message:
+                            detail_parts.append(message)
+                        if detail_parts:
+                            await self.log("error", f"Container terminated: {', '.join(detail_parts)}")
+
+                    # Retrieve pod logs to show the actual error
+                    fail_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=30)
+                    if fail_logs.output and fail_logs.output.strip():
+                        error_lines = fail_logs.output.strip().splitlines()
+                        # Show last 20 lines for context (errors are usually at the end)
+                        tail = error_lines[-20:]
+                        await self.log("error", "Pod output (last lines):")
+                        for fline in tail:
+                            if fline.strip():
+                                await self.log("error", f"  {fline.strip()}")
+                    else:
+                        await self.log("warn", "Pod produced no log output")
                 break
             elif phase is None or phase == "":
                 pod_done = True
@@ -672,7 +724,7 @@ class IocScanService(BaseServiceMixin):
             await self._cleanup_pod(pod_name)
             scan.status = IocScanStatus.FAILED
             scan.error_message = "Scan timeout"
-            return None
+            return None, True
 
         # Read pod logs (contains JSONL output)
         logs_result = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=60)
@@ -683,9 +735,9 @@ class IocScanService(BaseServiceMixin):
         output = (logs_result.output or "").strip()
         if not output:
             await self.log("warn", "LOKI-RS pod produced no output")
-            return None
+            return None, pod_failed
 
-        return output
+        return output, pod_failed
 
     async def _cleanup_pod(self, pod_name: str):
         """Delete a scanner pod and its credentials secret."""

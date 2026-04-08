@@ -35,7 +35,7 @@ JSON files are useful for importing into other security tools or for programmati
 
 ### Full Scan Report
 
-To export everything from a single scan (hosts, services, vulnerabilities, and IOC findings):
+To export everything from a single scan (hosts, services, vulnerabilities, and IOC findings if present):
 
 1. Go to **Reports** → click on a specific scan
 2. Click **Export JSON** on the scan detail page

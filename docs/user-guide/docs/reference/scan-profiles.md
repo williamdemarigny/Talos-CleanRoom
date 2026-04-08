@@ -6,11 +6,12 @@ Scan profiles control how thorough (and how long) each scanning tool operates. C
 
 | | Quick | Standard | Thorough |
 |---|---|---|---|
-| **Duration** | ~5 minutes | ~1-2 hours | ~4-14 hours |
+| **Duration** | ~5-15 min (Nmap) / ~2 hrs (with OpenVAS) | ~2-8 hours | ~4-14 hours |
 | **Best for** | Fast check, smoke test | Regular assessments | Full compliance audit |
 | **Nmap** | Top 100 ports, fast timing | All TCP ports, version detection | All TCP+UDP, full scripts |
 | **OpenVAS** | Host discovery only | Full and Fast scan | Full and Deep scan |
 | **Metasploit** | Not available | 11 core modules | 39 modules (comprehensive) |
+| **WPScan** | Version detection only | Vulnerable plugins + themes, user detection | Aggressive enumeration of all plugins, themes, users, and config backups |
 
 ## Nmap Details
 
@@ -52,6 +53,16 @@ Adds to Standard with:
 - Database scanners (MySQL, PostgreSQL, MSSQL)
 - Additional service fingerprinting
 
+## WPScan Details
+
+WPScan is a WordPress-specific vulnerability scanner. It runs as a temporary Kubernetes pod using the `wpscanteam/wpscan` image. If the target is not running WordPress, WPScan automatically skips and reports no findings.
+
+| Profile | What It Does |
+|---|---|
+| Quick | Detects WordPress version only |
+| Standard | Enumerates vulnerable plugins and themes, detects users |
+| Thorough | Aggressive enumeration of all plugins, themes, users, and config backups |
+
 ## Custom Profile
 
 The Custom profile lets you pick exactly which tools and modules to run:
@@ -63,11 +74,11 @@ The Custom profile lets you pick exactly which tools and modules to run:
 
 Each tool has a maximum runtime to prevent scans from running indefinitely:
 
-| Profile | Nmap | OpenVAS | Metasploit |
-|---|---|---|---|
-| Quick | 5 min | 2 hr 5 min | 15 min |
-| Standard | 15 min | 8 hr | 1 hr 30 min |
-| Thorough | 1 hr | 14 hr | 3 hr |
+| Profile | Nmap | OpenVAS | Metasploit | WPScan |
+|---|---|---|---|---|
+| Quick | 5 min | 2 hr 5 min | 15 min | 2 min |
+| Standard | 15 min | 8 hr | 1 hr 30 min | 10 min |
+| Thorough | 1 hr | 14 hr | 3 hr | 30 min |
 
 If a tool reaches its timeout, it will stop and report whatever results it has found so far.
 

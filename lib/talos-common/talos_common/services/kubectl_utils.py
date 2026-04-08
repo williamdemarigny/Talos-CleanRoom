@@ -156,6 +156,39 @@ class KubernetesHelper:
             return phase if phase else None
         return None
 
+    async def get_pod_termination_info(
+        self,
+        namespace: str,
+        pod_name: str,
+        timeout: float = 10
+    ) -> Optional[dict]:
+        """Get container termination details (exit code, reason, message).
+
+        Queries the first container's last termination state. Useful for
+        understanding why a pod exited with failure.
+
+        Returns:
+            Dict with keys ``exit_code``, ``reason``, ``message`` if
+            termination info is available, else None.
+        """
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "pod", pod_name, f"--namespace={namespace}",
+             "-o", "jsonpath={.status.containerStatuses[0].state.terminated}"],
+            timeout=timeout
+        )
+        if result.success and result.output.strip():
+            try:
+                import json as _json
+                info = _json.loads(result.output.strip())
+                return {
+                    "exit_code": info.get("exitCode"),
+                    "reason": info.get("reason", ""),
+                    "message": info.get("message", ""),
+                }
+            except (ValueError, KeyError):
+                pass
+        return None
+
     async def exec_in_pod(
         self,
         namespace: str,

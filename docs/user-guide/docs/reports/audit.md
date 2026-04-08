@@ -16,10 +16,12 @@ Go to **Reports** → **Audit** (or navigate directly to the Audit tab).
 | **scan.abort** | A vulnerability scan is aborted |
 | **ioc_scan.start** | An IOC scan is started |
 | **ioc_scan.abort** | An IOC scan is aborted |
+| **target_lab_deploy** | A Target Lab environment is deployed |
+| **target_lab_destroy** | A Target Lab environment is destroyed |
+| **target_lab_extend_ttl** | A Target Lab environment's TTL is extended |
 | **export.vulns_csv** | Vulnerabilities are exported as CSV |
 | **export.vulns_json** | Vulnerabilities are exported as JSON |
 | **export.scan_json** | A full scan report is exported as JSON |
-| **enrichment.trigger** | Enrichment is manually triggered |
 
 ## Log Entry Details
 

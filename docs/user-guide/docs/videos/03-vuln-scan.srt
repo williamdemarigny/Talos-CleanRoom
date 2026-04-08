@@ -1,0 +1,55 @@
+1
+00:00:00,000 --> 00:00:03,000
+Open the Target Lab to deploy a vulnerable test environment
+
+2
+00:00:04,032 --> 00:00:07,032
+The catalog shows Vulhub environments with CVE info and difficulty
+
+3
+00:00:07,045 --> 00:00:10,045
+Click Deploy on an environment to create it in the cluster
+
+4
+00:00:09,160 --> 00:00:12,160
+The target is being created — watch the status change
+
+5
+00:00:13,200 --> 00:00:16,200
+Click Logs to watch the deployment progress
+
+6
+00:00:16,305 --> 00:00:19,305
+Waiting for the target to become ready...
+
+7
+00:03:31,949 --> 00:03:34,949
+Target is running — click Scan to start scanning it
+
+8
+00:03:31,979 --> 00:03:34,979
+Click Start Scan to begin
+
+9
+00:03:31,986 --> 00:03:34,986
+The scan shows real-time progress for each tool
+
+10
+00:04:17,036 --> 00:04:20,036
+Nmap discovers open ports and running services
+
+11
+00:05:17,104 --> 00:05:20,104
+OpenVAS performs deep vulnerability testing
+
+12
+00:13:35,468 --> 00:13:38,468
+Scan complete — results are shown with findings per tool
+
+13
+00:13:37,983 --> 00:13:40,983
+Enrichment adds CVSS scores and EPSS exploit probability data
+
+14
+00:13:40,995 --> 00:13:43,995
+Click 'Reports' to view detailed findings
