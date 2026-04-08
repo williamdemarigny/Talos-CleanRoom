@@ -18,7 +18,7 @@
                 <span class="text-2xl font-bold" :class="statusColor" x-text="deploymentStatus"></span>
             </div>
             <p class="mt-1 text-sm text-gray-500" x-show="currentStep > 0">
-                Step <span x-text="currentStep + 1"></span> of <span x-text="steps.length"></span>
+                Step <span x-text="currentStep + 1"></span> of <span x-text="totalSteps"></span>
             </p>
         </div>
 
@@ -275,6 +275,7 @@ function dashboard() {
     return {
         deploymentStatus: 'Idle',
         currentStep: 0,
+        totalSteps: 0,
         isRunning: false,
         dependencies: [],
         configValid: true,
@@ -337,6 +338,7 @@ function dashboard() {
                 const data = await response.json();
                 this.deploymentStatus = data.status.charAt(0).toUpperCase() + data.status.slice(1);
                 this.currentStep = data.current_step;
+                this.totalSteps = data.deployment?.steps?.length || 0;
                 this.isRunning = data.is_running;
                 if (this.deploymentStatus === 'Completed') {
                     await this.fetchCredentials();
