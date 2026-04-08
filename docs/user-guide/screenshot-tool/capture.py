@@ -18,6 +18,7 @@ Prerequisites:
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -263,17 +264,24 @@ async def capture_reports(context: BrowserContext, output: Path) -> None:
     await page.wait_for_timeout(1000)
     await capture(page, output / "reports", "reports-dashboard.jpg", full_page=True)
 
-    # 15. Scan detail — click first scan in the table
-    try:
-        first_detail = page.locator("text=View Details").first
-        if await first_detail.is_visible():
-            await first_detail.click()
-            await page.wait_for_load_state("networkidle")
-            await wait_for_alpine(page)
-            await page.wait_for_timeout(500)
-            await capture(page, output / "reports", "reports-scan-detail.jpg", full_page=True)
-    except Exception as e:
-        print(f"  [WARN] Could not capture scan detail: {e}")
+    # 15. Scan detail — navigate directly to known scan ID if set, else click first
+    scan_detail_id = os.environ.get("SCAN_DETAIL_ID", "")
+    if scan_detail_id:
+        await page.goto(f"{scan}/reports/scan/{scan_detail_id}", wait_until="networkidle")
+        await wait_for_alpine(page)
+        await page.wait_for_timeout(1000)
+        await capture(page, output / "reports", "reports-scan-detail.jpg", full_page=True)
+    else:
+        try:
+            first_detail = page.locator("text=View Details").first
+            if await first_detail.is_visible():
+                await first_detail.click()
+                await page.wait_for_load_state("networkidle")
+                await wait_for_alpine(page)
+                await page.wait_for_timeout(500)
+                await capture(page, output / "reports", "reports-scan-detail.jpg", full_page=True)
+        except Exception as e:
+            print(f"  [WARN] Could not capture scan detail: {e}")
 
     # 16. Hosts page
     await page.goto(f"{scan}/reports/hosts", wait_until="networkidle")
@@ -314,6 +322,9 @@ async def main(args: argparse.Namespace) -> None:
     USERNAME = args.username
     PASSWORD = args.password
     SCANNING_PASSWORD = args.scanning_password or PASSWORD
+
+    if args.scan_detail_id:
+        os.environ["SCAN_DETAIL_ID"] = args.scan_detail_id
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -364,6 +375,7 @@ if __name__ == "__main__":
     parser.add_argument("--username", default=USERNAME, help="Login username")
     parser.add_argument("--password", default=PASSWORD, help="Login password for portal and deployment")
     parser.add_argument("--scanning-password", default=None, help="Login password for scanning console (if different)")
+    parser.add_argument("--scan-detail-id", default=None, help="Specific scan ID for the scan detail screenshot (e.g. 97a676ca)")
     args = parser.parse_args()
 
     asyncio.run(main(args))

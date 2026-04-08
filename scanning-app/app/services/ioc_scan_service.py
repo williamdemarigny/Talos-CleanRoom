@@ -323,10 +323,14 @@ class IocScanService(BaseServiceMixin):
                 f"Found {total} IOC(s): {scan.alerts_count} alerts, "
                 f"{scan.warnings_count} warnings, {scan.notices_count} notices")
 
+            # Track whether this was a timeout with partial results
+            timed_out = pod_failed and scan.error_message and "timeout" in scan.error_message.lower()
+
             # If the pod failed and we found no IOC findings, mark the scan as failed
             if pod_failed and total == 0:
                 scan.status = IocScanStatus.FAILED
-                scan.error_message = "Scanner pod failed — see log output above for details"
+                if not scan.error_message:
+                    scan.error_message = "Scanner pod failed — see log output above for details"
                 scan.completed_at = datetime.utcnow()
                 await self._broadcast_state()
                 try:
@@ -341,6 +345,9 @@ class IocScanService(BaseServiceMixin):
                     logger.warning("DB persistence failed: %s", exc)
                 self._save_to_history()
                 return
+
+            if timed_out and total > 0:
+                await self.log("warn", f"Scan timed out but {total} finding(s) were recovered from partial results")
             await self._broadcast_state()
 
             # Persist IOC findings to PostgreSQL
@@ -424,7 +431,11 @@ class IocScanService(BaseServiceMixin):
             scan.status = IocScanStatus.COMPLETED
             scan.completed_at = datetime.utcnow()
             await self.log("info", "")
-            await self.log("info", "=== IOC Scan Complete ===")
+            if timed_out:
+                await self.log("warn", "=== IOC Scan Timed Out (Partial Results) ===")
+                scan.error_message = f"Scan timed out — {total} partial finding(s) recovered"
+            else:
+                await self.log("info", "=== IOC Scan Complete ===")
             if scan.alerts_count > 0:
                 await self.log("error", f"INDICATORS DETECTED: {scan.alerts_count} alert(s)")
             elif scan.warnings_count > 0:
@@ -434,13 +445,15 @@ class IocScanService(BaseServiceMixin):
             await self._broadcast_state()
 
             # Persist scan completion to PostgreSQL
+            db_status = "completed" if not timed_out else "completed"
             try:
                 if db_engine._session_factory is not None:
                     async with db_engine._session_factory() as session:
                         await result_store.persist_scan_complete(
                             session,
                             scan_id=scan.id,
-                            status="completed",
+                            status=db_status,
+                            error_message=scan.error_message if timed_out else None,
                         )
             except Exception as exc:
                 logger.warning("DB persistence failed: %s", exc)
@@ -760,9 +773,19 @@ class IocScanService(BaseServiceMixin):
 
         if not pod_done:
             await self.log("error", f"LOKI-RS scan timed out after {LOKI_SCAN_TIMEOUT}s")
+            # Retrieve partial results before cleanup — findings detected so far are in pod logs
+            await self.log("info", "Retrieving partial results before cleanup...")
+            try:
+                partial_logs = await self.k8s.get_pod_logs(LOKI_NAMESPACE, pod_name, timeout=30)
+                partial_output = (partial_logs.output or "").strip()
+            except Exception:
+                partial_output = ""
             await self._cleanup_pod(pod_name)
             scan.status = IocScanStatus.FAILED
-            scan.error_message = "Scan timeout"
+            scan.error_message = "Scan timeout — partial results may be available"
+            if partial_output:
+                await self.log("info", "Partial LOKI-RS output retrieved, findings will be preserved")
+                return partial_output, True
             return None, True
 
         # Read pod logs (contains JSONL output)
