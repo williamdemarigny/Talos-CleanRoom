@@ -108,16 +108,17 @@ class WebSocketBase {
                 comp.onPollStatus(statusData);
             }
 
-            // Fetch logs (only new ones beyond what we have)
-            const logResp = await authFetch(`${this.pollLogsUrl}?offset=${this._logOffset}`);
-            const logData = await logResp.json();
+            // Fetch logs only when WebSocket is not connected (avoid duplicates)
+            if (!comp.wsConnected) {
+                const logResp = await authFetch(`${this.pollLogsUrl}?offset=${this._logOffset}`);
+                const logData = await logResp.json();
 
-            if (logData.logs && logData.logs.length > 0) {
-                for (const log of logData.logs) {
-                    comp.logs.push(log);
+                if (logData.logs && logData.logs.length > 0) {
+                    for (const log of logData.logs) {
+                        this.addLog(log);
+                    }
+                    this._logOffset += logData.logs.length;
                 }
-                this._logOffset += logData.logs.length;
-                this.scrollToBottom();
             }
 
             // Check if run finished
