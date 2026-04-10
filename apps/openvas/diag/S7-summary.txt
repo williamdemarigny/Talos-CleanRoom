@@ -1,0 +1,4 @@
+Strategy: S7
+Pod: greenbone-7cbbd95c5-5bv7b
+Restarts: 1 1 0 0 0 0
+Ready: false true true true true true

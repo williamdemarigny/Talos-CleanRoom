@@ -3,7 +3,9 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:greenbone.github.io)"
+      "WebFetch(domain:greenbone.github.io)",
+      "Bash(bash -n /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/test-openvas-fixes.sh)",
+      "Bash(chmod +x /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/test-openvas-fixes.sh)"
     ]
   }
 }
