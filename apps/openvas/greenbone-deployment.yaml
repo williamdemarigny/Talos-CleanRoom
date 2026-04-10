@@ -491,7 +491,9 @@ spec:
             echo "Starting GVMD..."
             # Note: --listen-group removed as gvm group doesn't exist in container
             # Socket permissions handled via emptyDir shared volume
-            exec /usr/local/bin/entrypoint gvmd -f
+            # GSA v25+ connects to gvmd via TLS on the Unix socket, so gvmd
+            # must have TLS certs available (generated above).
+            exec /usr/local/bin/entrypoint gvmd -f --gnutls-priorities=NORMAL
         env:
         - name: GVMD_ADMIN_PASSWORD
           valueFrom:
