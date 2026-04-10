@@ -479,6 +479,15 @@ spec:
               echo "Warning: Could not determine admin UUID for Feed Import Owner"
             fi
 
+            # Generate GVM TLS certificates if missing (required by GSA v25+)
+            if ! gvm-manage-certs -V >/dev/null 2>&1; then
+              echo "Generating GVM TLS certificates..."
+              gvm-manage-certs -a
+              echo "GVM certificates generated."
+            else
+              echo "GVM certificates OK."
+            fi
+
             echo "Starting GVMD..."
             # Note: --listen-group removed as gvm group doesn't exist in container
             # Socket permissions handled via emptyDir shared volume

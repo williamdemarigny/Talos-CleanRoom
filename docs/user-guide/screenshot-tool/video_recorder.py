@@ -68,24 +68,29 @@ class SubtitleGenerator:
         return f"{int(h):02d}:{int(m):02d}:{int(s):02d},{ms:03d}"
 
 
-async def api_login(page: Page, base_url: str, pw: str) -> bool:
-    """Log in via API and set localStorage token."""
-    try:
-        resp = await page.request.post(
-            f"{base_url}/api/auth/login",
-            data=json.dumps({"username": USERNAME, "password": pw}),
-            headers={"Content-Type": "application/json"},
-        )
-        if resp.status == 200:
-            data = await resp.json()
-            await page.goto(base_url, wait_until="networkidle")
-            await page.evaluate(
-                f"localStorage.setItem('access_token', '{data['access_token']}')"
+async def api_login(page: Page, base_url: str, pw: str, retries: int = 2) -> bool:
+    """Log in via API and set localStorage token. Retries once on failure."""
+    for attempt in range(retries):
+        try:
+            resp = await page.request.post(
+                f"{base_url}/api/auth/login",
+                data=json.dumps({"username": USERNAME, "password": pw}),
+                headers={"Content-Type": "application/json"},
             )
-            return True
-    except Exception:
-        pass
-    print(f"  [WARN] API login failed for {base_url}")
+            if resp.status == 200:
+                data = await resp.json()
+                await page.goto(base_url, wait_until="networkidle")
+                await page.evaluate(
+                    f"localStorage.setItem('access_token', '{data['access_token']}')"
+                )
+                return True
+        except Exception:
+            pass
+        if attempt < retries - 1:
+            print(f"  [WARN] Login attempt {attempt + 1} failed for {base_url}, retrying in 5s...")
+            import asyncio as _aio
+            await _aio.sleep(5)
+    print(f"  [WARN] API login failed for {base_url} after {retries} attempts")
     return False
 
 
@@ -329,7 +334,7 @@ def _stitch_clips(clip_a: Path, transition: Path, clip_b: Path, final_out: Path)
     # Write concat list
     with open(concat_list, "w") as f:
         for seg in intermediates:
-            f.write(f"file '{seg.resolve()}'\n")
+            f.write(f"file '{seg.resolve().as_posix()}'\n")
 
     cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
@@ -533,12 +538,17 @@ async def record_deployment(output: Path) -> Path:
         return Path(clip_a_path)
 
 
-async def record_vuln_scan(output: Path) -> Path:
+async def record_vuln_scan(output: Path, scan_tools: list = None) -> Path:
     """Video 3: Target Lab deploy + vulnerability scan walkthrough.
 
     Flow: Target Lab catalog → deploy a target → wait for running →
     click Scan (pre-fills target) → run Quick scan → completion.
+
+    Args:
+        scan_tools: List of tool names to select (default: ["Nmap", "Metasploit"]).
     """
+    if scan_tools is None:
+        scan_tools = ["Nmap", "Metasploit"]
     print("\n=== Recording: Video 3 — Target Lab + Vulnerability Scan ===")
     subs = SubtitleGenerator()
 
@@ -653,9 +663,10 @@ async def record_vuln_scan(output: Path) -> Path:
             except Exception:
                 pass
 
-            subs.add("Select the scanning tools: Nmap and OpenVAS")
+            tools_str = " and ".join(scan_tools)
+            subs.add(f"Select the scanning tools: {tools_str}")
             try:
-                for tool_label in ["Nmap", "OpenVAS"]:
+                for tool_label in scan_tools:
                     checkbox = page.locator(f"text={tool_label}").first
                     if await checkbox.is_visible(timeout=2000):
                         await checkbox.click()
@@ -704,7 +715,10 @@ async def record_vuln_scan(output: Path) -> Path:
             if i == 2:
                 subs.add("Nmap discovers open ports and running services")
             elif i == 6:
-                subs.add("OpenVAS performs deep vulnerability testing")
+                if "Metasploit" in scan_tools:
+                    subs.add("Metasploit verifies exploitable vulnerabilities")
+                elif "OpenVAS" in scan_tools:
+                    subs.add("OpenVAS performs deep vulnerability testing")
 
         # 10. Completion
         await page.wait_for_timeout(3000)
@@ -729,8 +743,28 @@ async def record_vuln_scan(output: Path) -> Path:
     return Path(video_path)
 
 
-async def record_ioc_scan(output: Path) -> Path:
-    """Video 4: IOC scan walkthrough — configure and run an IOC scan (~2-3 min)."""
+async def record_ioc_scan(output: Path, ioc_target: str = None,
+                          ioc_username: str = None, ioc_password: str = None,
+                          ioc_mount_type: str = "smb", ioc_share: str = "C$") -> Path:
+    """Video 4: IOC scan walkthrough — configure and run an IOC scan (~2-3 min).
+
+    Args:
+        ioc_target: Target host IP (default: 10.83.3.15 for SSH, 10.83.1.113 for SMB).
+        ioc_username: Login username (default: root for SSH, administrator for SMB).
+        ioc_password: Login password (default: password for SSH).
+        ioc_mount_type: "ssh" or "smb" (default: smb).
+        ioc_share: SMB share name (default: C$).
+    """
+    # Set defaults based on mount type
+    if ioc_mount_type == "smb":
+        ioc_target = ioc_target or "10.83.1.113"
+        ioc_username = ioc_username or "administrator"
+        ioc_password = ioc_password or ""
+    else:
+        ioc_target = ioc_target or "10.83.3.15"
+        ioc_username = ioc_username or "root"
+        ioc_password = ioc_password or "password"
+
     print("\n=== Recording: Video 4 — IOC Scan Walkthrough ===")
     subs = SubtitleGenerator()
 
@@ -753,34 +787,61 @@ async def record_ioc_scan(output: Path) -> Path:
         await page.wait_for_timeout(2500)
 
         # 2. Fill in target host
-        subs.add("Enter the target host IP address")
+        subs.add(f"Enter the target host IP address ({ioc_target})")
         try:
             host_input = page.locator("input[placeholder*='host'], input[placeholder*='IP'], #target-host").first
             if await host_input.is_visible(timeout=3000):
-                await host_input.fill("10.83.3.15")
+                await host_input.fill(ioc_target)
                 await page.wait_for_timeout(800)
         except Exception:
             pass
 
-        # 3. SSH is default, fill credentials
-        subs.add("Enter SSH credentials for the target server")
-        try:
-            user_input = page.locator("#ssh-username, input[placeholder*='username']").first
-            if await user_input.is_visible(timeout=2000):
-                await user_input.fill("root")
-                await page.wait_for_timeout(500)
+        # 3. Select mount type and fill credentials
+        if ioc_mount_type == "smb":
+            subs.add("Select SMB protocol and enter Windows credentials")
+            try:
+                # Click SMB tab/option
+                smb_option = page.locator("text=SMB").first
+                if await smb_option.is_visible(timeout=2000):
+                    await smb_option.click()
+                    await page.wait_for_timeout(500)
 
-            pass_input = page.locator("#ssh-password, input[placeholder*='password']").first
-            if await pass_input.is_visible(timeout=2000):
-                await pass_input.fill("password")
-                await page.wait_for_timeout(500)
+                share_input = page.locator("#smb-share, input[placeholder*='share']").first
+                if await share_input.is_visible(timeout=2000):
+                    await share_input.clear()
+                    await share_input.fill(ioc_share)
+                    await page.wait_for_timeout(500)
 
-            path_input = page.locator("#remote-path, input[placeholder*='path']").first
-            if await path_input.is_visible(timeout=2000):
-                await path_input.fill("/var")
-                await page.wait_for_timeout(500)
-        except Exception:
-            pass
+                user_input = page.locator("#smb-username, input[placeholder*='username']").first
+                if await user_input.is_visible(timeout=2000):
+                    await user_input.fill(ioc_username)
+                    await page.wait_for_timeout(500)
+
+                pass_input = page.locator("#smb-password, input[placeholder*='password']").first
+                if await pass_input.is_visible(timeout=2000):
+                    await pass_input.fill(ioc_password)
+                    await page.wait_for_timeout(500)
+            except Exception:
+                pass
+        else:
+            subs.add("Enter SSH credentials for the target server")
+            try:
+                user_input = page.locator("#ssh-username, input[placeholder*='username']").first
+                if await user_input.is_visible(timeout=2000):
+                    await user_input.fill(ioc_username)
+                    await page.wait_for_timeout(500)
+
+                pass_input = page.locator("#ssh-password, input[placeholder*='password']").first
+                if await pass_input.is_visible(timeout=2000):
+                    await pass_input.fill(ioc_password)
+                    await page.wait_for_timeout(500)
+
+                path_input = page.locator("#remote-path, input[placeholder*='path']").first
+                if await path_input.is_visible(timeout=2000):
+                    await path_input.fill("/var")
+                    await page.wait_for_timeout(500)
+            except Exception:
+                pass
 
         await page.wait_for_timeout(1500)
 
@@ -795,8 +856,9 @@ async def record_ioc_scan(output: Path) -> Path:
             pass
 
         # 5. Watch phases
-        subs.add("The scan progresses through four phases: Prepare, Mount, Scan, Cleanup")
-        max_polls = 24  # 24 * 15s = 6 min
+        mount_label = "SMB/CIFS" if ioc_mount_type == "smb" else "SSHFS"
+        subs.add(f"The scanner mounts the target via {mount_label}, then runs LOKI-RS")
+        max_polls = 40  # 40 * 15s = 10 min
         for i in range(max_polls):
             await page.wait_for_timeout(15000)
 
@@ -893,9 +955,17 @@ async def main(args: argparse.Namespace) -> None:
         elif vid == "2":
             recorded["2"] = await record_deployment(output)
         elif vid == "3":
-            recorded["3"] = await record_vuln_scan(output)
+            scan_tools = args.scan_tools.split(",") if args.scan_tools else None
+            recorded["3"] = await record_vuln_scan(output, scan_tools=scan_tools)
         elif vid == "4":
-            recorded["4"] = await record_ioc_scan(output)
+            recorded["4"] = await record_ioc_scan(
+                output,
+                ioc_target=args.ioc_target,
+                ioc_username=args.ioc_username,
+                ioc_password=args.ioc_password,
+                ioc_mount_type=args.ioc_mount_type,
+                ioc_share=args.ioc_share,
+            )
         elif vid == "5":
             recorded["5"] = await record_reports_tour(output)
         elif vid == "all":
@@ -952,5 +1022,15 @@ if __name__ == "__main__":
     parser.add_argument("--videos", default=None,
                         help="Comma-separated video numbers to record (1-5 or 'all'). "
                              "Default: 1,5. Videos 2-4 require live operations.")
+    # IOC scan options (Video 4)
+    parser.add_argument("--ioc-target", default=None, help="IOC scan target IP")
+    parser.add_argument("--ioc-username", default=None, help="IOC scan username")
+    parser.add_argument("--ioc-password", default=None, help="IOC scan password")
+    parser.add_argument("--ioc-mount-type", default="smb", choices=["ssh", "smb"],
+                        help="IOC scan mount protocol (default: smb)")
+    parser.add_argument("--ioc-share", default="C$", help="IOC scan SMB share (default: C$)")
+    # Vuln scan options (Video 3)
+    parser.add_argument("--scan-tools", default=None,
+                        help="Comma-separated scan tools for Video 3 (default: Nmap,Metasploit)")
     args = parser.parse_args()
     asyncio.run(main(args))
