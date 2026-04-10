@@ -69,9 +69,7 @@ Below the catalog, the **Active Targets** table shows all deployed environments:
 
 ### Deployment Logs
 
-Click **Logs** on a deploying or running target to expand the log panel:
-
-![Target deploying with expanded log panel showing pod creation progress](../img/scanning/scanning-target-lab-deploying.jpg){ width="720" }
+Click **Logs** on a deploying or running target to expand the log panel, showing pod creation progress and status updates in real time.
 
 ## Scanning a Target
 

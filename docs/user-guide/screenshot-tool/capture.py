@@ -250,13 +250,19 @@ async def capture_target_lab(context: BrowserContext, output: Path) -> None:
     await page.close()
 
 
-async def capture_reports(context: BrowserContext, output: Path) -> None:
-    """Capture Reports screenshots."""
+async def capture_reports(context: BrowserContext, output: Path,
+                          scanning_url: str = None, scanning_pw: str = None) -> None:
+    """Capture Reports screenshots.
+
+    Args:
+        scanning_url: Override SCANNING_URL global (for standalone reuse).
+        scanning_pw: Override SCANNING_PASSWORD global (for standalone reuse).
+    """
     print("\n=== Reports ===")
     page = await context.new_page()
-    scan = SCANNING_URL
+    scan = scanning_url or SCANNING_URL
 
-    await login(page, scan, SCANNING_PASSWORD)
+    await login(page, scan, scanning_pw or SCANNING_PASSWORD)
 
     # 14. Reports dashboard
     await page.goto(f"{scan}/reports", wait_until="networkidle")
