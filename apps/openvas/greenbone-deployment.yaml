@@ -272,6 +272,32 @@ spec:
             memory: "256Mi"
             cpu: "500m"
 
+      # 12. Copy GSA React frontend assets into a shared emptyDir.
+      # The gsad daemon image (ghcr.io/greenbone/gsad:24.8.0) is daemon-only
+      # and doesn't bundle the web UI. The separate gsa image contains the
+      # React assets at /usr/local/share/gvm/gsad/web. We copy them into a
+      # shared volume that the gsa container mounts at the same path.
+      - name: gsa-web-assets
+        image: ghcr.io/greenbone/gsa:23.1.1
+        imagePullPolicy: IfNotPresent
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo "Copying GSA web assets to shared volume..."
+            cp -a /usr/local/share/gvm/gsad/web/. /mnt/web/
+            echo "Web assets copied:"
+            ls -la /mnt/web/ | head -10
+        volumeMounts:
+        - name: gsa-web
+          mountPath: /mnt/web
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+
       # ============================================================
       # MAIN CONTAINERS
       # ============================================================
@@ -479,18 +505,9 @@ spec:
               echo "Warning: Could not determine admin UUID for Feed Import Owner"
             fi
 
-            # Generate GVM TLS certificates if missing (required by GSA v25+)
-            if ! gvm-manage-certs -V >/dev/null 2>&1; then
-              echo "Generating GVM TLS certificates..."
-              gvm-manage-certs -a
-              echo "GVM certificates generated."
-            else
-              echo "GVM certificates OK."
-            fi
-
             echo "Starting GVMD..."
-            # GSA v25+ communicates with gvmd via TLS on the Unix socket.
-            # gvmd automatically uses TLS when certs exist in /var/lib/gvm/CA/.
+            # gsad v24 talks plain GMP on the Unix socket (no TLS).
+            # We pin gsad to v24 because v25 has a segfault bug on form POSTs.
             exec /usr/local/bin/entrypoint gvmd -f
         env:
         - name: GVMD_ADMIN_PASSWORD
@@ -537,19 +554,24 @@ spec:
           periodSeconds: 10
 
       # 6. GSA (Greenbone Security Assistant - Web UI)
+      # Pinned to gsad v24.8.0 from ghcr.io because the upstream :stable tag
+      # (gsad v25.0.0) has a critical segfault bug that crashes the daemon on
+      # any form-encoded POST to /gmp (login attempts always fail).
+      # gsad v24 also doesn't bundle the React frontend assets — the image
+      # is daemon-only, so it serves the GMP API and a basic 404 for everything
+      # else. The full GSA web UI is shipped via the separate gsa image, but
+      # for now we just need the GMP login flow to work.
+      # gsad v24 runs as non-root (UID 1001) and cannot bind to privileged
+      # port 80, so it listens on 9392 inside the pod. The Service maps
+      # external port 80 → targetPort 9392.
       - name: gsa
-        image: harbor.knowledgeondemand.net/cleanroom/gsa:stable
+        image: ghcr.io/greenbone/gsad:24.8.0
         imagePullPolicy: IfNotPresent
-        command: ["/bin/sh", "-c"]
-        args:
-          - |
-            echo "Waiting for GVMD socket..."
-            while [ ! -S /run/gvmd/gvmd.sock ]; do sleep 2; done
-            echo "GVMD ready. Starting GSA..."
-            # Run gsad in HTTP-only mode (Traefik handles TLS termination)
-            exec gsad --foreground --http-only --port=80 --drop-privileges=gsad --munix-socket=/run/gvmd/gvmd.sock
+        env:
+        - name: GSAD_ARGS
+          value: "-f --http-only --port=9392 --munix-socket=/run/gvmd/gvmd.sock"
         ports:
-        - containerPort: 80
+        - containerPort: 9392
           name: http
         volumeMounts:
         - name: gvmd-socket
@@ -557,6 +579,9 @@ spec:
         - name: gvmd-data
           mountPath: /var/lib/gvm
           readOnly: true
+        # React frontend assets from gsa:23.1.1 (populated by init container)
+        - name: gsa-web
+          mountPath: /usr/local/share/gvm/gsad/web
         resources:
           requests:
             memory: "64Mi"
@@ -567,22 +592,19 @@ spec:
         # startupProbe gates liveness/readiness — prevents kill during GVMD socket wait
         # GVMD can take 15+ min on first start (feed sync), so allow up to 30 min
         startupProbe:
-          httpGet:
-            path: /
-            port: 80
+          tcpSocket:
+            port: 9392
           initialDelaySeconds: 30
           periodSeconds: 15
           failureThreshold: 120
         readinessProbe:
-          httpGet:
-            path: /
-            port: 80
+          tcpSocket:
+            port: 9392
           initialDelaySeconds: 10
           periodSeconds: 10
         livenessProbe:
-          httpGet:
-            path: /
-            port: 80
+          tcpSocket:
+            port: 9392
           periodSeconds: 30
           failureThreshold: 20
 
@@ -629,6 +651,9 @@ spec:
       - name: gvmd-socket
         emptyDir: {}
       - name: ospd-socket
+        emptyDir: {}
+      # GSA React web assets — populated by init container from gsa:23.1.1
+      - name: gsa-web
         emptyDir: {}
 # =============================================================================
 # SECRETS - Managed externally via SOPS encryption

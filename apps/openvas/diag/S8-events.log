@@ -1,0 +1,267 @@
+LAST SEEN   TYPE      REASON                   OBJECT                            MESSAGE
+49m         Normal    Scheduled                pod/greenbone-59bffdcd94-z8f45    Successfully assigned openvas/greenbone-59bffdcd94-z8f45 to talos-cleanroom-worker-01
+49m         Normal    Scheduled                pod/greenbone-75d6cc858-l77r6     Successfully assigned openvas/greenbone-75d6cc858-l77r6 to talos-cleanroom-worker-01
+11m         Normal    Scheduled                pod/greenbone-66cb98dcbb-9w9mb    Successfully assigned openvas/greenbone-66cb98dcbb-9w9mb to talos-cleanroom-worker-01
+6m28s       Normal    Scheduled                pod/greenbone-5b47cbc679-zd5bv    Successfully assigned openvas/greenbone-5b47cbc679-zd5bv to talos-cleanroom-worker-01
+10s         Normal    Scheduled                pod/login-test-s8-3058            Successfully assigned openvas/login-test-s8-3058 to talos-cleanroom-worker-02
+11m         Normal    Scheduled                pod/login-test-s7-3058            Successfully assigned openvas/login-test-s7-3058 to talos-cleanroom-worker-02
+43m         Normal    Scheduled                pod/login-test-s1-2590            Successfully assigned openvas/login-test-s1-2590 to talos-cleanroom-worker-02
+23m         Normal    Scheduled                pod/login-test-now                Successfully assigned openvas/login-test-now to talos-cleanroom-worker-02
+22m         Normal    Scheduled                pod/login-test-json               Successfully assigned openvas/login-test-json to talos-cleanroom-worker-02
+22m         Normal    Scheduled                pod/login-test-form               Successfully assigned openvas/login-test-form to talos-cleanroom-worker-02
+42m         Normal    Scheduled                pod/greenbone-75d6cc858-25z4k     Successfully assigned openvas/greenbone-75d6cc858-25z4k to talos-cleanroom-worker-02
+18m         Normal    Scheduled                pod/greenbone-75d6cc858-2mdrv     Successfully assigned openvas/greenbone-75d6cc858-2mdrv to talos-cleanroom-worker-01
+41m         Normal    Scheduled                pod/greenbone-75d6cc858-b7wzv     Successfully assigned openvas/greenbone-75d6cc858-b7wzv to talos-cleanroom-worker-01
+42m         Normal    Scheduled                pod/greenbone-7fffdbd8-trww6      Successfully assigned openvas/greenbone-7fffdbd8-trww6 to talos-cleanroom-worker-01
+18m         Normal    Scheduled                pod/greenbone-7fffdbd8-67vcp      Successfully assigned openvas/greenbone-7fffdbd8-67vcp to talos-cleanroom-worker-01
+11m         Normal    Scheduled                pod/greenbone-7cbbd95c5-6nx2h     Successfully assigned openvas/greenbone-7cbbd95c5-6nx2h to talos-cleanroom-worker-02
+18m         Normal    Scheduled                pod/greenbone-7cbbd95c5-5bv7b     Successfully assigned openvas/greenbone-7cbbd95c5-5bv7b to talos-cleanroom-worker-01
+49m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-6868d4746d from 1 to 0
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container openvasd
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container gsa
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container gvmd
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container ospd-openvas
+49m         Normal    SuccessfulDelete         replicaset/greenbone-6868d4746d   Deleted pod: greenbone-6868d4746d-xh5mk
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container pg-gvm
+49m         Normal    Killing                  pod/greenbone-6868d4746d-xh5mk    Stopping container redis-server
+49m         Normal    SuccessfulCreate         replicaset/greenbone-59bffdcd94   Created pod: greenbone-59bffdcd94-z8f45
+49m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-59bffdcd94 from 0 to 1
+49m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-59bffdcd94 from 1 to 0
+49m         Normal    SuccessfulDelete         replicaset/greenbone-59bffdcd94   Deleted pod: greenbone-59bffdcd94-z8f45
+49m         Normal    SuccessfulCreate         replicaset/greenbone-75d6cc858    Created pod: greenbone-75d6cc858-l77r6
+49m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container vulnerability-tests
+49m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+49m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: vulnerability-tests
+49m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container notus-data
+49m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+49m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: notus-data
+48m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: scap-data
+48m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+48m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container scap-data
+45m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: cert-bund-data
+45m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container cert-bund-data
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+45m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container dfn-cert-data
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+45m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: dfn-cert-data
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+45m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: data-objects
+45m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container data-objects
+45m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container report-formats
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+45m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: report-formats
+45m         Normal    Created                  pod/greenbone-75d6cc858-l77r6     Created container: gpg-data
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+45m         Normal    Started                  pod/greenbone-75d6cc858-l77r6     Started container gpg-data
+45m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+44m         Warning   Unhealthy                pod/greenbone-75d6cc858-l77r6     Startup probe failed: Get "http://10.14.0.26:80/": dial tcp 10.14.0.26:80: connect: connection refused
+43m         Normal    Pulling                  pod/login-test-s1-2590            Pulling image "curlimages/curl"
+43m         Normal    Pulled                   pod/greenbone-75d6cc858-l77r6     (combined from similar events): Container image "harbor.knowledgeondemand.net/cleanroom/gsa:stable" already present on machine
+43m         Normal    Pulled                   pod/login-test-s1-2590            Successfully pulled image "curlimages/curl" in 793ms (793ms including waiting). Image size: 10299358 bytes.
+43m         Warning   Unhealthy                pod/greenbone-75d6cc858-l77r6     Liveness probe failed: Get "http://10.14.0.26:80/": dial tcp 10.14.0.26:80: connect: connection refused
+43m         Normal    Started                  pod/login-test-s1-2590            Started container login-test-s1-2590
+43m         Normal    Created                  pod/login-test-s1-2590            Created container: login-test-s1-2590
+42m         Normal    SuccessfulDelete         replicaset/greenbone-75d6cc858    Deleted pod: greenbone-75d6cc858-l77r6
+42m         Warning   Unhealthy                pod/greenbone-75d6cc858-l77r6     Readiness probe errored: rpc error: code = Unknown desc = failed to exec in container: container is in CONTAINER_EXITED state
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-9a101b25-5e2b-4eaf-bb39-ecc64eb10672" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-72008d60-d7c2-4111-91e5-1bf318d96736" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Normal    SuccessfulCreate         replicaset/greenbone-75d6cc858    Created pod: greenbone-75d6cc858-25z4k
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     (combined from similar events): Multi-Attach error for volume "pvc-c4111eaf-9b08-4d9c-a0d9-f9af27782ee8" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-32719157-9edf-4b9f-ab75-ed190fdd9112" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-cf679149-f12e-496d-bbdc-1961717d974a" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-e7b6e460-0571-42fc-b468-c8d5d20162bf" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-2408816c-9e29-41ba-9652-e64765502a66" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-510fc7e6-14f4-458c-8d7c-b2c707c553c5" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-b5377b23-5485-47e0-b40e-fbc963182dad" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Warning   FailedAttachVolume       pod/greenbone-75d6cc858-25z4k     Multi-Attach error for volume "pvc-db4c49e9-061e-4d49-87e2-232d41014f49" Volume is already used by pod(s) greenbone-75d6cc858-l77r6
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-32719157-9edf-4b9f-ab75-ed190fdd9112"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-c4111eaf-9b08-4d9c-a0d9-f9af27782ee8"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-cf679149-f12e-496d-bbdc-1961717d974a"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-72008d60-d7c2-4111-91e5-1bf318d96736"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-db4c49e9-061e-4d49-87e2-232d41014f49"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-9a101b25-5e2b-4eaf-bb39-ecc64eb10672"
+42m         Normal    SuccessfulDelete         replicaset/greenbone-75d6cc858    Deleted pod: greenbone-75d6cc858-25z4k
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-e7b6e460-0571-42fc-b468-c8d5d20162bf"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-510fc7e6-14f4-458c-8d7c-b2c707c553c5"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-75d6cc858-25z4k     AttachVolume.Attach succeeded for volume "pvc-2408816c-9e29-41ba-9652-e64765502a66"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-c4111eaf-9b08-4d9c-a0d9-f9af27782ee8"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-db4c49e9-061e-4d49-87e2-232d41014f49"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-72008d60-d7c2-4111-91e5-1bf318d96736"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-9a101b25-5e2b-4eaf-bb39-ecc64eb10672"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-e7b6e460-0571-42fc-b468-c8d5d20162bf"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-2408816c-9e29-41ba-9652-e64765502a66"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-cf679149-f12e-496d-bbdc-1961717d974a"
+42m         Normal    SuccessfulCreate         replicaset/greenbone-7fffdbd8     Created pod: greenbone-7fffdbd8-trww6
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-510fc7e6-14f4-458c-8d7c-b2c707c553c5"
+42m         Normal    SuccessfulAttachVolume   pod/greenbone-7fffdbd8-trww6      AttachVolume.Attach succeeded for volume "pvc-32719157-9edf-4b9f-ab75-ed190fdd9112"
+42m         Normal    Started                  pod/greenbone-7fffdbd8-trww6      Started container vulnerability-tests
+42m         Normal    Pulled                   pod/greenbone-7fffdbd8-trww6      Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+42m         Normal    Created                  pod/greenbone-7fffdbd8-trww6      Created container: vulnerability-tests
+41m         Normal    Started                  pod/greenbone-7fffdbd8-trww6      Started container notus-data
+41m         Normal    Pulled                   pod/greenbone-7fffdbd8-trww6      Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+41m         Normal    Created                  pod/greenbone-7fffdbd8-trww6      Created container: notus-data
+41m         Normal    Killing                  pod/greenbone-7fffdbd8-trww6      Stopping container notus-data
+41m         Normal    SuccessfulDelete         replicaset/greenbone-7fffdbd8     Deleted pod: greenbone-7fffdbd8-trww6
+41m         Normal    SuccessfulCreate         replicaset/greenbone-75d6cc858    Created pod: greenbone-75d6cc858-b7wzv
+41m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container vulnerability-tests
+41m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: vulnerability-tests
+41m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+41m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: notus-data
+41m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container notus-data
+41m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+40m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container scap-data
+40m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: scap-data
+40m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+37m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container cert-bund-data
+37m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: cert-bund-data
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+37m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container dfn-cert-data
+37m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: dfn-cert-data
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+37m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container data-objects
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+37m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: data-objects
+37m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container report-formats
+37m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: report-formats
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+37m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container gpg-data
+37m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: gpg-data
+37m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+36m         Warning   Unhealthy                pod/greenbone-75d6cc858-b7wzv     Startup probe failed: Get "http://10.14.0.28:80/": dial tcp 10.14.0.28:80: connect: connection refused
+23m         Normal    Pulling                  pod/login-test-now                Pulling image "curlimages/curl"
+23m         Normal    Created                  pod/login-test-now                Created container: login-test-now
+23m         Normal    Pulled                   pod/greenbone-75d6cc858-b7wzv     Container image "harbor.knowledgeondemand.net/cleanroom/gsa:stable" already present on machine
+23m         Normal    Started                  pod/login-test-now                Started container login-test-now
+23m         Normal    Pulled                   pod/login-test-now                Successfully pulled image "curlimages/curl" in 787ms (787ms including waiting). Image size: 10299358 bytes.
+23m         Normal    Created                  pod/greenbone-75d6cc858-b7wzv     Created container: gsa
+23m         Normal    Started                  pod/greenbone-75d6cc858-b7wzv     Started container gsa
+22m         Normal    Pulling                  pod/login-test-json               Pulling image "curlimages/curl"
+22m         Normal    Started                  pod/login-test-json               Started container login-test-json
+22m         Normal    Created                  pod/login-test-json               Created container: login-test-json
+22m         Normal    Pulled                   pod/login-test-json               Successfully pulled image "curlimages/curl" in 806ms (806ms including waiting). Image size: 10299358 bytes.
+22m         Normal    Pulling                  pod/login-test-form               Pulling image "curlimages/curl"
+22m         Normal    Pulled                   pod/login-test-form               Successfully pulled image "curlimages/curl" in 798ms (798ms including waiting). Image size: 10299358 bytes.
+22m         Normal    Created                  pod/login-test-form               Created container: login-test-form
+22m         Normal    Started                  pod/login-test-form               Started container login-test-form
+21m         Warning   BackOff                  pod/greenbone-75d6cc858-b7wzv     Back-off restarting failed container gsa in pod greenbone-75d6cc858-b7wzv_openvas(130a4a69-af03-4098-9adf-016f937aa0d4)
+18m         Normal    SuccessfulCreate         replicaset/greenbone-7fffdbd8     Created pod: greenbone-7fffdbd8-67vcp
+18m         Normal    SuccessfulDelete         replicaset/greenbone-75d6cc858    Deleted pod: greenbone-75d6cc858-b7wzv
+18m         Normal    Killing                  pod/greenbone-75d6cc858-b7wzv     Stopping container redis-server
+18m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-7fffdbd8 from 0 to 1
+18m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-7fffdbd8 from 1 to 0
+18m         Normal    SuccessfulDelete         replicaset/greenbone-7fffdbd8     Deleted pod: greenbone-7fffdbd8-67vcp
+18m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-75d6cc858 from 1 to 0
+18m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-75d6cc858 from 0 to 1
+18m         Normal    SuccessfulCreate         replicaset/greenbone-75d6cc858    Created pod: greenbone-75d6cc858-2mdrv
+18m         Normal    SuccessfulDelete         replicaset/greenbone-75d6cc858    Deleted pod: greenbone-75d6cc858-2mdrv
+18m         Normal    SuccessfulCreate         replicaset/greenbone-7cbbd95c5    Created pod: greenbone-7cbbd95c5-5bv7b
+18m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+18m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container vulnerability-tests
+18m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: vulnerability-tests
+17m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+17m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: notus-data
+17m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container notus-data
+17m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+17m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: scap-data
+17m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container scap-data
+14m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+14m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: cert-bund-data
+14m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container cert-bund-data
+14m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+14m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container dfn-cert-data
+14m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: dfn-cert-data
+14m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+14m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: data-objects
+14m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container data-objects
+14m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+13m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container report-formats
+13m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: report-formats
+13m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+13m         Normal    Created                  pod/greenbone-7cbbd95c5-5bv7b     Created container: gpg-data
+13m         Normal    Started                  pod/greenbone-7cbbd95c5-5bv7b     Started container gpg-data
+13m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+11m         Normal    Pulling                  pod/login-test-s7-3058            Pulling image "curlimages/curl"
+11m         Normal    Created                  pod/login-test-s7-3058            Created container: login-test-s7-3058
+11m         Normal    Started                  pod/login-test-s7-3058            Started container login-test-s7-3058
+11m         Normal    Pulled                   pod/login-test-s7-3058            Successfully pulled image "curlimages/curl" in 802ms (802ms including waiting). Image size: 10299358 bytes.
+11m         Normal    Pulled                   pod/greenbone-7cbbd95c5-5bv7b     Container image "harbor.knowledgeondemand.net/cleanroom/gsa:stable" already present on machine
+11m         Normal    SuccessfulDelete         replicaset/greenbone-7cbbd95c5    Deleted pod: greenbone-7cbbd95c5-5bv7b
+11m         Warning   Unhealthy                pod/greenbone-7cbbd95c5-5bv7b     Readiness probe errored: rpc error: code = Unknown desc = failed to exec in container: container is in CONTAINER_EXITED state
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-32719157-9edf-4b9f-ab75-ed190fdd9112" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Normal    SuccessfulCreate         replicaset/greenbone-7cbbd95c5    Created pod: greenbone-7cbbd95c5-6nx2h
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-e7b6e460-0571-42fc-b468-c8d5d20162bf" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-7cbbd95c5 from 0 to 1
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-c4111eaf-9b08-4d9c-a0d9-f9af27782ee8" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-9a101b25-5e2b-4eaf-bb39-ecc64eb10672" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-2408816c-9e29-41ba-9652-e64765502a66" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-510fc7e6-14f4-458c-8d7c-b2c707c553c5" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     (combined from similar events): Multi-Attach error for volume "pvc-cf679149-f12e-496d-bbdc-1961717d974a" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-db4c49e9-061e-4d49-87e2-232d41014f49" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-b5377b23-5485-47e0-b40e-fbc963182dad" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Warning   FailedAttachVolume       pod/greenbone-7cbbd95c5-6nx2h     Multi-Attach error for volume "pvc-72008d60-d7c2-4111-91e5-1bf318d96736" Volume is already used by pod(s) greenbone-7cbbd95c5-5bv7b
+11m         Normal    SuccessfulDelete         replicaset/greenbone-7cbbd95c5    Deleted pod: greenbone-7cbbd95c5-6nx2h
+11m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-7cbbd95c5 from 1 to 0
+11m         Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-66cb98dcbb from 0 to 1
+11m         Normal    SuccessfulCreate         replicaset/greenbone-66cb98dcbb   Created pod: greenbone-66cb98dcbb-9w9mb
+11m         Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+11m         Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: vulnerability-tests
+11m         Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container vulnerability-tests
+10m         Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+10m         Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: notus-data
+10m         Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container notus-data
+10m         Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+10m         Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container scap-data
+10m         Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: scap-data
+7m4s        Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: cert-bund-data
+7m4s        Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+7m3s        Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+7m3s        Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: dfn-cert-data
+7m3s        Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container cert-bund-data
+7m2s        Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container dfn-cert-data
+7m2s        Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+7m2s        Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container data-objects
+7m2s        Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: data-objects
+7m1s        Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: report-formats
+7m1s        Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+7m          Normal    Created                  pod/greenbone-66cb98dcbb-9w9mb    Created container: gpg-data
+7m          Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container report-formats
+7m          Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+6m59s       Normal    Started                  pod/greenbone-66cb98dcbb-9w9mb    Started container gpg-data
+6m59s       Normal    Pulled                   pod/greenbone-66cb98dcbb-9w9mb    Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+6m33s       Normal    SuccessfulDelete         replicaset/greenbone-66cb98dcbb   Deleted pod: greenbone-66cb98dcbb-9w9mb
+6m33s       Normal    ScalingReplicaSet        deployment/greenbone              Scaled down replica set greenbone-66cb98dcbb from 1 to 0
+6m31s       Warning   Unhealthy                pod/greenbone-66cb98dcbb-9w9mb    Readiness probe errored: rpc error: code = NotFound desc = failed to exec in container: failed to create exec "b9fdc9a0e1002639e2af1cfc18f6b5f809fe3f023d762756dbcf9d68d682e0a8": task 6d5711c67bd0619ad163d8538620c5618fd871f9d744b37170527b7c6b896945 not found
+6m29s       Normal    SuccessfulCreate         replicaset/greenbone-5b47cbc679   Created pod: greenbone-5b47cbc679-zd5bv
+6m29s       Normal    ScalingReplicaSet        deployment/greenbone              Scaled up replica set greenbone-5b47cbc679 from 0 to 1
+6m16s       Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: vulnerability-tests
+6m16s       Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+6m16s       Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container vulnerability-tests
+5m39s       Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container notus-data
+5m39s       Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: notus-data
+5m39s       Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+5m26s       Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: scap-data
+5m26s       Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+5m26s       Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container scap-data
+2m5s        Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+2m5s        Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: cert-bund-data
+2m5s        Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container cert-bund-data
+2m4s        Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: dfn-cert-data
+2m4s        Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container dfn-cert-data
+2m4s        Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+2m3s        Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: data-objects
+2m3s        Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container data-objects
+2m3s        Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+2m2s        Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: report-formats
+2m2s        Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+2m2s        Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container report-formats
+2m1s        Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+2m1s        Normal    Created                  pod/greenbone-5b47cbc679-zd5bv    Created container: gpg-data
+2m1s        Normal    Started                  pod/greenbone-5b47cbc679-zd5bv    Started container gpg-data
+2m          Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+77s         Warning   Unhealthy                pod/greenbone-5b47cbc679-zd5bv    Startup probe failed: Get "http://10.14.0.31:80/": dial tcp 10.14.0.31:80: connect: connection refused
+10s         Normal    Pulling                  pod/login-test-s8-3058            Pulling image "curlimages/curl"
+9s          Normal    Pulled                   pod/greenbone-5b47cbc679-zd5bv    Container image "harbor.knowledgeondemand.net/cleanroom/gsa:stable" already present on machine
+9s          Normal    Pulled                   pod/login-test-s8-3058            Successfully pulled image "curlimages/curl" in 767ms (767ms including waiting). Image size: 10299358 bytes.
+9s          Normal    Created                  pod/login-test-s8-3058            Created container: login-test-s8-3058
+9s          Normal    Started                  pod/login-test-s8-3058            Started container login-test-s8-3058

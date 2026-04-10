@@ -1,0 +1,19 @@
+Waiting for PostgreSQL socket...
+PostgreSQL ready. Waiting for OSPD socket...
+OSPD ready.
+Admin user already exists.
+Setting Feed Import Owner...
+Feed Import Owner set to admin (356314f0-24ae-4e1b-be4f-6b07dee400f6)
+GVM certificates OK.
+Starting GVMD...
+md   main:MESSAGE:2026-04-10 13h47.51 utc:346:    Greenbone Vulnerability Manager version 26.21.0 (DB revision 273)
+md   main:   INFO:2026-04-10 13h48.03 utc:346: gvmd is ready to accept GMP connections
+md manage:   INFO:2026-04-10 13h48.03 utc:485: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h48.13 utc:503: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h48.23 utc:517: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h48.33 utc:553: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h48.43 utc:595: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h48.54 utc:635: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h49.04 utc:670: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h49.14 utc:704: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting
+md manage:   INFO:2026-04-10 13h49.24 utc:737: osp_scanner_feed_version: No feed version available yet. OSPd OpenVAS is still starting

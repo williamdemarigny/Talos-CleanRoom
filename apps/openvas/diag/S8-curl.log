@@ -1,0 +1,23 @@
+HTTP_CODE:000
+--VERBOSE--
+Note: Unnecessary use of -X or --request, POST is already inferred.
+* Host greenbone:80 was resolved.
+* IPv6: (none)
+* IPv4: 10.15.75.222
+*   Trying 10.15.75.222:80...
+* Established connection to greenbone (10.15.75.222 port 80) from 10.14.1.41 port 36324 
+* using HTTP/1.x
+> POST /gmp HTTP/1.1
+> Host: greenbone
+> User-Agent: curl/8.19.0
+> Accept: */*
+> Content-Length: 387
+> Content-Type: multipart/form-data; boundary=------------------------Od7sZJnT3dHr4oWp3BpqO8
+> 
+} [387 bytes data]
+* upload completely sent off: 387 bytes
+* Empty reply from server
+* shutting down connection #0
+--BODY--
+cat: can't open '/tmp/body.txt': No such file or directory
+pod openvas/login-test-s8-3058 terminated (Error)

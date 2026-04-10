@@ -1,0 +1,683 @@
+Name:             greenbone-75d6cc858-l77r6
+Namespace:        openvas
+Priority:         0
+Service Account:  default
+Node:             talos-cleanroom-worker-01/10.83.3.15
+Start Time:       Fri, 10 Apr 2026 08:11:26 -0500
+Labels:           app.kubernetes.io/component=scanner
+                  app.kubernetes.io/name=greenbone
+                  app.kubernetes.io/part-of=security-platform
+                  pod-template-hash=75d6cc858
+Annotations:      kubectl.kubernetes.io/restartedAt: 2026-04-10T08:11:24-05:00
+Status:           Running
+IP:               10.14.0.26
+IPs:
+  IP:           10.14.0.26
+Controlled By:  ReplicaSet/greenbone-75d6cc858
+Init Containers:
+  vulnerability-tests:
+    Container ID:   containerd://0cee352b00ccb7a776a8b3aa7e8801b922732d951d589e81a0e48f09ca60a6ca
+    Image:          harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/vulnerability-tests@sha256:d49ed9027b8e3dfbaa642ff6592e6dd40de004ca78f8fc4185ddb07485a2de68
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:11:38 -0500
+      Finished:     Fri, 10 Apr 2026 08:12:13 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:     50m
+      memory:  64Mi
+    Environment:
+      FEED_RELEASE:  24.10
+    Mounts:
+      /mnt from vt-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  notus-data:
+    Container ID:   containerd://8c049d5e9b05ec7cd0bf41c8570aa4dccab4395bdfdf529b41773cb47f2f91d2
+    Image:          harbor.knowledgeondemand.net/cleanroom/notus-data:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/notus-data@sha256:d83d2acf1c4d9d80cf9a6344779ade0f49d8c7fdef489fc74cbb56db67a80b83
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:12:13 -0500
+      Finished:     Fri, 10 Apr 2026 08:12:26 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from notus-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  scap-data:
+    Container ID:   containerd://ac72bf654d478bf216922f87252e5cd8ce348a416b0a27a1f62653dec9307727
+    Image:          harbor.knowledgeondemand.net/cleanroom/scap-data:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/scap-data@sha256:614d1e8496e69859c0de5cefb628e7f13ae8535e553d0b33240a877e87c8d88d
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:12:27 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:53 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from scap-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  cert-bund-data:
+    Container ID:   containerd://b662b23d3666f8385f9401a05459d5165bfe9915b0ff2b33408e5c74d5162986
+    Image:          harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/cert-bund-data@sha256:306786a08f8162fd7959fffba6d4d03315a3e62b090d7b723bf0715ab3f6146a
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:54 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:55 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from cert-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  dfn-cert-data:
+    Container ID:   containerd://869e6416527a25d71ef0ada6312efcc2519b2f925700be0fe02b3698a04e55a6
+    Image:          harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/dfn-cert-data@sha256:07abe7f41305520f8a892d9ced483926e7a683a189ebc5e7a6faeb4fdf8c9b37
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:55 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:55 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from cert-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  data-objects:
+    Container ID:   containerd://40bd9baaeec17f3a3ab87e0d3d53dce8a68453eb713ff206280cfc1a681e00e5
+    Image:          harbor.knowledgeondemand.net/cleanroom/data-objects:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/data-objects@sha256:1dd37ba9f4d213a149fbc2d324d66c38f6567b6f8b250f2c5ffe046e0dadf064
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:56 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:56 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:     50m
+      memory:  64Mi
+    Environment:
+      FEED_RELEASE:  24.10
+    Mounts:
+      /mnt from data-objects (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  report-formats:
+    Container ID:   containerd://8a8d3bb0085d5b6e4b2da20e16d07d9f1ad02bfdebea03adc3d15160b88dd21d
+    Image:          harbor.knowledgeondemand.net/cleanroom/report-formats:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/report-formats@sha256:8f6b59e520c197683b38620d82a54432d51609685a119ea66c8d4294b1ad1e61
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:57 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:57 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:     50m
+      memory:  64Mi
+    Environment:
+      FEED_RELEASE:  24.10
+    Mounts:
+      /mnt from data-objects (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  gpg-data:
+    Container ID:   containerd://ad94ea4b02b250eb305b5a28dc7087a9fcef3b5f16401f71af9694833aa040b2
+    Image:          harbor.knowledgeondemand.net/cleanroom/gpg-data:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/gpg-data@sha256:57929fd28cac557b001209cc558e88eff5a97c22b6ada8c2c53591293e77a212
+    Port:           <none>
+    Host Port:      <none>
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:58 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:58 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from gpg-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  psql-data-setup:
+    Container ID:  containerd://bb9976b7c2f8e9896cb5172adeb522774f52711154a843164f9ae9cf0c90666d
+    Image:         harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/pg-gvm@sha256:b07b2c458734c285f8b4ad65ff852335a53d4cdb61c8a4f41ff4da136d75762a
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/bash
+      -c
+    Args:
+      set -e
+      echo "Setting up PostgreSQL data directory..."
+      
+      # Set ownership first
+      chown -R postgres:postgres /var/lib/postgresql
+      chmod 700 /var/lib/postgresql
+      
+      # Check if cluster already initialized
+      if [ -f /var/lib/postgresql/17/main/PG_VERSION ]; then
+        echo "PostgreSQL cluster already exists."
+        exit 0
+      fi
+      
+      echo "Initializing PostgreSQL 17 cluster..."
+      mkdir -p /var/lib/postgresql/17/main
+      chown -R postgres:postgres /var/lib/postgresql/17
+      chmod 700 /var/lib/postgresql/17/main
+      
+      # Run initdb as postgres user
+      su postgres -c "/usr/lib/postgresql/17/bin/initdb -D /var/lib/postgresql/17/main"
+      
+      echo "PostgreSQL data directory ready."
+      
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:15:59 -0500
+      Finished:     Fri, 10 Apr 2026 08:15:59 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  512Mi
+    Requests:
+      cpu:        50m
+      memory:     128Mi
+    Environment:  <none>
+    Mounts:
+      /var/lib/postgresql from psql-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  gvmd-data-setup:
+    Container ID:  containerd://d20bcc907158589de99c58e8d3562704f95f14b0c3c0fa3320d5f4b87b5c3224
+    Image:         harbor.knowledgeondemand.net/cleanroom/gvmd:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/gvmd@sha256:d8e104822070df12d9d12a4ac7e1be3fe53090a756a03f23d3ebeb3c5d0ecdb2
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+      -c
+    Args:
+      set -e
+      echo "Setting up GVMD data directory..."
+      
+      # Create required directories
+      mkdir -p /var/lib/gvm/gvmd
+      
+      # Set ownership to gvmd user (UID 1001)
+      chown -R 1001:1001 /var/lib/gvm
+      chmod 755 /var/lib/gvm
+      chmod 755 /var/lib/gvm/gvmd
+      
+      echo "GVMD data directory ready."
+      
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:16:01 -0500
+      Finished:     Fri, 10 Apr 2026 08:16:02 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     200m
+      memory:  128Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Environment:  <none>
+    Mounts:
+      /var/lib/gvm from gvmd-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  configure-openvas:
+    Container ID:  containerd://4a3ee1117dbdf3d2fbeafcbcabbc60a29fd12057b025b7a582536b2712de3763
+    Image:         harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/openvas-scanner@sha256:77a865d622863e24e677cde5b6266de4c97193da3fafd2f29d97c3d3c224b245
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+      -c
+    Args:
+      printf "table_driven_lsc = yes\nopenvasd_server = http://127.0.0.1:8090\n" > /mnt/openvas.conf
+      sed "s/127/128/" /etc/openvas/openvas_log.conf | sed 's/gvm/openvas/' > /mnt/openvas_log.conf
+      chmod 644 /mnt/openvas.conf
+      chmod 644 /mnt/openvas_log.conf
+      touch /var/log/openvas/openvas.log
+      chmod 666 /var/log/openvas/openvas.log
+      
+    State:          Terminated
+      Reason:       Completed
+      Exit Code:    0
+      Started:      Fri, 10 Apr 2026 08:16:03 -0500
+      Finished:     Fri, 10 Apr 2026 08:16:03 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  256Mi
+    Requests:
+      cpu:        100m
+      memory:     128Mi
+    Environment:  <none>
+    Mounts:
+      /mnt from openvas-data (rw)
+      /var/log/openvas from openvas-log-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+Containers:
+  redis-server:
+    Container ID:   containerd://a336440dfcce4f57ead96d50645100bb4cda065cbe0e6af647e033c0609b652b
+    Image:          harbor.knowledgeondemand.net/cleanroom/redis-server:latest
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/redis-server@sha256:0b06c853bd6614eada0c699252e6ef5cc9987806b1b5f0404a95e12a8683d085
+    Port:           <none>
+    Host Port:      <none>
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:16:04 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     500m
+      memory:  4Gi
+    Requests:
+      cpu:        100m
+      memory:     512Mi
+    Readiness:    exec [redis-cli -s /run/redis/redis.sock ping] delay=5s timeout=1s period=10s #success=1 #failure=3
+    Startup:      exec [redis-cli -s /run/redis/redis.sock ping] delay=5s timeout=1s period=5s #success=1 #failure=12
+    Environment:  <none>
+    Mounts:
+      /run/redis/ from redis-socket (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  pg-gvm:
+    Container ID:  containerd://e9262584e78cc4fd4f986524d33b33f04f6d468a61654612dfc478a5897b4a1b
+    Image:         harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/pg-gvm@sha256:b07b2c458734c285f8b4ad65ff852335a53d4cdb61c8a4f41ff4da136d75762a
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /usr/local/bin/entrypoint
+    Args:
+      sh
+      -c
+      mkdir -p /etc/postgresql/17/main/conf.d
+      cat > /etc/postgresql/17/main/conf.d/tuning.conf << 'PGEOF'
+      shared_buffers = 1GB
+      work_mem = 128MB
+      maintenance_work_mem = 1GB
+      effective_cache_size = 2GB
+      max_wal_size = 2GB
+      checkpoint_completion_target = 0.9
+      wal_buffers = 32MB
+      synchronous_commit = off
+      PGEOF
+      exec start-postgresql
+      
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:16:05 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     3
+      memory:  4Gi
+    Requests:
+      cpu:        500m
+      memory:     2Gi
+    Readiness:    exec [pg_isready -h /var/run/postgresql -U postgres] delay=60s timeout=1s period=10s #success=1 #failure=3
+    Startup:      exec [pg_isready -h /var/run/postgresql -U postgres] delay=10s timeout=1s period=10s #success=1 #failure=30
+    Environment:  <none>
+    Mounts:
+      /var/lib/postgresql from psql-data (rw)
+      /var/run/postgresql from psql-socket (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  openvasd:
+    Container ID:   containerd://dd03107f6988e97c8d0be5c3937a6127fa2d209bfe7c2a0b23d2e65323770dd2
+    Image:          harbor.knowledgeondemand.net/cleanroom/openvas-scanner:stable
+    Image ID:       harbor.knowledgeondemand.net/cleanroom/openvas-scanner@sha256:77a865d622863e24e677cde5b6266de4c97193da3fafd2f29d97c3d3c224b245
+    Port:           8090/TCP (openvasd)
+    Host Port:      0/TCP (openvasd)
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:16:05 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     2
+      memory:  512Mi
+    Requests:
+      cpu:      200m
+      memory:   128Mi
+    Readiness:  http-get http://:8090/health/ready delay=30s timeout=1s period=10s #success=1 #failure=3
+    Startup:    http-get http://:8090/health/ready delay=10s timeout=1s period=10s #success=1 #failure=30
+    Environment:
+      OPENVASD_MODE:  service_notus
+      GNUPGHOME:      /etc/openvas/gnupg
+      LISTENING:      0.0.0.0:8090
+    Mounts:
+      /etc/openvas from openvas-data (rw)
+      /etc/openvas/gnupg from gpg-data (rw)
+      /var/lib/notus from notus-data (rw)
+      /var/log/openvas from openvas-log-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  ospd-openvas:
+    Container ID:  containerd://0b7db25a58b5bf2c9e8ab967612f59dfaa48e09b7c4b58a070ffafd9aa97271c
+    Image:         harbor.knowledgeondemand.net/cleanroom/ospd-openvas:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/ospd-openvas@sha256:9928adeaec0fccb109bf5747711552be449bf214103d4e559bc4d10490f78e05
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+      -c
+    Args:
+      echo "Waiting for Redis socket..."
+      while [ ! -S /run/redis/redis.sock ]; do sleep 2; done
+      echo "Redis ready. Starting OSPD-OpenVAS..."
+      exec ospd-openvas -f --config /etc/gvm/ospd-openvas.conf --notus-feed-dir /var/lib/notus/advisories -m 666
+      
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:16:06 -0500
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      cpu:     2
+      memory:  4Gi
+    Requests:
+      cpu:        200m
+      memory:     512Mi
+    Readiness:    exec [test -S /run/ospd/ospd-openvas.sock] delay=60s timeout=1s period=10s #success=1 #failure=3
+    Startup:      exec [test -S /run/ospd/ospd-openvas.sock] delay=30s timeout=1s period=10s #success=1 #failure=30
+    Environment:  <none>
+    Mounts:
+      /etc/openvas/ from openvas-data (rw)
+      /etc/openvas/gnupg from gpg-data (rw)
+      /run/ospd from ospd-socket (rw)
+      /run/redis/ from redis-socket (rw)
+      /var/lib/notus from notus-data (rw)
+      /var/lib/openvas/plugins from vt-data (rw)
+      /var/log/openvas from openvas-log-data (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  gvmd:
+    Container ID:  containerd://2677eb65f5bf5b10dabe3453d90474cf5f51e6504551c8a078a4013c42fe33d1
+    Image:         harbor.knowledgeondemand.net/cleanroom/gvmd:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/gvmd@sha256:d8e104822070df12d9d12a4ac7e1be3fe53090a756a03f23d3ebeb3c5d0ecdb2
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      /bin/sh
+      -c
+    Args:
+      echo "Waiting for PostgreSQL socket..."
+      while [ ! -S /var/run/postgresql/.s.PGSQL.5432 ]; do sleep 2; done
+      echo "PostgreSQL ready. Waiting for OSPD socket..."
+      while [ ! -S /run/ospd/ospd-openvas.sock ]; do sleep 2; done
+      echo "OSPD ready."
+      
+      # Create admin user if it doesn't exist (first run only)
+      # Run as gvmd user via gosu to connect to PostgreSQL properly
+      # Password is injected via GVMD_ADMIN_PASSWORD environment variable
+      if ! gosu gvmd gvmd --get-users 2>/dev/null | grep -q "^admin$"; then
+        echo "Creating admin user..."
+        gosu gvmd gvmd --create-user=admin --password="${GVMD_ADMIN_PASSWORD}" || echo "User creation failed or already exists"
+      else
+        echo "Admin user already exists."
+      fi
+      
+      # Set Feed Import Owner to admin user (required for feed synchronization)
+      # The setting UUID 78eceaec-3385-11ea-b237-28d24461215b is the Feed Import Owner setting
+      echo "Setting Feed Import Owner..."
+      ADMIN_UUID=$(gosu gvmd gvmd --get-users --verbose 2>/dev/null | grep "^admin " | awk '{print $2}')
+      if [ -n "$ADMIN_UUID" ]; then
+        gosu gvmd gvmd --modify-setting 78eceaec-3385-11ea-b237-28d24461215b --value "$ADMIN_UUID" 2>/dev/null || echo "Feed owner setting may already be configured"
+        echo "Feed Import Owner set to admin ($ADMIN_UUID)"
+      else
+        echo "Warning: Could not determine admin UUID for Feed Import Owner"
+      fi
+      
+      # Generate GVM TLS certificates if missing (required by GSA v25+)
+      if ! gvm-manage-certs -V >/dev/null 2>&1; then
+        echo "Generating GVM TLS certificates..."
+        gvm-manage-certs -a
+        echo "GVM certificates generated."
+      else
+        echo "GVM certificates OK."
+      fi
+      
+      echo "Starting GVMD..."
+      # GSA v25+ communicates with gvmd via TLS on the Unix socket.
+      # gvmd automatically uses TLS when certs exist in /var/lib/gvm/CA/.
+      exec /usr/local/bin/entrypoint gvmd -f
+      
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:16:09 -0500
+    Last State:     Terminated
+      Reason:       Error
+      Exit Code:    1
+      Started:      Fri, 10 Apr 2026 08:16:06 -0500
+      Finished:     Fri, 10 Apr 2026 08:16:09 -0500
+    Ready:          True
+    Restart Count:  1
+    Limits:
+      cpu:     4
+      memory:  4Gi
+    Requests:
+      cpu:      500m
+      memory:   2Gi
+    Readiness:  exec [test -S /run/gvmd/gvmd.sock] delay=30s timeout=1s period=10s #success=1 #failure=3
+    Startup:    exec [test -S /run/gvmd/gvmd.sock] delay=60s timeout=1s period=10s #success=1 #failure=120
+    Environment:
+      GVMD_ADMIN_PASSWORD:  <set to the key 'admin-password' in secret 'openvas-credentials'>  Optional: false
+    Mounts:
+      /run/gvmd from gvmd-socket (rw)
+      /run/ospd from ospd-socket (rw)
+      /var/lib/gvm from gvmd-data (rw)
+      /var/lib/gvm/cert-data from cert-data (rw)
+      /var/lib/gvm/data-objects/gvmd from data-objects (rw)
+      /var/lib/gvm/scap-data/ from scap-data (rw)
+      /var/lib/openvas/plugins from vt-data (rw)
+      /var/run/postgresql from psql-socket (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+  gsa:
+    Container ID:  containerd://e87802319a68586c4b3e59d35b12aa0c64daf3240aaa501ca59f149617cb8178
+    Image:         harbor.knowledgeondemand.net/cleanroom/gsa:stable
+    Image ID:      harbor.knowledgeondemand.net/cleanroom/gsa@sha256:f982476ab481784f53bf57c914d7d6e6b5485a8935dab5d46a86c5c59d2e1b37
+    Port:          80/TCP (http)
+    Host Port:     0/TCP (http)
+    Command:
+      /bin/sh
+      -c
+    Args:
+      echo "Waiting for GVMD socket..."
+      while [ ! -S /run/gvmd/gvmd.sock ]; do sleep 2; done
+      echo "GVMD ready. Starting GSA..."
+      # Run gsad in HTTP-only mode (Traefik handles TLS termination)
+      exec gsad --foreground --http-only --port=80 --drop-privileges=gsad --munix-socket=/run/gvmd/gvmd.sock
+      
+    State:          Running
+      Started:      Fri, 10 Apr 2026 08:18:08 -0500
+    Last State:     Terminated
+      Reason:       Error
+      Exit Code:    139
+      Started:      Fri, 10 Apr 2026 08:16:06 -0500
+      Finished:     Fri, 10 Apr 2026 08:18:07 -0500
+    Ready:          False
+    Restart Count:  1
+    Limits:
+      cpu:     250m
+      memory:  256Mi
+    Requests:
+      cpu:        50m
+      memory:     64Mi
+    Liveness:     http-get http://:80/ delay=0s timeout=1s period=30s #success=1 #failure=20
+    Readiness:    http-get http://:80/ delay=10s timeout=1s period=10s #success=1 #failure=3
+    Startup:      http-get http://:80/ delay=30s timeout=1s period=15s #success=1 #failure=120
+    Environment:  <none>
+    Mounts:
+      /run/gvmd from gvmd-socket (rw)
+      /var/lib/gvm from gvmd-data (ro)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rbbft (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True 
+  Initialized                 True 
+  Ready                       False 
+  ContainersReady             False 
+  PodScheduled                True 
+Volumes:
+  gpg-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  gpg-data
+    ReadOnly:   false
+  scap-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  scap-data
+    ReadOnly:   false
+  cert-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  cert-data
+    ReadOnly:   false
+  data-objects:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  data-objects
+    ReadOnly:   false
+  gvmd-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  gvmd-data
+    ReadOnly:   false
+  psql-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  psql-data
+    ReadOnly:   false
+  vt-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  vt-data
+    ReadOnly:   false
+  notus-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  notus-data
+    ReadOnly:   false
+  openvas-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  openvas-data
+    ReadOnly:   false
+  openvas-log-data:
+    Type:       PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)
+    ClaimName:  openvas-log-data
+    ReadOnly:   false
+  redis-socket:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  psql-socket:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  gvmd-socket:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  ospd-socket:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  kube-api-access-rbbft:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              <none>
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason     Age                  From               Message
+  ----     ------     ----                 ----               -------
+  Normal   Scheduled  6m50s                default-scheduler  Successfully assigned openvas/greenbone-75d6cc858-l77r6 to talos-cleanroom-worker-01
+  Normal   Pulled     6m39s                kubelet            spec.initContainers{vulnerability-tests}: Container image "harbor.knowledgeondemand.net/cleanroom/vulnerability-tests:latest" already present on machine
+  Normal   Created    6m39s                kubelet            spec.initContainers{vulnerability-tests}: Created container: vulnerability-tests
+  Normal   Started    6m39s                kubelet            spec.initContainers{vulnerability-tests}: Started container vulnerability-tests
+  Normal   Pulled     6m4s                 kubelet            spec.initContainers{notus-data}: Container image "harbor.knowledgeondemand.net/cleanroom/notus-data:latest" already present on machine
+  Normal   Created    6m4s                 kubelet            spec.initContainers{notus-data}: Created container: notus-data
+  Normal   Started    6m4s                 kubelet            spec.initContainers{notus-data}: Started container notus-data
+  Normal   Pulled     5m50s                kubelet            spec.initContainers{scap-data}: Container image "harbor.knowledgeondemand.net/cleanroom/scap-data:latest" already present on machine
+  Normal   Created    5m50s                kubelet            spec.initContainers{scap-data}: Created container: scap-data
+  Normal   Started    5m50s                kubelet            spec.initContainers{scap-data}: Started container scap-data
+  Normal   Pulled     2m23s                kubelet            spec.initContainers{cert-bund-data}: Container image "harbor.knowledgeondemand.net/cleanroom/cert-bund-data:latest" already present on machine
+  Normal   Created    2m23s                kubelet            spec.initContainers{cert-bund-data}: Created container: cert-bund-data
+  Normal   Started    2m23s                kubelet            spec.initContainers{cert-bund-data}: Started container cert-bund-data
+  Normal   Created    2m22s                kubelet            spec.initContainers{dfn-cert-data}: Created container: dfn-cert-data
+  Normal   Pulled     2m22s                kubelet            spec.initContainers{dfn-cert-data}: Container image "harbor.knowledgeondemand.net/cleanroom/dfn-cert-data:latest" already present on machine
+  Normal   Started    2m22s                kubelet            spec.initContainers{dfn-cert-data}: Started container dfn-cert-data
+  Normal   Pulled     2m21s                kubelet            spec.initContainers{data-objects}: Container image "harbor.knowledgeondemand.net/cleanroom/data-objects:latest" already present on machine
+  Normal   Created    2m21s                kubelet            spec.initContainers{data-objects}: Created container: data-objects
+  Normal   Started    2m21s                kubelet            spec.initContainers{data-objects}: Started container data-objects
+  Normal   Created    2m20s                kubelet            spec.initContainers{report-formats}: Created container: report-formats
+  Normal   Pulled     2m20s                kubelet            spec.initContainers{report-formats}: Container image "harbor.knowledgeondemand.net/cleanroom/report-formats:latest" already present on machine
+  Normal   Started    2m20s                kubelet            spec.initContainers{report-formats}: Started container report-formats
+  Normal   Pulled     2m19s                kubelet            spec.initContainers{gpg-data}: Container image "harbor.knowledgeondemand.net/cleanroom/gpg-data:latest" already present on machine
+  Normal   Created    2m19s                kubelet            spec.initContainers{gpg-data}: Created container: gpg-data
+  Normal   Started    2m19s                kubelet            spec.initContainers{gpg-data}: Started container gpg-data
+  Normal   Pulled     2m18s                kubelet            spec.initContainers{psql-data-setup}: Container image "harbor.knowledgeondemand.net/cleanroom/pg-gvm:stable" already present on machine
+  Warning  Unhealthy  100s                 kubelet            spec.containers{gsa}: Startup probe failed: Get "http://10.14.0.26:80/": dial tcp 10.14.0.26:80: connect: connection refused
+  Normal   Pulled     10s (x6 over 2m17s)  kubelet            spec.containers{gsa}: (combined from similar events): Container image "harbor.knowledgeondemand.net/cleanroom/gsa:stable" already present on machine
+  Warning  Unhealthy  10s                  kubelet            spec.containers{gsa}: Liveness probe failed: Get "http://10.14.0.26:80/": dial tcp 10.14.0.26:80: connect: connection refused
