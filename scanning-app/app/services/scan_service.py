@@ -305,6 +305,36 @@ MSF_MODULE_CATALOG = [
         "default_port": 2222,
         "cve_id": "CVE-2018-10933",
     },
+    {
+        "id": "auxiliary/scanner/http/apache_shiro_check",
+        "name": "Apache Shiro RememberMe (CVE-2016-4437)",
+        "category": "Vulhub Labs",
+        "description": "Apache Shiro RememberMe cookie deserialization detection",
+        "profiles": ["standard", "thorough"],
+        "default_port": 8080,
+        "cve_id": "CVE-2016-4437",
+    },
+    {
+        "id": "auxiliary/scanner/http/oracle_weblogic_ssrf",
+        "name": "WebLogic SSRF (CVE-2014-4210)",
+        "category": "Vulhub Labs",
+        "description": "Oracle WebLogic SearchPublicRegistries.jsp SSRF",
+        "profiles": ["standard", "thorough"],
+        "default_port": 7001,
+        "cve_id": "CVE-2014-4210",
+    },
+    {
+        "id": "exploit/linux/http/mongo_express_rce",
+        "name": "mongo-express RCE (CVE-2019-10758)",
+        "category": "Vulhub Labs",
+        "description": "mongo-express SSJS injection RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 8081,
+        "cve_id": "CVE-2019-10758",
+        "check_only": True,
+        # Vulhub mongo-express ships with default basic-auth admin:pass
+        "extra_opts": {"HttpUsername": "admin", "HttpPassword": "pass"},
+    },
     # --- Service Detection (included in standard + thorough) ---
     {
         "id": "auxiliary/scanner/smb/smb_version",
