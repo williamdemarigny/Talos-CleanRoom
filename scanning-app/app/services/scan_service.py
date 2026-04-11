@@ -305,36 +305,19 @@ MSF_MODULE_CATALOG = [
         "default_port": 2222,
         "cve_id": "CVE-2018-10933",
     },
-    {
-        "id": "auxiliary/scanner/http/apache_shiro_check",
-        "name": "Apache Shiro RememberMe (CVE-2016-4437)",
-        "category": "Vulhub Labs",
-        "description": "Apache Shiro RememberMe cookie deserialization detection",
-        "profiles": ["standard", "thorough"],
-        "default_port": 8080,
-        "cve_id": "CVE-2016-4437",
-    },
-    {
-        "id": "auxiliary/scanner/http/oracle_weblogic_ssrf",
-        "name": "WebLogic SSRF (CVE-2014-4210)",
-        "category": "Vulhub Labs",
-        "description": "Oracle WebLogic SearchPublicRegistries.jsp SSRF",
-        "profiles": ["standard", "thorough"],
-        "default_port": 7001,
-        "cve_id": "CVE-2014-4210",
-    },
-    {
-        "id": "exploit/linux/http/mongo_express_rce",
-        "name": "mongo-express RCE (CVE-2019-10758)",
-        "category": "Vulhub Labs",
-        "description": "mongo-express SSJS injection RCE check",
-        "profiles": ["standard", "thorough"],
-        "default_port": 8081,
-        "cve_id": "CVE-2019-10758",
-        "check_only": True,
-        # Vulhub mongo-express ships with default basic-auth admin:pass
-        "extra_opts": {"HttpUsername": "admin", "HttpPassword": "pass"},
-    },
+    # NOTE: The following targets have NO usable MSF check module in this MSF
+    # version (verified 2026-04-11 by manual `search` + `info` against the
+    # running metasploit pod):
+    #
+    #   shiro-deser (CVE-2016-4437)        — only shiro_rememberme_v124_deserialize
+    #                                        exists, "Check supported: No"
+    #   weblogic-ssrf (CVE-2014-4210)      — no weblogic SSRF module exists
+    #   mongo-express-rce (CVE-2019-10758) — no mongo-express module exists
+    #   weblogic-xmldecoder (CVE-2017-10271) — oracle_weblogic_wsat_deserialization_rce
+    #                                          exists below but "Check supported: No"
+    #
+    # These four targets must be detected via OpenVAS NVTs or by adding a
+    # dedicated Nmap NSE/HTTP-probe pass. See apps/vulhub-targets/TARGET-REQUIREMENTS.md
     # --- Service Detection (included in standard + thorough) ---
     {
         "id": "auxiliary/scanner/smb/smb_version",

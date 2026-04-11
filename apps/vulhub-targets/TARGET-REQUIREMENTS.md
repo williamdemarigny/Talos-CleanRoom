@@ -46,37 +46,58 @@ MSF `check` methods cannot determine the version → cannot confirm vuln.
 **Fix path:** add init containers or post-deploy `Job` to bootstrap each app
 (see Phase C below).
 
-### Fail — missing MSF module in catalog
+### Fail — no MSF detection module exists in installed MSF version
 
-`MSF_MODULE_CATALOG` in `scanning-app/app/services/scan_service.py` does not
-include any check module that handles these CVEs. The catalog file
-(`vulhub_catalog.py`) lists `msf_modules` but that field is **informational
-only** — the real list of modules to run comes from `MSF_MODULE_CATALOG`
-filtered by profile.
+I attempted to add three MSF modules (`apache_shiro_check`,
+`oracle_weblogic_ssrf`, `mongo_express_rce`) to `MSF_MODULE_CATALOG`. After
+rebuild + revalidation, all three still failed with **0 vulns reported**.
 
-| Target | CVE | Module to add | Notes |
+Manual `search` + `info` against the running metasploit pod (2026-04-11):
+
+| Target | CVE | Module I tried | Actual MSF state |
 |---|---|---|---|
-| shiro-deser | CVE-2016-4437 | `auxiliary/scanner/http/apache_shiro_check` | Detects vulnerable RememberMe cookie handling. Default creds `admin:vulhub` not needed for check. |
-| weblogic-ssrf | CVE-2014-4210 | `auxiliary/scanner/http/oracle_weblogic_ssrf` | Probes `/uddiexplorer/SearchPublicRegistries.jsp` |
-| mongo-express-rce | CVE-2019-10758 | `exploit/linux/http/mongo_express_rce` | Default creds `admin:pass` (set in module options) |
+| shiro-deser | CVE-2016-4437 | `auxiliary/scanner/http/apache_shiro_check` | **Module does not exist** in installed MSF. Only `exploit/multi/http/shiro_rememberme_v124_deserialize` exists, and it has `Check supported: No` (would have to actually exploit, not safe in validator). |
+| weblogic-ssrf | CVE-2014-4210 | `auxiliary/scanner/http/oracle_weblogic_ssrf` | **Module does not exist.** None of the 18 weblogic modules cover SSRF. |
+| mongo-express-rce | CVE-2019-10758 | `exploit/linux/http/mongo_express_rce` | **Module does not exist.** No mongo-express modules at all. |
 
-**Fix path:** add 3 entries to `MSF_MODULE_CATALOG` under the "Vulhub Labs"
-section, profile `["standard","thorough"]`, then rebuild the scanning-console
-image.
+The catalog additions were reverted in the same commit that added them
+(replaced with a comment block explaining why). Rebuild not required —
+the running scanning-console will keep emitting `[-] Failed to load module`
+warnings until next image rebuild, but no functional impact.
 
-### Fail — module exists but check fails (needs further investigation)
+### Fail — MSF module exists but `Check supported: No`
 
-These have MSF modules already in the catalog. The `check` method runs but
-returns `Unknown` or `Safe` instead of `Vulnerable`/`Detected`.
+Discovered during the same investigation:
 
-| Target | CVE | Module currently used | Hypothesis |
+| Target | CVE | Module in catalog | Check supported? |
 |---|---|---|---|
-| tomcat-put | CVE-2017-12615 | `exploit/multi/http/tomcat_jsp_upload_bypass` | Module may PUT a real test file; if WAF/auth blocks PUT it cannot confirm. Manual `kubectl exec` test needed. |
-| weblogic-xmldecoder | CVE-2017-10271 | `exploit/multi/http/oracle_weblogic_wsat_deserialization_rce` | WebLogic 7001 takes 60-90s to fully start; MSF check may run before WLS is ready. May also need patched check method. |
+| weblogic-xmldecoder | CVE-2017-10271 | `exploit/multi/http/oracle_weblogic_wsat_deserialization_rce` | **No** |
+| (shiro-deser if we used the exploit) | CVE-2016-4437 | `exploit/multi/http/shiro_rememberme_v124_deserialize` | **No** |
 
-**Fix path:** manual probe with `kubectl exec` from a metasploit pod, then
-either swap modules or add an Nmap NSE script (`http-vuln-cve2017-12615`,
-`http-vuln-cve2017-10271`) as fallback.
+For these, `check_only: True` in the catalog is a no-op — MSF reports the
+module ran but cannot determine vulnerability without exploitation.
+
+### Fail — MSF module exists, check supported, but returned no vuln
+
+| Target | CVE | Module | Check supported? | Status |
+|---|---|---|---|---|
+| tomcat-put | CVE-2017-12615 | `exploit/multi/http/tomcat_jsp_upload_bypass` | **Yes** | Check ran but did not report vulnerable. Needs manual kubectl-exec probe to determine why (Vulhub may ship Tomcat with PUT method blocked by default servlet config). |
+
+### Path forward for these 5 targets
+
+Detection must come from one of:
+
+1. **OpenVAS NVTs** — Greenbone has CVE-specific NVTs for shiro, WebLogic SSRF,
+   WebLogic XMLDecoder, and Tomcat PUT. This is the planned **Phase B**.
+2. **Custom HTTP probe** — a tiny scanner that curls each target's known
+   vulnerable endpoint and reports CVE matches based on response patterns:
+   - shiro: `Set-Cookie: rememberMe=deleteMe` in any response
+   - weblogic-ssrf: `GET /uddiexplorer/SearchPublicRegistries.jsp` returns 200
+   - mongo-express: `Server: mongo-express` header + `/db/admin/` accessible
+   - weblogic-xmldecoder: `GET /wls-wsat/CoordinatorPortType` returns 200
+   - tomcat-put: `OPTIONS /` returns `Allow:` header containing PUT
+3. **Nmap NSE scripts** — `http-vuln-cve2017-12615` exists; we could add it
+   to nmap_scripts in the catalog.
 
 ## Action items
 
