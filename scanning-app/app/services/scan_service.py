@@ -305,19 +305,6 @@ MSF_MODULE_CATALOG = [
         "default_port": 2222,
         "cve_id": "CVE-2018-10933",
     },
-    # NOTE: The following targets have NO usable MSF check module in this MSF
-    # version (verified 2026-04-11 by manual `search` + `info` against the
-    # running metasploit pod):
-    #
-    #   shiro-deser (CVE-2016-4437)        — only shiro_rememberme_v124_deserialize
-    #                                        exists, "Check supported: No"
-    #   weblogic-ssrf (CVE-2014-4210)      — no weblogic SSRF module exists
-    #   mongo-express-rce (CVE-2019-10758) — no mongo-express module exists
-    #   weblogic-xmldecoder (CVE-2017-10271) — oracle_weblogic_wsat_deserialization_rce
-    #                                          exists below but "Check supported: No"
-    #
-    # These four targets must be detected via OpenVAS NVTs or by adding a
-    # dedicated Nmap NSE/HTTP-probe pass. See apps/vulhub-targets/TARGET-REQUIREMENTS.md
     # --- Service Detection (included in standard + thorough) ---
     {
         "id": "auxiliary/scanner/smb/smb_version",
