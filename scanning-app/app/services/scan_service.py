@@ -209,6 +209,102 @@ MSF_MODULE_CATALOG = [
         "cve_id": "CVE-2017-7494",
         "check_only": True,  # safe check mode — verifies vuln without exploitation
     },
+    # --- Vulhub Target Lab Exploits (included in standard + thorough) ---
+    # These modules target CVEs present in the Vulhub target lab environments.
+    # All use check_only: True for safe vulnerability verification without exploitation.
+    {
+        "id": "exploit/unix/webapp/drupal_drupalgeddon2",
+        "name": "Drupalgeddon 2 (CVE-2018-7600)",
+        "category": "Vulhub Labs",
+        "description": "Drupal 7 Form API RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2018-7600",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/phpmailer_arg_injection",
+        "name": "PHPMailer Arg Injection (CVE-2016-10033)",
+        "category": "Vulhub Labs",
+        "description": "PHPMailer sender argument injection RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2016-10033",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/tomcat_jsp_upload_bypass",
+        "name": "Tomcat PUT JSP Upload (CVE-2017-12615)",
+        "category": "Vulhub Labs",
+        "description": "Apache Tomcat PUT method JSP upload RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2017-12615",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/struts2_rest_xstream",
+        "name": "Struts2 REST XStream (CVE-2017-9805)",
+        "category": "Vulhub Labs",
+        "description": "Apache Struts2 REST plugin XStream deserialization",
+        "profiles": ["thorough"],
+        "cve_id": "CVE-2017-9805",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/oracle_weblogic_wsat_deserialization_rce",
+        "name": "WebLogic WLS-WSAT XMLDecoder (CVE-2017-10271)",
+        "category": "Vulhub Labs",
+        "description": "Oracle WebLogic WLS-WSAT XMLDecoder deserialization RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 7001,
+        "cve_id": "CVE-2017-10271",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/misc/weblogic_deserialize",
+        "name": "WebLogic T3 Deserialize (CVE-2015-4852)",
+        "category": "Vulhub Labs",
+        "description": "Oracle WebLogic T3 protocol deserialization RCE check",
+        "profiles": ["thorough"],
+        "default_port": 7001,
+        "cve_id": "CVE-2015-4852",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/elasticsearch/script_mvel_rce",
+        "name": "Elasticsearch MVEL Script RCE (CVE-2014-3120)",
+        "category": "Vulhub Labs",
+        "description": "Elasticsearch dynamic scripting MVEL RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 9200,
+        "cve_id": "CVE-2014-3120",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/elasticsearch/search_groovy_script",
+        "name": "Elasticsearch Groovy Script RCE (CVE-2015-1427)",
+        "category": "Vulhub Labs",
+        "description": "Elasticsearch Groovy script sandbox escape RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 9200,
+        "cve_id": "CVE-2015-1427",
+        "check_only": True,
+    },
+    {
+        "id": "auxiliary/scanner/redis/redis_server",
+        "name": "Redis Server Info",
+        "category": "Vulhub Labs",
+        "description": "Redis unauthenticated server information disclosure",
+        "profiles": ["standard", "thorough"],
+        "default_port": 6379,
+    },
+    {
+        "id": "auxiliary/scanner/ssh/libssh_auth_bypass",
+        "name": "libssh Auth Bypass (CVE-2018-10933)",
+        "category": "Vulhub Labs",
+        "description": "libssh server-side authentication state bypass",
+        "profiles": ["standard", "thorough"],
+        "default_port": 2222,
+        "cve_id": "CVE-2018-10933",
+    },
     # --- Service Detection (included in standard + thorough) ---
     {
         "id": "auxiliary/scanner/smb/smb_version",
@@ -276,15 +372,7 @@ MSF_MODULE_CATALOG = [
         "default_port": 3389,
     },
     # --- Extended SSH (thorough only) ---
-    {
-        "id": "auxiliary/scanner/ssh/libssh_auth_bypass",
-        "name": "libssh Auth Bypass (CVE-2018-10933)",
-        "category": "Extended SSH",
-        "description": "libssh server-side authentication bypass",
-        "profiles": ["thorough"],
-        "default_port": 2222,
-        "cve_id": "CVE-2018-10933",
-    },
+    # libssh_auth_bypass moved to Vulhub Labs section (now in standard profile)
     {
         "id": "auxiliary/scanner/ssh/ssh_enumusers",
         "name": "SSH User Enumeration",
@@ -436,14 +524,7 @@ MSF_MODULE_CATALOG = [
         "profiles": ["thorough"],
         "default_port": 27017,
     },
-    {
-        "id": "auxiliary/scanner/redis/redis_server",
-        "name": "Redis Server",
-        "category": "Database",
-        "description": "Redis open access check",
-        "profiles": ["thorough"],
-        "default_port": 6379,
-    },
+    # redis_server moved to Vulhub Labs section (now in standard profile)
     # --- Network Infrastructure (thorough only) ---
     {
         "id": "auxiliary/scanner/telnet/telnet_version",
