@@ -322,8 +322,9 @@ capture_pod_diag() {
   local ns="$2"
   kubectl get pods -n "$ns" -o yaml > "$DIAG_DIR/${env_id}-pod-yaml.txt" 2>&1 || true
   kubectl describe pods -n "$ns" > "$DIAG_DIR/${env_id}-pod-describe.txt" 2>&1 || true
-  kubectl logs -n "$ns" --all-containers --tail=100 > "$DIAG_DIR/${env_id}-pod-logs.txt" 2>&1 || true
-  kubectl logs -n "$ns" --all-containers --previous --tail=100 > "$DIAG_DIR/${env_id}-pod-logs-previous.txt" 2>&1 || true
+  # kubectl logs needs a pod selector when using --all-containers
+  kubectl logs -n "$ns" -l app.kubernetes.io/part-of=vulhub-targets --all-containers --tail=100 > "$DIAG_DIR/${env_id}-pod-logs.txt" 2>&1 || true
+  kubectl logs -n "$ns" -l app.kubernetes.io/part-of=vulhub-targets --all-containers --previous --tail=100 > "$DIAG_DIR/${env_id}-pod-logs-previous.txt" 2>&1 || true
   kubectl get events -n "$ns" --sort-by='.lastTimestamp' > "$DIAG_DIR/${env_id}-pod-events.txt" 2>&1 || true
 }
 
