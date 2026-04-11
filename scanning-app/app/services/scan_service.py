@@ -4387,14 +4387,43 @@ except Exception as e:
                             td[k.strip()] = v.strip()
                 solution = td.get("solution", "")
 
-                # Extract CVEs
-                cve_str = nvt.findtext("cve", "") if nvt is not None else ""
-                cves = [c.strip() for c in cve_str.split(",") if c.strip() and c.strip() != "NOCVE"]
-                refs = list(cves)
-                xref = nvt.findtext("xref", "") if nvt is not None else ""
-                if xref and xref != "NOXREF":
-                    # xrefs are pipe-delimited (e.g., "URL:https://...|DFN-CERT-2023-1234")
-                    refs.extend([x.strip() for x in re.split(r"[,|]", xref) if x.strip()])
+                # Extract CVEs — modern GVM (21.04+) uses <refs><ref type="cve" id="..."/></refs>
+                # Legacy GMP <22 uses <cve>CVE-...,CVE-...</cve> + <xref>URL:...|...</xref>
+                # Handle both formats so we work across upstream versions.
+                cves: list[str] = []
+                refs: list[str] = []
+                if nvt is not None:
+                    refs_elem = nvt.find("refs")
+                    if refs_elem is not None:
+                        for ref_el in refs_elem.findall("ref"):
+                            ref_type = (ref_el.get("type") or "").lower()
+                            ref_id = (ref_el.get("id") or "").strip()
+                            if not ref_id:
+                                continue
+                            if ref_type == "cve":
+                                cves.append(ref_id)
+                            else:
+                                refs.append(ref_id)
+                    # Legacy fallback
+                    cve_str = nvt.findtext("cve", "") or ""
+                    for c in cve_str.split(","):
+                        c = c.strip()
+                        if c and c != "NOCVE" and c not in cves:
+                            cves.append(c)
+                    xref = nvt.findtext("xref", "") or ""
+                    if xref and xref != "NOXREF":
+                        for x in re.split(r"[,|]", xref):
+                            x = x.strip()
+                            if x and x not in refs:
+                                refs.append(x)
+                # Description text sometimes contains CVE refs not in NVT metadata —
+                # scrape as a last resort
+                if not cves and desc:
+                    for c in re.findall(r"CVE-\d{4}-\d{4,}", desc):
+                        if c not in cves:
+                            cves.append(c)
+                # Final refs list = CVEs first, then everything else
+                refs = list(cves) + [r for r in refs if r not in cves]
 
                 # Use first CVE as external_id, fall back to NVT OID
                 external_id = cves[0] if cves else None
