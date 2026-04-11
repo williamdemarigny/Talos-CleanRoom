@@ -120,9 +120,13 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier3",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-drupal-enum,http-drupal-users",
+            # vulners performs version-based CVE matching from service detection
+            "nmap_scripts": "vulners,http-drupal-enum",
+            "msf_modules": [
+                "exploit/unix/webapp/drupal_drupalgeddon2",
+            ],
         },
     },
     "wordpress-phpmailer": {
@@ -137,9 +141,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier3",
         "recommended_scan": {
-            "tools": ["nmap", "openvas", "wpscan"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-wordpress-enum,http-wordpress-users",
+            "nmap_scripts": "vulners,http-wordpress-enum",
+            "msf_modules": [
+                "exploit/multi/http/wp_phpmailer_host_header",
+            ],
         },
     },
     "tomcat-put": {
@@ -154,9 +161,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-methods,http-put",
+            "nmap_scripts": "vulners,http-methods,http-put",
+            "msf_modules": [
+                "exploit/multi/http/tomcat_jsp_upload_bypass",
+            ],
         },
     },
 
@@ -173,9 +183,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "medium",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-auth-finder,http-title,http-headers",
+            "nmap_scripts": "vulners,http-auth-finder,http-title",
+            "msf_modules": [
+                "auxiliary/scanner/http/apache_shiro_check",
+            ],
         },
     },
     "libssh-auth-bypass": {
@@ -213,8 +226,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "medium",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
+            "nmap_scripts": "vulners,http-title,http-headers",
+            "msf_modules": [
+                "auxiliary/scanner/oracle/oracle_login",
+            ],
         },
     },
 
@@ -231,8 +248,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "medium",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
+            "nmap_scripts": "vulners,http-title,http-headers",
+            "msf_modules": [
+                "exploit/multi/misc/weblogic_deserialize_asyncresponseservice",
+            ],
         },
     },
 
@@ -272,9 +293,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier3",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-title,http-headers,http-auth-finder",
+            "nmap_scripts": "vulners,http-title,http-headers",
+            "msf_modules": [
+                "exploit/linux/http/mongo_express_rce",
+            ],
         },
     },
 
@@ -332,9 +356,12 @@ VULHUB_CATALOG: dict[str, dict] = {
         "difficulty": "easy",
         "tier": "tier2",
         "recommended_scan": {
-            "tools": ["nmap", "openvas"],
+            "tools": ["nmap", "metasploit"],
             "profile": "standard",
-            "nmap_scripts": "http-title,http-methods,http-headers",
+            "nmap_scripts": "vulners,http-title,http-headers",
+            "msf_modules": [
+                "exploit/multi/elasticsearch/script_mvel_rce",
+            ],
         },
     },
 
@@ -352,8 +379,10 @@ VULHUB_CATALOG: dict[str, dict] = {
         "tier": "tier1",
         "recommended_scan": {
             "tools": ["nmap"],
-            "profile": "quick",
-            "nmap_scripts": "dns-zone-transfer,dns-update,dns-nsid",
+            "profile": "standard",
+            # vulners triggers when nmap version detection identifies BIND 9.10.x
+            # which is vulnerable to CVE-2017-3143
+            "nmap_scripts": "vulners,dns-nsid,dns-recursion",
         },
     },
 

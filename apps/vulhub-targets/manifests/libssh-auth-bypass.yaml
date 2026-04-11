@@ -23,8 +23,10 @@ spec:
         - name: libssh
           image: vulhub/libssh:0.8.1
           ports:
-            - containerPort: 2222
+            # Image's sshd listens on port 22 internally; we expose externally as 2222
+            - containerPort: 22
               protocol: TCP
+              name: ssh
           resources:
             requests:
               cpu: 50m
@@ -34,13 +36,13 @@ spec:
               memory: 256Mi
           readinessProbe:
             tcpSocket:
-              port: 2222
+              port: 22
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             tcpSocket:
-              port: 2222
+              port: 22
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
@@ -58,6 +60,6 @@ spec:
     app.kubernetes.io/name: libssh-auth-bypass
   ports:
     - port: 2222
-      targetPort: 2222
+      targetPort: 22
       protocol: TCP
       name: ssh

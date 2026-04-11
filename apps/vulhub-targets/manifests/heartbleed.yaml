@@ -22,9 +22,17 @@ spec:
       containers:
         - name: nginx
           image: vulhub/openssl:1.0.1c-with-nginx
+          # The image's default CMD daemonizes nginx and exits, causing
+          # CrashLoopBackOff. Override with explicit foreground nginx.
+          # The image has /etc/nginx/nginx.conf configured for port 443 with
+          # SSL using certs at /etc/ssl/nginx/local.{crt,key}.
+          command: ["nginx"]
+          args: ["-g", "daemon off;"]
           ports:
-            - containerPort: 8443
+            # Image's nginx listens on 443 internally; we expose externally as 8443
+            - containerPort: 443
               protocol: TCP
+              name: https
           resources:
             requests:
               cpu: 100m
@@ -34,13 +42,13 @@ spec:
               memory: 512Mi
           readinessProbe:
             tcpSocket:
-              port: 8443
+              port: 443
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             tcpSocket:
-              port: 8443
+              port: 443
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
@@ -58,6 +66,6 @@ spec:
     app.kubernetes.io/name: heartbleed
   ports:
     - port: 8443
-      targetPort: 8443
+      targetPort: 443
       protocol: TCP
       name: https
