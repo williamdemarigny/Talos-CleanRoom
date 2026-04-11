@@ -53,8 +53,8 @@ while [[ $# -gt 0 ]]; do
     --log) LOG_FILE="$2"; shift 2 ;;
     --scanning-url) SCANNING_URL="$2"; shift 2 ;;
     --scanning-pw) SCANNING_PW="$2"; shift 2 ;;
-    --tools) VALIDATOR_TOOLS="$2"; shift 2 ;;
-    --profile) VALIDATOR_PROFILE="$2"; shift 2 ;;
+    --tools) VALIDATOR_TOOLS_OVERRIDE="$2"; shift 2 ;;
+    --profile) VALIDATOR_PROFILE_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
