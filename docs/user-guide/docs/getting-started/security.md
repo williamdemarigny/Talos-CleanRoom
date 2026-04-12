@@ -1,18 +1,21 @@
 # Security Basics
 
-!!! danger "Change default passwords immediately"
-    All Talos CleanRoom applications ship with the default username **admin** and password **admin**. Change these as soon as possible after your first login.
-
 ## Default Credentials
+
+Only the **Portal** and **Deployment Console** use the default credentials:
 
 | Service | Default Username | Default Password |
 |---|---|---|
 | Portal | admin | admin |
 | Deployment Console | admin | admin |
-| Scanning Console | admin | admin |
-| ArgoCD | admin | admin |
-| Harbor | admin | Harbor12345 |
-| OpenVAS | admin | admin |
+
+All other services (Scanning Console, ArgoCD, Harbor, OpenVAS, Faraday, Threat Dragon) receive **auto-generated passwords** during deployment. You can find these passwords in two places:
+
+- **Portal** — click **Credentials** in the top navigation bar to see all service passwords. See [Viewing Credentials](credentials.md) for details.
+- **Deployment Console** — the **Dashboard** page shows service credentials in the "Deployed Services" section at the bottom.
+
+!!! warning "Change default passwords"
+    The Portal and Deployment Console both ship with **admin / admin**. Consider changing these after your first login.
 
 ## Session Duration
 
