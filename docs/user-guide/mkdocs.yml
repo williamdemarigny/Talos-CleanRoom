@@ -35,11 +35,7 @@ plugins:
       height: auto
       zoomable: true
       draggable: true
-  - mkdocs-video:
-      is_video: true
-      video_muted: true
-      video_controls: true
-      video_autoplay: false
+  # mkdocs-video plugin removed — videos excluded from hosted docs to save space
 
 markdown_extensions:
   - attr_list

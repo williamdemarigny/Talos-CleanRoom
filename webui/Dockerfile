@@ -72,6 +72,10 @@ COPY webui/app/ ./app/
 COPY webui/static/ ./static/
 COPY webui/templates/ ./templates/
 
+# Copy user guide documentation (pre-built MkDocs site, excluding videos)
+COPY docs/user-guide/site/ ./docs-site/
+RUN rm -rf ./docs-site/videos/
+
 # Create mount point for repository
 VOLUME ["/repo"]
 

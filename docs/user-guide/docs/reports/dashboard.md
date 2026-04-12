@@ -41,10 +41,6 @@ A table lists recent scans with:
 | **Started** | When the scan began |
 | **Actions** | Click "View Details" to drill into the scan |
 
-## Video Walkthrough
-
-![type:video](../videos/05-reports-tour.mp4)
-
 ## What's Next?
 
 - [Scan Details](scan-detail.md) — drill into a specific scan
