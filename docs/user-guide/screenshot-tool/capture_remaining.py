@@ -283,11 +283,11 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
     scan = SCANNING_URL
 
     # --- Scan running ---
-    # Use elasticsearch-groovy Vulhub target for realistic screenshots
-    es_target = "elasticsearch-groovy.vulhub-elasticsearch-groovy-1434ad.svc.cluster.local:9200"
+    # Use heartbleed Vulhub target for realistic screenshots (one of the 8 curated labs)
+    mock_target = "heartbleed.vulhub-heartbleed-a1b2c3.svc.cluster.local:8443"
     page = await context.new_page()
     running_state = {
-        "id": "97a676ca", "target": es_target, "profile": "standard",
+        "id": "97a676ca", "target": mock_target, "profile": "standard",
         "tools": [
             {"tool": "nmap", "status": "completed",
              "started_at": "2026-04-08T14:00:00", "completed_at": "2026-04-08T14:01:30",
@@ -303,7 +303,7 @@ async def capture_scanning_mocked(context: BrowserContext, output: Path) -> None
         "started_at": "2026-04-08T14:00:00", "completed_at": None,
     }
     mock_logs = [
-        {"tool": "nmap", "level": "INFO", "message": f"Starting Nmap scan against {es_target}",
+        {"tool": "nmap", "level": "INFO", "message": f"Starting Nmap scan against {mock_target}",
          "timestamp": "2026-04-08T14:00:00"},
         {"tool": "nmap", "level": "INFO", "message": "Nmap scan completed: 3 findings (1 host, 1 open port: 9200/tcp Elasticsearch)",
          "timestamp": "2026-04-08T14:01:30"},
@@ -415,44 +415,54 @@ async def capture_target_lab_mocked(context: BrowserContext, output: Path) -> No
     print("\n=== Target Lab (Mocked States) ===")
     scan = SCANNING_URL
 
+    # Mock catalog matching the 8 curated labs in vulhub_catalog.py
     mock_catalog = [
-        {"env_id": "elasticsearch-groovy", "name": "Elasticsearch Groovy RCE",
-         "cve": "CVE-2015-1427", "category": "rce", "difficulty": "easy", "tier": "tier1",
-         "description": "Remote code execution via Groovy scripting engine in Elasticsearch 1.3.x before 1.3.8 and 1.4.x before 1.4.3.",
-         "services": ["9200/tcp"], "recommended_scan": {"tools": ["nmap", "openvas", "metasploit"], "profile": "standard"}},
-        {"env_id": "apache-cve-2021-41773", "name": "Apache 2.4.49 Path Traversal",
-         "cve": "CVE-2021-41773", "category": "web", "difficulty": "easy", "tier": "tier1",
-         "description": "Path traversal and RCE via crafted URI in Apache HTTP Server 2.4.49.",
-         "services": ["80/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "quick"}},
-        {"env_id": "log4j-cve-2021-44228", "name": "Log4Shell (Log4j RCE)",
-         "cve": "CVE-2021-44228", "category": "rce", "difficulty": "medium", "tier": "tier2",
-         "description": "Remote code execution via JNDI injection in Apache Log4j 2.x.",
-         "services": ["8080/tcp", "8983/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
-        {"env_id": "spring4shell-cve-2022-22965", "name": "Spring4Shell",
-         "cve": "CVE-2022-22965", "category": "rce", "difficulty": "medium", "tier": "tier1",
-         "description": "RCE via data binding in Spring Framework on JDK 9+.",
+        {"env_id": "log4shell", "name": "Log4Shell (CVE-2021-44228)",
+         "cve": "CVE-2021-44228", "category": "rce", "difficulty": "easy", "tier": "tier2",
+         "description": "Apache Log4j2 JNDI RCE — the most impactful CVE of 2021.",
+         "services": ["8983/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
+        {"env_id": "heartbleed", "name": "Heartbleed (CVE-2014-0160)",
+         "cve": "CVE-2014-0160", "category": "tls", "difficulty": "easy", "tier": "tier1",
+         "description": "OpenSSL TLS heartbeat extension information leak.",
+         "services": ["8443/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "standard"}},
+        {"env_id": "struts2-s2045", "name": "Struts2 S2-045 (CVE-2017-5638)",
+         "cve": "CVE-2017-5638", "category": "web", "difficulty": "easy", "tier": "tier2",
+         "description": "Apache Struts2 Jakarta Multipart parser RCE (Equifax breach vector).",
          "services": ["8080/tcp"], "recommended_scan": {"tools": ["nmap", "openvas"], "profile": "standard"}},
-        {"env_id": "mysql-cve-2012-2122", "name": "MySQL Auth Bypass",
-         "cve": "CVE-2012-2122", "category": "database", "difficulty": "easy", "tier": "tier1",
-         "description": "Authentication bypass in MySQL/MariaDB due to improper password comparison.",
-         "services": ["3306/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "quick"}},
-        {"env_id": "redis-cve-2022-0543", "name": "Redis Lua Sandbox Escape",
-         "cve": "CVE-2022-0543", "category": "database", "difficulty": "hard", "tier": "tier2",
-         "description": "Lua sandbox escape leading to RCE in Redis on Debian-based systems.",
-         "services": ["6379/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
+        {"env_id": "libssh-auth-bypass", "name": "libssh Auth Bypass (CVE-2018-10933)",
+         "cve": "CVE-2018-10933", "category": "auth", "difficulty": "easy", "tier": "tier1",
+         "description": "libssh server-side authentication bypass.",
+         "services": ["2222/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "custom"}},
+        {"env_id": "mysql-auth-bypass", "name": "MySQL Auth Bypass (CVE-2012-2122)",
+         "cve": "CVE-2012-2122", "category": "sqli", "difficulty": "easy", "tier": "tier1",
+         "description": "MySQL/MariaDB authentication bypass via timing attack.",
+         "services": ["3306/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "custom"}},
+        {"env_id": "sambacry", "name": "SambaCry (CVE-2017-7494)",
+         "cve": "CVE-2017-7494", "category": "network", "difficulty": "medium", "tier": "tier2",
+         "description": "Samba remote code execution via writable share.",
+         "services": ["445/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "standard"}},
+        {"env_id": "redis-unauth", "name": "Redis Unauthorized Access",
+         "cve": None, "category": "network", "difficulty": "easy", "tier": "tier1",
+         "description": "Redis server with no authentication — arbitrary file write.",
+         "services": ["6379/tcp"], "recommended_scan": {"tools": ["nmap", "metasploit"], "profile": "thorough"}},
+        {"env_id": "bind9-tsig", "name": "BIND9 TSIG (CVE-2017-3143)",
+         "cve": "CVE-2017-3143", "category": "dns", "difficulty": "medium", "tier": "tier1",
+         "description": "BIND9 TSIG authentication bypass for zone updates.",
+         "services": ["53/tcp"], "recommended_scan": {"tools": ["nmap"], "profile": "standard"}},
     ]
 
     mock_targets_active = [
-        {"id": "1434ad", "env_id": "elasticsearch-groovy", "name": "Elasticsearch Groovy RCE",
-         "cve_id": "CVE-2015-1427", "category": "rce",
-         "service_endpoint": "elasticsearch-groovy.vulhub-elasticsearch-groovy-1434ad.svc.cluster.local:9200",
+        {"id": "a1b2c3", "env_id": "heartbleed", "name": "Heartbleed (CVE-2014-0160)",
+         "cve_id": "CVE-2014-0160", "category": "tls",
+         "service_endpoint": "heartbleed.vulhub-heartbleed-a1b2c3.svc.cluster.local:8443",
          "status": "running",
-         "created_at": "2026-04-08T13:45:00", "ttl_expires_at": "2026-04-08T15:45:00",
+         "created_at": "2026-04-12T13:45:00", "ttl_expires_at": "2026-04-12T15:45:00",
          "error_message": None},
-        {"id": "tgt-002", "env_id": "log4j-cve-2021-44228", "name": "Log4Shell (Log4j RCE)",
+        {"id": "d4e5f6", "env_id": "log4shell", "name": "Log4Shell (CVE-2021-44228)",
          "cve_id": "CVE-2021-44228", "category": "rce",
-         "service_endpoint": "10.83.3.220:32002", "status": "deploying",
-         "created_at": "2026-04-08T14:05:00", "ttl_expires_at": "2026-04-08T16:05:00",
+         "service_endpoint": "log4shell.vulhub-log4shell-d4e5f6.svc.cluster.local:8983",
+         "status": "deploying",
+         "created_at": "2026-04-12T14:05:00", "ttl_expires_at": "2026-04-12T16:05:00",
          "error_message": None},
     ]
 
