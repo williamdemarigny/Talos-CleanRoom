@@ -60,7 +60,6 @@ All three apps share a common `SECRET_KEY` for cross-app SSO via HMAC-signed one
 ```
 Talos-CleanRoom/
 +-- DEPLOYMENT.md                       # End-to-end deployment guide
-+-- CLAUDE.md                           # AI assistant primer
 |
 +-- apps/                               # ArgoCD-managed K8s applications
 |   +-- argocd/                         # Self-managing (Helm, HA 2x replicas)

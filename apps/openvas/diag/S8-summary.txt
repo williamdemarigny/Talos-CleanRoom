@@ -1,4 +1,0 @@
-Strategy: S8
-Pod: greenbone-5b47cbc679-zd5bv
-Restarts: 1 1 0 0 0 0
-Ready: false true true true true true

@@ -60,6 +60,36 @@ venv/
 **/opnsense_backups/*.tar.gz
 
 # ============================================
+# Kubernetes
+# ============================================
+kubeconfig.yaml
+
+# ============================================
+# MkDocs build output
+# ============================================
+docs/user-guide/site/
+
+# ============================================
+# Video raw captures
+# ============================================
+docs/user-guide/docs/videos/raw/
+docs/user-guide/screenshot-tool/videos/
+docs/user-guide/screenshot-tool/capture_all.log
+
+# ============================================
+# Validation / diagnostic outputs
+# ============================================
+apps/vulhub-targets/diag/
+apps/vulhub-targets/validate-*.log
+apps/openvas/diag/
+apps/openvas/openvas-test.log
+
+# ============================================
+# Claude Code
+# ============================================
+.claude/
+
+# ============================================
 # IDE / OS
 # ============================================
 .idea/
