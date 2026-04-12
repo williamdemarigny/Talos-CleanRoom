@@ -85,7 +85,7 @@ apps/openvas/diag/
 apps/openvas/openvas-test.log
 
 # ============================================
-# Claude Code
+# AI tooling
 # ============================================
 .claude/
 
