@@ -50,18 +50,75 @@ They could be re-added if we either upgrade Metasploit to a version with
 these modules, or add a custom HTTP probe pass to the scanner that detects
 each CVE directly via response patterns.
 
-## Phase B — OpenVAS validation against the 8 working labs
+## Phase B — OpenVAS validation results
 
-After this curation, the next step is to run focused OpenVAS scans against
-each of the 8 working labs to confirm OpenVAS NVTs detect the same CVEs
-that Nmap/Metasploit do. Use:
+Ran the validator with `VALIDATOR_TOOLS_OVERRIDE='["nmap","openvas"]'`
+against all 8 curated labs. **Discovered and fixed a silent OpenVAS XML
+parser bug** in the process.
 
-```bash
-SCANNING_PW=... ./validate-targets.sh \
-  --tools '["nmap","openvas"]' --scan-timeout 60
-```
+### Parser bug discovered & fixed (commit `4ba30c5`)
 
-(OpenVAS scans take 15-45 min each so a full run is 2-6 hours.)
+The original parser at [scan_service.py:4391](../../scanning-app/app/services/scan_service.py#L4391)
+was reading CVE refs from `<nvt><cve>...</cve></nvt>` (legacy GMP <22 format).
+**Modern GVM (21.04+) uses `<nvt><refs><ref type="cve" id="CVE-..."/></refs></nvt>`
+exclusively.** The legacy `<cve>` tag does not exist in current OpenVAS
+output.
+
+Result: every OpenVAS finding silently got `cves=[]` and `external_ids=None`.
+Verified by dumping a raw `<get_reports details="1">` from gvmd inside the
+running greenbone pod and confirming `<cve> tag present: False`,
+`<refs> blocks present: True`.
+
+The new parser handles both formats and falls back to scraping CVE patterns
+from description text. **Verified by re-running heartbleed:** previously had
+zero OpenVAS-sourced CVE matches; now correctly surfaces
+`SSL/TLS: OpenSSL TLS 'heartbeat' Extension Information Disclosure`
+with `external_id=CVE-2014-0160`.
+
+### Final 8-lab matrix (after parser fix)
+
+| Target | Nmap NSE | OpenVAS | Metasploit | Detected by |
+|---|---|---|---|---|
+| log4shell | — | — | check | **Metasploit only** |
+| heartbleed | `ssl-heartbleed` | NVT 117638 | check | All 3 scanners |
+| struts2-s2045 | `http-vuln-cve2017-5638` | — | check | nmap + Metasploit |
+| libssh-auth-bypass | — | — | check | **Metasploit only** |
+| mysql-auth-bypass | `mysql-vuln-cve2012-2122` | — | hashdump | nmap + Metasploit |
+| sambacry | — | — | `is_known_pipename` | **Metasploit only** |
+| redis-unauth | — | (no CVE) | `redis_server` | nmap + Metasploit |
+| bind9-tsig | `vulners` | — | (no module) | nmap only |
+
+**Summary:**
+- **Metasploit alone:** 8/8 PASS
+- **Nmap NSE alone:** 5/8 PASS (heartbleed, struts2, mysql, redis, bind9)
+- **OpenVAS alone:** 1/8 PASS (heartbleed)
+- **Combined (any scanner):** 8/8 PASS
+
+### Why OpenVAS only detects heartbleed
+
+For the 3 targets that need an *active* OpenVAS check NVT (log4shell,
+libssh, sambacry), the corresponding NVTs **exist in the feed** and **belong
+to families enabled by Full and Fast** but did not surface findings:
+
+| Target | NVT OID | Family | Likely reason no finding |
+|---|---|---|---|
+| log4shell | `1.3.6.1.4.1.25623.1.0.113858` (HTTP active check) | Web application abuses | NVT injects `${jndi:ldap://scanner-callback/}` into HTTP headers and waits for the target to call back to the OpenVAS scanner. Our zero-trust NetworkPolicies block egress from vulhub namespaces to the openvas namespace, so no callback ever arrives. |
+| libssh-auth-bypass | `1.3.6.1.4.1.25623.1.0.108473` | General | NVT exists but the SSH-specific authentication-state probe needs custom protocol handling that the openvas-scanner may not perform on non-standard ports / against libssh-only servers. |
+| sambacry | `1.3.6.1.4.1.25623.1.0.811055` | General | NVT requires enumerating writable shares first. The `auxiliary/scanner/smb/smb_enumshares` step is part of Metasploit's SambaCry workflow but OpenVAS Full and Fast has no equivalent precondition NVT chain. |
+
+For the other 4 working targets, nmap NSE scripts already produce CVE-mapped
+findings (`http-vuln-cve2017-5638`, `mysql-vuln-cve2012-2122`,
+`ssl-heartbleed`, `vulners`). OpenVAS in our environment is providing
+**defensive depth** for these — additional findings, version detection,
+posture checks (Weak KEX, SMBv1 enabled, missing security headers) — even
+when it doesn't surface the headline CVE itself.
+
+### Validator script bug fix (same commit)
+
+`--tools` and `--profile` CLI flags were dead code: they set
+`VALIDATOR_TOOLS` / `VALIDATOR_PROFILE` but `test_target()` only reads
+`VALIDATOR_TOOLS_OVERRIDE` / `VALIDATOR_PROFILE_OVERRIDE` env vars. Now the
+flags map to the override vars correctly.
 
 ## Manifest files on disk
 
