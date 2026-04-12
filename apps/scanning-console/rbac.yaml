@@ -1,0 +1,306 @@
+# Scanning Console - RBAC (Least-Privilege Model)
+# =============================================================================
+# Namespaced Roles: pods, pods/log, pods/exec, secrets in tool namespaces
+# ClusterRole: namespaces, resourcequotas, deployments, services, networkpolicies (Vulhub mgmt), nodes
+#
+# Explicitly EXCLUDED namespaces: argocd, traefik, cert-manager,
+#   metallb-system, ceph-csi, kube-system, harbor
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# ClusterRole: cluster-wide read access for namespaces and nodes
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scanning-console-cluster
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "create", "delete", "patch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list"]
+# Vulhub target namespace management (dynamic vulnerable environments)
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "list", "create", "delete", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "create", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scanning-console-cluster
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scanning-console-cluster
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: openvas
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-openvas-access
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-openvas-access
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-openvas-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: faraday
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-faraday-access
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-faraday-access
+  namespace: faraday
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-faraday-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: metasploit
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-metasploit-access
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-metasploit-access
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-metasploit-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: loki-scanner
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-loki-access
+  namespace: loki-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-loki-access
+  namespace: loki-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-loki-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: nmap-scanner
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-nmap-access
+  namespace: nmap-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-nmap-access
+  namespace: nmap-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-nmap-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console
+
+# ---------------------------------------------------------------------------
+# Namespaced Role: wpscan-scanner
+# ---------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scanning-console-wpscan-access
+  namespace: wpscan-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec"]
+  verbs: ["get", "list", "create", "delete", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scanning-console-wpscan-access
+  namespace: wpscan-scanner
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scanning-console-wpscan-access
+subjects:
+- kind: ServiceAccount
+  name: scanning-console
+  namespace: scanning-console

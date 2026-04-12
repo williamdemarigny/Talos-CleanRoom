@@ -1,0 +1,50 @@
+# LOKI Scanner Network Policy
+# =============================================================================
+# Ephemeral LOKI-RS IOC scanner pods need:
+# - Ingress from scanning-console namespace (kubectl exec orchestration)
+# - Egress to scan targets (SSH/SMB mounts — unrestricted for pentesting)
+# - Egress to DNS (name resolution)
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-loki-scanner-traffic
+  namespace: loki-scanner
+  labels:
+    app.kubernetes.io/name: loki-scanner
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from scanning-console namespace (kubectl exec/logs)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scanning-console
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow SSH to scan targets (SSHFS mounts)
+    - ports:
+        - protocol: TCP
+          port: 22
+    # Allow SMB/CIFS to scan targets
+    - ports:
+        - protocol: TCP
+          port: 445
+    # Allow NetBIOS for SMB discovery
+    - ports:
+        - protocol: TCP
+          port: 139

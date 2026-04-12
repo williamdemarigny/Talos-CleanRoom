@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scanning-console
+  labels:
+    kubernetes.io/metadata.name: scanning-console
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: security-console
+    # Pod Security Standards: baseline (web application, no special privileges)
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+# ---------------------------------------------------------------------------
+# Tool namespaces required by RBAC roles in rbac.yaml
+# These are created here so ArgoCD can sync the Role/RoleBindings into them.
+# ---------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nmap-scanner
+  labels:
+    kubernetes.io/metadata.name: nmap-scanner
+    app.kubernetes.io/name: nmap-scanner
+    app.kubernetes.io/managed-by: scanning-console
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loki-scanner
+  labels:
+    kubernetes.io/metadata.name: loki-scanner
+    app.kubernetes.io/name: loki-scanner
+    app.kubernetes.io/managed-by: scanning-console
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wpscan-scanner
+  labels:
+    kubernetes.io/metadata.name: wpscan-scanner
+    app.kubernetes.io/name: wpscan-scanner
+    app.kubernetes.io/managed-by: scanning-console

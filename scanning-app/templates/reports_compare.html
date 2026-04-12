@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Compare Scans - Talos CleanRoom Scanning Console{% endblock %}
+
+{% block content %}
+<div x-data="reportsCompare()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Compare Scans</h1>
+            <p class="text-gray-400">Diff two scans to identify new, resolved, and common findings</p>
+        </div>
+        <a href="/reports" class="text-cyan-400 hover:text-cyan-300 text-sm">Back to Dashboard</a>
+    </div>
+
+    <!-- Scan Selection -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Scan A (baseline)</label>
+                <select x-model="scanA" class="w-full bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+                    <option value="">Select scan...</option>
+                    <template x-for="s in scans" :key="'a-' + s.id">
+                        <option :value="s.id" x-text="s.id + ' — ' + s.target + ' (' + s.scan_type + ')'"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Scan B (current)</label>
+                <select x-model="scanB" class="w-full bg-gray-700 text-white border border-gray-600 rounded px-3 py-2 text-sm">
+                    <option value="">Select scan...</option>
+                    <template x-for="s in scans" :key="'b-' + s.id">
+                        <option :value="s.id" x-text="s.id + ' — ' + s.target + ' (' + s.scan_type + ')'"></option>
+                    </template>
+                </select>
+            </div>
+            <button @click="compare()" :disabled="!scanA || !scanB || scanA === scanB"
+                    class="px-4 py-2 bg-cyan-600 text-white rounded hover:bg-cyan-700 text-sm disabled:opacity-50">
+                Compare
+            </button>
+        </div>
+    </div>
+
+    <!-- Results -->
+    <template x-if="result">
+        <div class="space-y-6">
+            <!-- Hosts Diff -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-lg font-medium text-white mb-4">Hosts</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <h3 class="text-sm text-green-400 mb-2">New in Scan B (<span x-text="result.hosts.new.length"></span>)</h3>
+                        <div class="space-y-1">
+                            <template x-for="ip in result.hosts.new" :key="'new-' + ip">
+                                <div class="text-sm text-gray-300 font-mono bg-green-900/20 px-2 py-1 rounded" x-text="ip"></div>
+                            </template>
+                            <div x-show="result.hosts.new.length === 0" class="text-xs text-gray-500">None</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-sm text-red-400 mb-2">Resolved (not in B) (<span x-text="result.hosts.resolved.length"></span>)</h3>
+                        <div class="space-y-1">
+                            <template x-for="ip in result.hosts.resolved" :key="'res-' + ip">
+                                <div class="text-sm text-gray-300 font-mono bg-red-900/20 px-2 py-1 rounded" x-text="ip"></div>
+                            </template>
+                            <div x-show="result.hosts.resolved.length === 0" class="text-xs text-gray-500">None</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-sm text-gray-400 mb-2">Common (<span x-text="result.hosts.common.length"></span>)</h3>
+                        <div class="space-y-1 max-h-48 overflow-y-auto">
+                            <template x-for="ip in result.hosts.common" :key="'com-' + ip">
+                                <div class="text-sm text-gray-400 font-mono px-2 py-1" x-text="ip"></div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vulns Diff -->
+            <div class="bg-gray-800 rounded-lg p-6">
+                <h2 class="text-lg font-medium text-white mb-4">Vulnerabilities</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <h3 class="text-sm text-green-400 mb-2">New in Scan B (<span x-text="result.vulns.new.length"></span>)</h3>
+                        <div class="space-y-1 max-h-64 overflow-y-auto">
+                            <template x-for="(v, i) in result.vulns.new" :key="'vnew-' + i">
+                                <div class="flex items-center gap-2 text-xs bg-green-900/20 px-2 py-1 rounded">
+                                    <span class="px-1.5 py-0.5 rounded"
+                                          :class="{
+                                              'bg-red-600': v.severity === 'critical',
+                                              'bg-orange-600': v.severity === 'high',
+                                              'bg-yellow-600': v.severity === 'medium',
+                                              'bg-blue-600': v.severity === 'low',
+                                              'bg-gray-600': true
+                                          }"
+                                          x-text="v.severity"></span>
+                                    <span class="text-gray-300" x-text="v.name"></span>
+                                </div>
+                            </template>
+                            <div x-show="result.vulns.new.length === 0" class="text-xs text-gray-500">None</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 class="text-sm text-red-400 mb-2">Resolved (<span x-text="result.vulns.resolved.length"></span>)</h3>
+                        <div class="space-y-1 max-h-64 overflow-y-auto">
+                            <template x-for="(v, i) in result.vulns.resolved" :key="'vres-' + i">
+                                <div class="flex items-center gap-2 text-xs bg-red-900/20 px-2 py-1 rounded">
+                                    <span class="px-1.5 py-0.5 rounded"
+                                          :class="{
+                                              'bg-red-600': v.severity === 'critical',
+                                              'bg-orange-600': v.severity === 'high',
+                                              'bg-yellow-600': v.severity === 'medium',
+                                              'bg-blue-600': v.severity === 'low',
+                                              'bg-gray-600': true
+                                          }"
+                                          x-text="v.severity"></span>
+                                    <span class="text-gray-300" x-text="v.name"></span>
+                                </div>
+                            </template>
+                            <div x-show="result.vulns.resolved.length === 0" class="text-xs text-gray-500">None</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 text-sm text-gray-400">
+                    Common vulnerabilities: <span class="text-white" x-text="result.vulns.common_count"></span>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/reports_compare.js"></script>
+{% endblock %}

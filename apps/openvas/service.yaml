@@ -1,0 +1,23 @@
+# Greenbone Community Edition - Services
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: greenbone
+  namespace: openvas
+  labels:
+    app.kubernetes.io/name: greenbone
+    app.kubernetes.io/component: vulnerability-scanner
+spec:
+  selector:
+    app.kubernetes.io/name: greenbone
+  ports:
+  # GSA Web UI (gsad 24.x runs as non-root user, can't bind to port 80,
+  # so it listens on 9392 inside the pod and we expose it as 80 externally)
+  - port: 80
+    targetPort: 9392
+    name: http
+  # OpenVAS Scanner Daemon (internal)
+  - port: 8090
+    targetPort: 8090
+    name: openvasd

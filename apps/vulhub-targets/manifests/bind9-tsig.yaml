@@ -1,0 +1,69 @@
+# Vulhub: BIND9 TSIG Bypass (CVE-2017-3143)
+# Source: https://github.com/vulhub/vulhub/tree/master/bind9/CVE-2017-3143
+# Port: 53 (DNS — TCP and UDP)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bind9-tsig
+  labels:
+    app.kubernetes.io/name: bind9-tsig
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bind9-tsig
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bind9-tsig
+    spec:
+      containers:
+        - name: bind9
+          image: vulhub/bind:9.10.3
+          ports:
+            - containerPort: 53
+              protocol: TCP
+            - containerPort: 53
+              protocol: UDP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 53
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 53
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bind9-tsig
+  labels:
+    app.kubernetes.io/name: bind9-tsig
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bind9-tsig
+  ports:
+    - port: 53
+      targetPort: 53
+      protocol: TCP
+      name: dns-tcp
+    - port: 53
+      targetPort: 53
+      protocol: UDP
+      name: dns-udp

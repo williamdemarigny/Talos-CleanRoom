@@ -1,0 +1,58 @@
+# Metasploit Network Policy
+# =============================================================================
+# Metasploit is a penetration testing framework that:
+# - Receives traffic from Faraday for integration
+# - Needs UNRESTRICTED egress for penetration testing activities
+# - Note: Only ingress is restricted; egress must remain open
+# =============================================================================
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metasploit-ingress
+  namespace: metasploit
+  labels:
+    app.kubernetes.io/name: metasploit
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: metasploit
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow ingress from Faraday namespace (RPC integration)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: faraday
+      ports:
+        - protocol: TCP
+          port: 55553  # msfrpcd port
+        - protocol: TCP
+          port: 4444   # Default handler port
+    # Allow ingress from Traefik namespace (if web UI is exposed)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 55553
+    # Allow callback ingress from Vulhub targets (JNDI, reverse shells, etc.)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: vulhub-targets
+# =============================================================================
+# IMPORTANT: No egress policy is defined for Metasploit
+# =============================================================================
+# Metasploit requires unrestricted outbound network access to:
+# - Connect to target systems during penetration tests
+# - Establish reverse shells and handlers
+# - Download exploits and payloads
+# - Communicate with C2 infrastructure in testing scenarios
+#
+# The default-deny.yaml only denies INGRESS for metasploit namespace,
+# leaving egress unrestricted by design.
+# =============================================================================

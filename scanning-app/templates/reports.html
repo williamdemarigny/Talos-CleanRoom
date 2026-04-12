@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Reports Dashboard - Talos CleanRoom Scanning Console{% endblock %}
+
+{% block content %}
+<div x-data="reportsDashboard()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Reports Dashboard</h1>
+            <p class="text-gray-400">Scan results, vulnerability management, and audit trail</p>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div class="bg-gray-800 rounded-lg p-6">
+            <div class="text-sm text-gray-400">Total Scans</div>
+            <div class="text-3xl font-bold text-white mt-1" x-text="summary.scan_count"></div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6">
+            <div class="text-sm text-gray-400">Unique Hosts</div>
+            <div class="text-3xl font-bold text-white mt-1" x-text="summary.host_count"></div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6">
+            <div class="text-sm text-gray-400">Total Vulnerabilities</div>
+            <div class="text-3xl font-bold text-white mt-1" x-text="summary.vuln_total"></div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6">
+            <div class="text-sm text-gray-400">By Severity</div>
+            <div class="flex flex-wrap gap-2 mt-2">
+                <template x-for="[sev, count] in Object.entries(summary.vulns_by_severity || {})" :key="sev">
+                    <span class="text-xs px-2 py-1 rounded"
+                          :class="{
+                              'bg-red-600 text-white': sev === 'critical',
+                              'bg-orange-600 text-white': sev === 'high',
+                              'bg-yellow-600 text-white': sev === 'medium',
+                              'bg-blue-600 text-white': sev === 'low',
+                              'bg-gray-600 text-white': sev === 'info' || sev === 'unclassified'
+                          }"
+                          x-text="sev + ': ' + count"></span>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <a href="/reports/hosts" class="bg-gray-800 rounded-lg p-6 hover:bg-gray-750 transition-colors">
+            <h3 class="text-lg font-medium text-cyan-400">Hosts</h3>
+            <p class="text-sm text-gray-400 mt-1">Browse discovered hosts and their services</p>
+        </a>
+        <a href="/reports/vulns" class="bg-gray-800 rounded-lg p-6 hover:bg-gray-750 transition-colors">
+            <h3 class="text-lg font-medium text-cyan-400">Vulnerabilities</h3>
+            <p class="text-sm text-gray-400 mt-1">View and manage vulnerability remediation</p>
+        </a>
+        <a href="/reports/compare" class="bg-gray-800 rounded-lg p-6 hover:bg-gray-750 transition-colors">
+            <h3 class="text-lg font-medium text-cyan-400">Compare Scans</h3>
+            <p class="text-sm text-gray-400 mt-1">Diff two scans: new, resolved, and common findings</p>
+        </a>
+    </div>
+
+    <!-- Recent Scans -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <h2 class="text-lg font-medium text-white mb-4">Recent Scans</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-gray-400 border-b border-gray-700">
+                        <th class="text-left pb-3">ID</th>
+                        <th class="text-left pb-3">Type</th>
+                        <th class="text-left pb-3">Target</th>
+                        <th class="text-left pb-3">Profile</th>
+                        <th class="text-left pb-3">Status</th>
+                        <th class="text-left pb-3">Started</th>
+                        <th class="text-left pb-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="scan in scans" :key="scan.id">
+                        <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                            <td class="py-3 font-mono text-gray-400" x-text="scan.id"></td>
+                            <td class="py-3 capitalize" x-text="scan.scan_type"></td>
+                            <td class="py-3 text-white" x-text="scan.target"></td>
+                            <td class="py-3 capitalize text-gray-400" x-text="scan.profile || '-'"></td>
+                            <td class="py-3">
+                                <span class="px-2 py-1 rounded text-xs"
+                                      :class="{
+                                          'bg-green-600 text-white': scan.status === 'completed',
+                                          'bg-red-600 text-white': scan.status === 'failed',
+                                          'bg-yellow-600 text-white': scan.status === 'running',
+                                          'bg-orange-600 text-white': scan.status === 'aborted',
+                                          'bg-gray-600 text-white': scan.status === 'idle'
+                                      }"
+                                      x-text="scan.status"></span>
+                            </td>
+                            <td class="py-3 text-gray-400" x-text="scan.started_at ? new Date(scan.started_at).toLocaleString() : '-'"></td>
+                            <td class="py-3">
+                                <a :href="'/reports/scan/' + scan.id"
+                                   class="text-cyan-400 hover:text-cyan-300 text-xs">View Details</a>
+                            </td>
+                        </tr>
+                    </template>
+                    <tr x-show="scans.length === 0">
+                        <td colspan="7" class="py-6 text-center text-gray-500">No scans recorded yet.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/reports.js"></script>
+{% endblock %}

@@ -1,0 +1,451 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Talos CleanRoom{% endblock %}
+
+{% block content %}
+<div x-data="dashboard()" x-init="init()">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+        <p class="text-gray-400">Talos CleanRoom Kubernetes Cluster Deployment</p>
+    </div>
+
+    <!-- Status Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <!-- Deployment Status -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Deployment Status</h3>
+            <div class="mt-2 flex items-center">
+                <span class="text-2xl font-bold" :class="statusColor" x-text="deploymentStatus"></span>
+            </div>
+            <p class="mt-1 text-sm text-gray-500" x-show="currentStep > 0">
+                Step <span x-text="currentStep + 1"></span> of <span x-text="totalSteps"></span>
+            </p>
+        </div>
+
+        <!-- Dependencies -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Dependencies</h3>
+            <div class="mt-2 flex items-center">
+                <span class="text-2xl font-bold" :class="allDepsInstalled ? 'text-green-400' : 'text-red-400'">
+                    <span x-text="installedDeps"></span>/<span x-text="totalDeps"></span>
+                </span>
+            </div>
+            <p class="mt-1 text-sm" :class="allDepsInstalled ? 'text-green-500' : 'text-red-500'">
+                <span x-text="allDepsInstalled ? 'All dependencies installed' : 'Missing dependencies'"></span>
+            </p>
+        </div>
+
+        <!-- Configuration -->
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Configuration</h3>
+            <div class="mt-2 flex items-center">
+                <span class="text-2xl font-bold" :class="configValid ? 'text-green-400' : 'text-yellow-400'">
+                    <span x-text="configValid ? 'Valid' : 'Check Required'"></span>
+                </span>
+            </div>
+            <p class="mt-1 text-sm text-gray-500">
+                <a href="/config" class="text-cyan-400 hover:text-cyan-300">View configuration</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-8">
+        <h2 class="text-lg font-medium text-white mb-4">Quick Actions</h2>
+        <div class="flex flex-wrap gap-4">
+            <button
+                @click="startDeployment"
+                :disabled="isRunning || !allDepsInstalled"
+                class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Start Deployment
+            </button>
+            <a href="/deployment" class="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600">
+                View Progress
+            </a>
+            <a href="/config" class="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600">
+                Edit Configuration
+            </a>
+            <button
+                @click="downloadKubeconfig"
+                :disabled="deploymentStatus !== 'Completed'"
+                class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Download Kubeconfig
+            </button>
+            <button
+                @click="runCleanup"
+                :disabled="isRunning"
+                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                Run Cleanup
+            </button>
+        </div>
+    </div>
+
+    <!-- Dependencies List -->
+    <div class="bg-gray-800 rounded-lg p-6" x-show="dependencies.length > 0">
+        <h2 class="text-lg font-medium text-white mb-4">System Dependencies</h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <template x-for="dep in dependencies" :key="dep.name">
+                <div class="flex items-center space-x-2">
+                    <span :class="dep.installed ? 'text-green-400' : 'text-red-400'">
+                        <svg x-show="dep.installed" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                        </svg>
+                        <svg x-show="!dep.installed" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                        </svg>
+                    </span>
+                    <span class="text-gray-300" x-text="dep.name"></span>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Services Info -->
+    <div class="bg-gray-800 rounded-lg p-6 mt-8">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-white">Deployed Services</h2>
+            <button
+                x-show="deploymentStatus === 'Completed' && Object.keys(credentials).length > 0"
+                @click="allPasswordsVisible = !allPasswordsVisible; Object.keys(passwordVisible).forEach(k => passwordVisible[k] = allPasswordsVisible)"
+                class="text-xs px-3 py-1 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition-colors"
+                x-text="allPasswordsVisible ? 'Hide All Passwords' : 'Show All Passwords'"
+            ></button>
+        </div>
+        <p class="text-gray-400 mb-4" x-show="deploymentStatus !== 'Completed'">
+            After deployment, these services will be available:
+        </p>
+        <p class="text-gray-400 mb-4" x-show="deploymentStatus === 'Completed' && Object.keys(credentials).length > 0">
+            Click the eye icon to reveal a password.
+        </p>
+
+        <div class="space-y-3">
+            <template x-for="svc in services" :key="svc.key">
+                <div class="p-4 bg-gray-700 rounded-lg">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <span class="text-white font-medium" x-text="svc.name"></span>
+                            <span x-show="svc.note && deploymentStatus === 'Completed'" class="text-xs text-gray-500" x-text="svc.note"></span>
+                        </div>
+                        <a :href="svc.url" target="_blank" rel="noopener noreferrer"
+                           class="text-cyan-400 text-sm hover:text-cyan-300 underline cursor-pointer truncate"
+                           x-text="svc.url"></a>
+                    </div>
+
+                    <!-- Credentials row -->
+                    <div x-show="deploymentStatus === 'Completed' && svc.credKey && credentials[svc.credKey]"
+                         class="mt-3 pt-3 border-t border-gray-600">
+                        <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">User:</span>
+                                <code class="text-green-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono"
+                                      x-text="credentials[svc.credKey]?.username"></code>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">Pass:</span>
+                                <code class="text-amber-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono select-all"
+                                      x-text="passwordVisible[svc.credKey] ? credentials[svc.credKey]?.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'"></code>
+                                <button @click="passwordVisible[svc.credKey] = !passwordVisible[svc.credKey]"
+                                        class="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                                        :title="passwordVisible[svc.credKey] ? 'Hide password' : 'Show password'">
+                                    <svg x-show="!passwordVisible[svc.credKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                    </svg>
+                                    <svg x-show="passwordVisible[svc.credKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <button x-show="passwordVisible[svc.credKey]"
+                                    @click="copyPassword(svc.credKey, $el)"
+                                    class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
+                                Copy
+                            </button>
+                            <span x-show="credentials[svc.credKey]?.note"
+                                  class="text-xs text-gray-500 italic"
+                                  x-text="credentials[svc.credKey]?.note"></span>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Metasploit (CLI-only, no web URL) -->
+            <div x-show="deploymentStatus === 'Completed' && (credentials['metasploit_db'] || credentials['metasploit_rpc'])"
+                 class="p-4 bg-gray-700 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <span class="text-white font-medium">Metasploit</span>
+                    <span class="text-xs text-gray-500 bg-gray-600 px-2 py-0.5 rounded">CLI Only</span>
+                </div>
+                <p class="text-xs text-gray-400 mb-3 font-mono">
+                    kubectl exec -it -n metasploit deployment/metasploit -c metasploit -- ./msfconsole
+                </p>
+                <div class="border-t border-gray-600 pt-3 space-y-2">
+                    <template x-for="msfKey in ['metasploit_db', 'metasploit_rpc']" :key="msfKey">
+                        <div x-show="credentials[msfKey]" class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                            <span class="text-xs text-gray-500 w-8" x-text="msfKey === 'metasploit_db' ? 'DB' : 'RPC'"></span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">User:</span>
+                                <code class="text-green-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono"
+                                      x-text="credentials[msfKey]?.username"></code>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-400">Pass:</span>
+                                <code class="text-amber-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono select-all"
+                                      x-text="passwordVisible[msfKey] ? credentials[msfKey]?.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'"></code>
+                                <button @click="passwordVisible[msfKey] = !passwordVisible[msfKey]"
+                                        class="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                                        :title="passwordVisible[msfKey] ? 'Hide password' : 'Show password'">
+                                    <svg x-show="!passwordVisible[msfKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                    </svg>
+                                    <svg x-show="passwordVisible[msfKey]" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <button x-show="passwordVisible[msfKey]"
+                                    @click="copyPassword(msfKey, $el)"
+                                    class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
+                                Copy
+                            </button>
+                            <span x-show="credentials[msfKey]?.note"
+                                  class="text-xs text-gray-500 italic"
+                                  x-text="credentials[msfKey]?.note"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Build VM (SSH-only, no web URL) -->
+            <div x-show="deploymentStatus === 'Completed' && credentials['build_vm']"
+                 class="p-4 bg-gray-700 rounded-lg">
+                <div class="flex items-center gap-3 mb-3">
+                    <span class="text-white font-medium">Build VM</span>
+                    <span class="text-xs text-gray-500 bg-gray-600 px-2 py-0.5 rounded">SSH Only</span>
+                </div>
+                <p class="text-xs text-gray-400 mb-3 font-mono"
+                   x-text="'ssh ' + (credentials['build_vm']?.username || 'deploy') + '@' + (credentials['build_vm']?.ip || '10.83.3.191')">
+                </p>
+                <div class="border-t border-gray-600 pt-3">
+                    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400">User:</span>
+                            <code class="text-green-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono"
+                                  x-text="credentials['build_vm']?.username"></code>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400">Pass:</span>
+                            <code class="text-amber-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono select-all"
+                                  x-text="passwordVisible['build_vm'] ? credentials['build_vm']?.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'"></code>
+                            <button @click="passwordVisible['build_vm'] = !passwordVisible['build_vm']"
+                                    class="text-gray-400 hover:text-white p-1 rounded transition-colors"
+                                    :title="passwordVisible['build_vm'] ? 'Hide password' : 'Show password'">
+                                <svg x-show="!passwordVisible['build_vm']" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                </svg>
+                                <svg x-show="passwordVisible['build_vm']" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <button x-show="passwordVisible['build_vm']"
+                                @click="copyPassword('build_vm', $el)"
+                                class="text-xs text-gray-400 hover:text-cyan-400 transition-colors">
+                            Copy
+                        </button>
+                        <span x-show="credentials['build_vm']?.note"
+                              class="text-xs text-gray-500 italic"
+                              x-text="credentials['build_vm']?.note"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function dashboard() {
+    return {
+        deploymentStatus: 'Idle',
+        currentStep: 0,
+        totalSteps: 0,
+        isRunning: false,
+        dependencies: [],
+        configValid: true,
+        credentials: {},
+        passwordVisible: {},
+        allPasswordsVisible: false,
+        services: [
+            { key: 'portal', name: 'CleanRoom Portal', url: 'https://cleanroom.knowledgeondemand.net', credKey: 'portal' },
+            { key: 'scanning', name: 'Scanning Console', url: 'https://scan.knowledgeondemand.net', credKey: 'scanning' },
+            { key: 'deployment', name: 'Deployment Console', url: 'https://deploy.knowledgeondemand.net', credKey: 'deployment' },
+            { key: 'argocd', name: 'ArgoCD', url: 'https://argocd.knowledgeondemand.net', credKey: 'argocd' },
+            { key: 'traefik', name: 'Traefik Dashboard', url: 'https://traefik.knowledgeondemand.net', credKey: 'traefik' },
+            { key: 'harbor', name: 'Harbor Registry', url: 'https://harbor.knowledgeondemand.net', credKey: 'harbor' },
+            { key: 'openvas', name: 'OpenVAS', url: 'https://openvas.knowledgeondemand.net', credKey: 'openvas' },
+            { key: 'faraday', name: 'Faraday', url: 'https://faraday.knowledgeondemand.net', credKey: 'faraday' },
+            { key: 'threatdragon', name: 'Threat Dragon', url: 'https://threatdragon.knowledgeondemand.net', credKey: null },
+        ],
+
+        get statusColor() {
+            switch(this.deploymentStatus.toLowerCase()) {
+                case 'running': return 'text-yellow-400';
+                case 'completed': return 'text-green-400';
+                case 'failed': return 'text-red-400';
+                case 'aborted': return 'text-orange-400';
+                default: return 'text-gray-400';
+            }
+        },
+
+        get allDepsInstalled() {
+            return this.dependencies.every(d => d.installed);
+        },
+
+        get installedDeps() {
+            return this.dependencies.filter(d => d.installed).length;
+        },
+
+        get totalDeps() {
+            return this.dependencies.length;
+        },
+
+        async init() {
+            await this.checkDependencies();
+            await this.checkDeploymentStatus();
+            await this.validateConfig();
+        },
+
+        async checkDependencies() {
+            try {
+                const response = await fetch('/api/system/dependencies');
+                const data = await response.json();
+                this.dependencies = data.dependencies;
+            } catch (e) {
+                console.error('Failed to check dependencies:', e);
+            }
+        },
+
+        async checkDeploymentStatus() {
+            try {
+                const response = await fetch('/api/deployment/status');
+                const data = await response.json();
+                this.deploymentStatus = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+                this.currentStep = data.current_step;
+                this.totalSteps = data.deployment?.steps?.length || 0;
+                this.isRunning = data.is_running;
+                if (this.deploymentStatus === 'Completed') {
+                    await this.fetchCredentials();
+                }
+            } catch (e) {
+                console.error('Failed to check deployment status:', e);
+            }
+        },
+
+        async validateConfig() {
+            try {
+                const response = await fetch('/api/config/validate');
+                const data = await response.json();
+                this.configValid = data.valid;
+            } catch (e) {
+                console.error('Failed to validate config:', e);
+                this.configValid = false;
+            }
+        },
+
+        copyPassword(credKey, el) {
+            const text = this.credentials[credKey]?.password;
+            if (!text) return;
+            const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(fallback);
+            } else {
+                fallback();
+            }
+            el.textContent = 'Copied!';
+            setTimeout(() => el.textContent = 'Copy', 1500);
+        },
+
+        async fetchCredentials() {
+            try {
+                const response = await fetch('/api/deployment/credentials');
+                if (response.ok) {
+                    const data = await response.json();
+                    this.credentials = data.credentials;
+                    for (const key of Object.keys(data.credentials)) {
+                        this.passwordVisible[key] = false;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch credentials:', e);
+            }
+        },
+
+        async startDeployment() {
+            if (confirm('Are you sure you want to start the deployment?')) {
+                try {
+                    const response = await fetch('/api/deployment/start', { method: 'POST' });
+                    if (response.ok) {
+                        window.location.href = '/deployment';
+                    } else {
+                        const error = await response.json();
+                        alert('Failed to start deployment: ' + error.detail);
+                    }
+                } catch (e) {
+                    alert('Failed to start deployment: ' + e.message);
+                }
+            }
+        },
+
+        async downloadKubeconfig() {
+            try {
+                const response = await fetch('/api/deployment/kubeconfig');
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert('Failed to download kubeconfig: ' + error.detail);
+                    return;
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'kubeconfig.yaml';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Failed to download kubeconfig: ' + e.message);
+            }
+        },
+
+        async runCleanup() {
+            if (confirm('Are you sure you want to run cleanup? This will destroy all Terraform-managed resources.')) {
+                try {
+                    const response = await fetch('/api/deployment/cleanup', { method: 'POST' });
+                    const data = await response.json();
+                    alert(data.message);
+                } catch (e) {
+                    alert('Failed to run cleanup: ' + e.message);
+                }
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

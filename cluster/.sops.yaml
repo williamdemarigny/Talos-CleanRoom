@@ -1,0 +1,29 @@
+---
+creation_rules:
+  # ArgoCD repository credentials
+  - path_regex: .*apps/argocd/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Cert-manager secrets (Cloudflare API token, etc.)
+  - path_regex: .*apps/cert-manager/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Ceph CSI secrets (CephX keyring)
+  - path_regex: .*ceph-storage/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Scanning Console secrets
+  - path_regex: .*apps/scanning-console/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Portal secrets
+  - path_regex: .*apps/portal/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # CleanRoom DB secrets
+  - path_regex: .*apps/cleanroom-db/.*\.sops\.yaml$
+    age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp
+  # Default rule for talos secrets
+  - age: >-
+      age1hdskklcj78alg00z80u6r5cgm9w5fcg33y0n064kss33ugmqca5q9zcerp

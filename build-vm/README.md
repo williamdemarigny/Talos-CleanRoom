@@ -1,11 +1,12 @@
 # Talos CleanRoom Build VM
 
-A Debian 12 LXC container on Proxmox for building and pushing Docker images to the self-hosted Harbor registry. Follows the same Terraform + pct exec deployment pattern as the [Deployment WebUI](../deployment-webui/README.md).
+A Debian 12 LXC container on Proxmox for building and pushing Docker images to the self-hosted Harbor registry. Follows the same Terraform + pct exec deployment pattern as the [Deployment WebUI](../webui/README.md).
 
 ## Purpose
 
 The build VM provides a Docker-capable environment for:
 - Building the LOKI-RS IOC scanner container image
+- Building the Scanning Console and Portal container images
 - Pushing images to Harbor (`harbor.knowledgeondemand.net`)
 - Creating Harbor projects and Kubernetes pull secrets via the `build-and-push.sh` script
 
@@ -18,12 +19,24 @@ cd build-vm
 
 Follow the prompts to enter Proxmox credentials, SSH key path, and kubeconfig path. The script handles everything: LXC creation, Docker CE installation, kubectl setup, repo clone, and secret copying.
 
-Once deployed, build and push the LOKI-RS image:
+Once deployed, build and push images:
 
 ```bash
 ssh deploy@10.83.3.191
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+
+# LOKI-RS IOC scanner
+cd /opt/talos-cleanroom/apps/loki
 ./build-and-push.sh
+
+# Scanning Console
+cd /opt/talos-cleanroom/scanning-app
+docker build -t harbor.knowledgeondemand.net/cleanroom/scanning-console:latest .
+docker push harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+
+# Portal
+cd /opt/talos-cleanroom/portal
+docker build -t harbor.knowledgeondemand.net/cleanroom/portal:latest .
+docker push harbor.knowledgeondemand.net/cleanroom/portal:latest
 ```
 
 ## Container Specifications
@@ -107,7 +120,7 @@ Both are set automatically in `terraform/main.tf`. No privileged container neede
 
 ## build-and-push.sh
 
-The `build-and-push.sh` script (located at `Resources/IAC-DNS/infrastructure/projects/loki/build-and-push.sh`) handles the full bootstrap:
+The `build-and-push.sh` script (located at `apps/loki/build-and-push.sh`) handles the full bootstrap:
 
 1. Check prerequisites (docker, kubectl, curl, jq)
 2. Collect Harbor credentials (or use `HARBOR_USER` / `HARBOR_PASSWORD` env vars)
@@ -142,7 +155,7 @@ git pull
 ### Rebuilding an Image
 
 ```bash
-cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki
+cd /opt/talos-cleanroom/apps/loki
 ./build-and-push.sh v2.10.0
 ```
 

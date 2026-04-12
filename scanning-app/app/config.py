@@ -1,0 +1,57 @@
+"""Scanning Console application configuration."""
+
+from functools import lru_cache
+
+from talos_common.config_base import BaseAppSettings
+
+
+class ScanningSettings(BaseAppSettings):
+    """Scanning Console settings loaded from environment variables."""
+
+    # Application
+    app_name: str = "Talos CleanRoom Scanning Console"
+    debug: bool = False
+
+    # Database (in-cluster DNS, no NodePort)
+    database_url: str = (
+        "postgresql+asyncpg://cleanroom:changeme"
+        "@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom"
+    )
+
+    # Database pool
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
+    # Faraday integration
+    faraday_sync_enabled: bool = True
+
+    # Target Lab (Vulhub K8s-based vulnerable environments)
+    target_lab_enabled: bool = True
+    vulhub_target_ttl_hours: int = 2
+    vulhub_target_max_concurrent: int = 8
+    vulhub_manifests_dir: str = "/app/vulhub-manifests"
+    vulhub_target_cpu_limit: str = "500m"
+    vulhub_target_memory_limit: str = "512Mi"
+
+    # Vulnerability enrichment (NVD/EPSS/OTX)
+    enrichment_enabled: bool = True
+    nvd_api_key: str = ""
+    nvd_rate_limit: float = 6.5        # seconds between requests (no key)
+    nvd_rate_limit_keyed: float = 0.7  # seconds between requests (with key)
+    epss_enabled: bool = True
+    otx_api_key: str = ""
+    otx_enabled: bool = False
+    enrichment_batch_size: int = 50
+    enrichment_auto_trigger: bool = True
+    enrichment_cache_ttl_days: int = 7
+    enrichment_max_concurrent_nvd: int = 3
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+
+@lru_cache()
+def get_settings() -> ScanningSettings:
+    """Get cached settings instance."""
+    return ScanningSettings()

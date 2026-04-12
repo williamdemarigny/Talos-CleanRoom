@@ -1,0 +1,263 @@
+"""SQLAlchemy ORM models for the scanning console database.
+
+These models mirror the schema defined in docs/vuln-management-plan.md Section 2.2.
+Alembic migrations in alembic/versions/ keep the database in sync.
+"""
+
+from datetime import datetime
+
+from sqlalchemy import (
+    Column, DateTime, Float, Integer, String, Text, Boolean, ForeignKey, Index,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Scan(Base):
+    __tablename__ = "scans"
+
+    id = Column(String, primary_key=True)  # uuid[:8]
+    scan_type = Column(String, nullable=False)  # "security" | "ioc"
+    target = Column(Text, nullable=False)
+    profile = Column(String, nullable=True)  # quick/standard/thorough/custom, NULL for IOC
+    mount_type = Column(String, nullable=True)  # ssh/smb, NULL for security
+    scan_path = Column(Text, nullable=True)  # IOC only
+    status = Column(String, nullable=False, default="idle")
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+    tools_json = Column(JSONB, nullable=True)  # tool states array
+    custom_modules = Column(JSONB, nullable=True)
+    openvas_config = Column(String, nullable=True)
+    openvas_families = Column(JSONB, nullable=True)
+    lab_env_id = Column(String, nullable=True)  # Vulhub catalog env_id (e.g. "bind9-tsig")
+
+    hosts = relationship("Host", back_populates="scan", cascade="all, delete-orphan")
+    vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")
+    ioc_findings = relationship("IocFinding", back_populates="scan", cascade="all, delete-orphan")
+    faraday_sync_logs = relationship("FaradaySyncLog", back_populates="scan", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_scans_started_at", "started_at"),
+        Index("ix_scans_status", "status"),
+        Index("ix_scans_scan_type", "scan_type"),
+    )
+
+
+class Host(Base):
+    __tablename__ = "hosts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(String, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    ip = Column(Text, nullable=False)
+    os = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    hostnames = Column(JSONB, nullable=True)
+    tags = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+    scan = relationship("Scan", back_populates="hosts")
+    services = relationship("Service", back_populates="host", cascade="all, delete-orphan")
+    vulnerabilities = relationship("Vulnerability", back_populates="host", cascade="all, delete-orphan")
+    ioc_findings = relationship("IocFinding", back_populates="host")
+
+    __table_args__ = (
+        Index("ix_hosts_ip", "ip"),
+        Index("ix_hosts_scan_id", "scan_id"),
+        Index("uq_hosts_scan_ip", "scan_id", "ip", unique=True),
+    )
+
+
+class Service(Base):
+    __tablename__ = "services"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    host_id = Column(Integer, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False)
+    scan_id = Column(String, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    name = Column(Text, nullable=True)
+    port = Column(Integer, nullable=False)
+    protocol = Column(String, default="tcp")
+    status = Column(String, default="open")
+    version = Column(Text, nullable=True)
+
+    host = relationship("Host", back_populates="services")
+
+    __table_args__ = (
+        Index("ix_services_host_id", "host_id"),
+        Index("ix_services_port", "port"),
+    )
+
+
+class Vulnerability(Base):
+    __tablename__ = "vulnerabilities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(String, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    host_id = Column(Integer, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False)
+    service_id = Column(Integer, ForeignKey("services.id", ondelete="SET NULL"), nullable=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    severity = Column(String, nullable=False)  # critical/high/medium/low/info/unclassified
+    refs = Column(JSONB, nullable=True)  # reference URLs
+    resolution = Column(Text, nullable=True)
+    data = Column(Text, nullable=True)
+    external_id = Column(String, nullable=True)  # CVE
+    tags = Column(JSONB, nullable=True)
+    type = Column(String, default="Vulnerability")
+    tool_source = Column(String, nullable=True)  # nmap/openvas/metasploit
+    # Web vuln fields
+    path = Column(Text, nullable=True)
+    website = Column(Text, nullable=True)
+    method = Column(String, nullable=True)
+    request = Column(Text, nullable=True)
+    response = Column(Text, nullable=True)
+    query = Column(Text, nullable=True)
+    # Remediation tracking
+    remediation_status = Column(String, default="open")
+    remediation_notes = Column(Text, nullable=True)
+    remediation_updated_at = Column(DateTime, nullable=True)
+    # Enrichment fields (populated by EnrichmentService after scan completion)
+    cvss_score = Column(Float, nullable=True)         # CVSS base score (0.0-10.0)
+    cvss_vector = Column(String, nullable=True)       # CVSS vector string
+    cvss_version = Column(String, nullable=True)      # "2.0", "3.1", "4.0"
+    nvd_severity = Column(String, nullable=True)      # NVD-derived severity (never overwrites tool severity)
+    epss_score = Column(Float, nullable=True)         # Exploit probability (0.0-1.0)
+    epss_percentile = Column(Float, nullable=True)    # EPSS percentile (0.0-1.0)
+    cpe_matches = Column(JSONB, nullable=True)        # CPE URIs from NVD
+    weakness_ids = Column(JSONB, nullable=True)        # CWE IDs from NVD
+    threat_intel = Column(JSONB, nullable=True)        # OTX pulses, tags, adversary info
+    enrichment_status = Column(String, nullable=False, server_default="skipped")  # pending/enriched/failed/skipped
+    enrichment_source = Column(String, nullable=True)  # e.g. "nvd,epss"
+    enriched_at = Column(DateTime, nullable=True)
+
+    scan = relationship("Scan", back_populates="vulnerabilities")
+    host = relationship("Host", back_populates="vulnerabilities")
+
+    __table_args__ = (
+        Index("ix_vulns_severity", "severity"),
+        Index("ix_vulns_scan_id", "scan_id"),
+        Index("ix_vulns_host_id", "host_id"),
+        Index("ix_vulns_remediation_status", "remediation_status"),
+        Index("ix_vulns_external_id", "external_id"),
+        Index("ix_vulns_cvss_score", "cvss_score"),
+        Index("ix_vulns_epss_score", "epss_score"),
+        Index("ix_vulns_enrichment_status", "enrichment_status"),
+    )
+
+
+class IocFinding(Base):
+    __tablename__ = "ioc_findings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(String, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    host_id = Column(Integer, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=True)
+    severity = Column(String, nullable=False)  # alert/warning/notice
+    score = Column(Integer, nullable=False)
+    file_path = Column(Text, nullable=False)
+    rule_name = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    matched_strings = Column(JSONB, nullable=True)
+    hash_md5 = Column(String, nullable=True)
+    hash_sha256 = Column(String, nullable=True)
+    tags = Column(JSONB, nullable=True)
+    remediation_status = Column(String, default="open")
+    remediation_notes = Column(Text, nullable=True)
+    remediation_updated_at = Column(DateTime, nullable=True)
+
+    scan = relationship("Scan", back_populates="ioc_findings")
+    host = relationship("Host", back_populates="ioc_findings")
+
+    __table_args__ = (
+        Index("ix_ioc_scan_id", "scan_id"),
+        Index("ix_ioc_severity", "severity"),
+        Index("ix_ioc_hash_sha256", "hash_sha256"),
+    )
+
+
+class FaradaySyncLog(Base):
+    __tablename__ = "faraday_sync_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scan_id = Column(String, ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    synced_at = Column(DateTime, nullable=True)
+    success = Column(Boolean, nullable=True)
+    detail = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0)
+    next_retry_at = Column(DateTime, nullable=True)
+    scan_type = Column(String, nullable=True)  # "security" | "ioc"
+
+    scan = relationship("Scan", back_populates="faraday_sync_logs")
+
+    __table_args__ = (
+        Index("ix_faraday_sync_success_retry", "success", "next_retry_at"),
+    )
+
+
+class CveCache(Base):
+    """Local cache of NVD/EPSS data to avoid redundant API calls across scans."""
+    __tablename__ = "cve_cache"
+
+    cve_id = Column(String, primary_key=True)
+    cvss_score = Column(Float, nullable=True)
+    cvss_vector = Column(String, nullable=True)
+    cvss_version = Column(String, nullable=True)
+    nvd_severity = Column(String, nullable=True)
+    weakness_ids = Column(JSONB, nullable=True)
+    cpe_matches = Column(JSONB, nullable=True)
+    epss_score = Column(Float, nullable=True)
+    epss_percentile = Column(Float, nullable=True)
+    fetched_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_cve_cache_expires", "expires_at"),
+    )
+
+
+class VulhubTarget(Base):
+    """Tracks Vulhub K8s-based vulnerable environments deployed via the Target Lab."""
+    __tablename__ = "vulhub_targets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    env_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    namespace = Column(String, unique=True, nullable=False)
+    service_endpoint = Column(String, nullable=False)
+    cve_id = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="deploying")
+    created_at = Column(DateTime, default=func.now())
+    ttl_expires_at = Column(DateTime, nullable=False)
+    created_by = Column(String, nullable=True)
+    destroyed_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+    ports_json = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("ix_vulhub_targets_status", "status"),
+        Index("ix_vulhub_targets_ttl", "ttl_expires_at"),
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=func.now())
+    action = Column(Text, nullable=False)
+    user = Column(Text, nullable=True)
+    source_ip = Column(Text, nullable=True)
+    resource_type = Column(Text, nullable=True)
+    resource_id = Column(Text, nullable=True)
+    detail = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("ix_audit_timestamp", "timestamp"),
+        Index("ix_audit_action", "action"),
+        Index("ix_audit_user", "user"),
+    )

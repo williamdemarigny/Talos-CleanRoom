@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Target Lab — Talos CleanRoom{% endblock %}
+{% block content %}
+<div x-data="targetLab()" x-init="init()">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Target Lab</h1>
+            <p class="text-gray-400 mt-1">Deploy Vulhub vulnerable environments for scan testing and validation</p>
+        </div>
+        <div x-show="enabled" class="text-sm">
+            <span class="text-gray-400">Capacity:</span>
+            <span :class="capacity.used < capacity.max ? 'text-green-400' : 'text-red-400'"
+                  x-text="capacity.used + '/' + capacity.max + ' slots used'"></span>
+        </div>
+    </div>
+
+    <!-- Not configured warning -->
+    <template x-if="!enabled && !loading">
+        <div class="bg-yellow-900/30 border border-yellow-600 rounded-lg p-4 mb-6">
+            <h3 class="text-yellow-400 font-medium">Target Lab Not Configured</h3>
+            <p class="text-gray-300 text-sm mt-1">
+                The Target Lab is currently disabled. Set <code class="text-cyan-400">TARGET_LAB_ENABLED=true</code>
+                in the environment to enable Vulhub target deployment.
+            </p>
+        </div>
+    </template>
+
+    <template x-if="enabled">
+        <div>
+            <!-- ===== Section 1: Vulhub Environment Catalog ===== -->
+            <h2 class="text-lg font-medium text-white mb-4">Vulhub Environment Catalog</h2>
+
+            <!-- Category Filter Tabs -->
+            <div class="flex flex-wrap items-center gap-2 mb-4">
+                <template x-for="cat in categories" :key="cat.value">
+                    <button @click="selectedCategory = cat.value"
+                            class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                            :class="selectedCategory === cat.value
+                                ? 'bg-cyan-600 text-white'
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                        <span x-text="cat.label"></span>
+                    </button>
+                </template>
+
+                <!-- Search -->
+                <div class="ml-auto">
+                    <input type="text" x-model="searchQuery" placeholder="Search by name or CVE..."
+                           class="bg-gray-700 border border-gray-600 text-white text-sm rounded-md px-3 py-1.5 w-64
+                                  placeholder-gray-400 focus:outline-none focus:border-cyan-500">
+                </div>
+            </div>
+
+            <!-- Catalog Card Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                <template x-for="env in filteredCatalog" :key="env.env_id">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-5 hover:border-gray-600 transition-colors flex flex-col">
+                        <!-- Header: Name + CVE -->
+                        <div class="flex items-start justify-between mb-2">
+                            <h3 class="text-white font-semibold text-sm leading-tight" x-text="env.name"></h3>
+                            <span x-show="env.difficulty"
+                                  class="text-xs px-2 py-0.5 rounded-full ml-2 flex-shrink-0"
+                                  :class="{
+                                      'bg-green-900/50 text-green-400': env.difficulty === 'easy',
+                                      'bg-yellow-900/50 text-yellow-400': env.difficulty === 'medium',
+                                      'bg-red-900/50 text-red-400': env.difficulty === 'hard'
+                                  }"
+                                  x-text="env.difficulty"></span>
+                            <span x-show="env.tier"
+                                  class="text-xs px-2 py-0.5 rounded-full ml-1 flex-shrink-0"
+                                  :class="{
+                                      'bg-green-900/30 text-green-400 border border-green-800': env.tier === 'tier1',
+                                      'bg-blue-900/30 text-blue-400 border border-blue-800': env.tier === 'tier2',
+                                      'bg-purple-900/30 text-purple-400 border border-purple-800': env.tier === 'tier3'
+                                  }"
+                                  x-text="env.tier === 'tier1' ? 'Lightweight' : env.tier === 'tier2' ? 'Standard' : 'Multi-container'"></span>
+                        </div>
+
+                        <!-- CVE + Category badges -->
+                        <div class="flex flex-wrap gap-1.5 mb-2">
+                            <span x-show="env.cve"
+                                  class="text-xs bg-purple-900/50 text-purple-400 px-2 py-0.5 rounded-full"
+                                  x-text="env.cve"></span>
+                            <span class="text-xs px-2 py-0.5 rounded-full"
+                                  :class="categoryBadgeClass(env.category)"
+                                  x-text="env.category"></span>
+                        </div>
+
+                        <!-- Description -->
+                        <p class="text-gray-400 text-xs mb-3 flex-grow" x-text="env.description"></p>
+
+                        <!-- Ports -->
+                        <div class="mb-3">
+                            <span class="text-xs text-gray-500">Ports:</span>
+                            <template x-for="svc in env.services" :key="svc">
+                                <span class="text-xs bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded ml-1" x-text="svc"></span>
+                            </template>
+                        </div>
+
+                        <!-- Recommended scan -->
+                        <div x-show="env.recommended_scan" class="mb-2 text-xs text-gray-500">
+                            <span class="text-gray-400">Scan:</span>
+                            <template x-for="tool in (env.recommended_scan?.tools || [])" :key="tool">
+                                <span class="bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded ml-1 capitalize" x-text="tool"></span>
+                            </template>
+                            <span class="ml-1 text-gray-500" x-text="'(' + (env.recommended_scan?.profile || 'standard') + ')'"></span>
+                        </div>
+
+                        <!-- Deploy button -->
+                        <button @click="deploy(env.env_id)"
+                                :disabled="deployingId === env.env_id || capacity.used >= capacity.max"
+                                class="w-full py-2 px-4 rounded-md text-sm font-medium transition-colors
+                                       bg-cyan-600 hover:bg-cyan-500 text-white
+                                       disabled:opacity-50 disabled:cursor-not-allowed">
+                            <span x-show="deployingId !== env.env_id">Deploy</span>
+                            <span x-show="deployingId === env.env_id" class="flex items-center justify-center">
+                                <svg class="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                Deploying...
+                            </span>
+                        </button>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Empty catalog state -->
+            <template x-if="filteredCatalog.length === 0 && !loading">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center mb-8">
+                    <p class="text-gray-400" x-text="catalog.length === 0
+                        ? 'No Vulhub environments configured. Ensure manifests are baked into the container image.'
+                        : 'No environments match your filter.'"></p>
+                </div>
+            </template>
+
+            <!-- ===== Section 2: Active Targets ===== -->
+            <h2 class="text-lg font-medium text-white mb-4">Active Targets</h2>
+
+            <template x-if="targets.length === 0">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center">
+                    <p class="text-gray-400">No active targets.</p>
+                    <p class="text-gray-500 text-sm mt-1">Deploy an environment from the catalog above to get started.</p>
+                </div>
+            </template>
+
+            <template x-if="targets.length > 0">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+                    <table class="w-full">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">Name</th>
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">CVE</th>
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">Category</th>
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">Endpoint</th>
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">Status</th>
+                                <th class="text-left text-xs text-gray-400 font-medium px-4 py-3">TTL Remaining</th>
+                                <th class="text-right text-xs text-gray-400 font-medium px-4 py-3">Actions</th>
+                            </tr>
+                        </thead>
+                        <template x-for="t in targets" :key="t.id">
+                            <tbody>
+                                <tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                    <td class="px-4 py-3">
+                                        <span class="text-white text-sm font-medium" x-text="t.name"></span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span x-show="t.cve_id" class="text-xs bg-purple-900/50 text-purple-400 px-2 py-0.5 rounded-full" x-text="t.cve_id"></span>
+                                        <span x-show="!t.cve_id" class="text-gray-500 text-xs">--</span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span class="text-xs px-2 py-0.5 rounded-full"
+                                              :class="categoryBadgeClass(t.category)"
+                                              x-text="t.category || '--'"></span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span class="text-cyan-400 font-mono text-xs" x-text="t.service_endpoint"></span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span class="text-xs px-2 py-0.5 rounded-full"
+                                              :class="statusClass(t.status)"
+                                              x-text="t.status"></span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span class="text-sm"
+                                              :class="ttlSeconds(t) < 1800 ? 'text-yellow-400' : 'text-gray-300'"
+                                              x-text="ttlRemaining(t)"></span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right space-x-2">
+                                        <button x-show="t.status === 'deploying' || t.status === 'error' || hasLogs(t.id)"
+                                                @click="toggleLogs(t.id)"
+                                                class="text-xs px-3 py-1 rounded transition-colors"
+                                                :class="isLogsExpanded(t.id)
+                                                    ? 'bg-cyan-700 text-white'
+                                                    : 'bg-gray-600 hover:bg-gray-500 text-gray-200'"
+                                                title="View deployment logs">
+                                            Logs
+                                        </button>
+                                        <button x-show="t.status === 'running'"
+                                                @click="scanTarget(t.service_endpoint, t.env_id)"
+                                                class="text-xs bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded transition-colors">
+                                            Scan
+                                        </button>
+                                        <button x-show="t.status === 'running'"
+                                                @click="extendTtl(t.id)"
+                                                class="text-xs bg-gray-600 hover:bg-gray-500 text-white px-3 py-1 rounded transition-colors"
+                                                title="Extend TTL by 2 hours">
+                                            +2h
+                                        </button>
+                                        <button @click="confirmDestroy(t.id, t.name)"
+                                                :disabled="t.status === 'destroying'"
+                                                class="text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded transition-colors disabled:opacity-50">
+                                            Destroy
+                                        </button>
+                                    </td>
+                                </tr>
+                                <!-- Deploy log panel (collapsible row below target) -->
+                                <tr x-show="isLogsExpanded(t.id)" x-transition>
+                                    <td colspan="7" class="px-4 py-0">
+                                        <div :id="'deploy-log-' + t.id"
+                                             class="bg-gray-900 border border-gray-700 rounded-md my-2 max-h-64 overflow-y-auto font-mono text-xs">
+                                            <template x-if="getLogsForTarget(t.id).length === 0">
+                                                <div class="p-3 text-gray-500">
+                                                    <span x-show="t.status === 'deploying'" class="flex items-center">
+                                                        <svg class="animate-spin h-3 w-3 mr-2" viewBox="0 0 24 24">
+                                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                                        </svg>
+                                                        Waiting for deployment logs...
+                                                    </span>
+                                                    <span x-show="t.status !== 'deploying'">No logs available.</span>
+                                                </div>
+                                            </template>
+                                            <template x-if="getLogsForTarget(t.id).length > 0">
+                                                <div class="p-2 space-y-0.5">
+                                                    <template x-for="(log, idx) in getLogsForTarget(t.id)" :key="idx">
+                                                        <div class="flex gap-2 leading-tight py-0.5">
+                                                            <span class="text-gray-500 flex-shrink-0 w-20"
+                                                                  x-text="formatLogTime(log.timestamp)"></span>
+                                                            <span class="text-cyan-600 flex-shrink-0 w-28 truncate"
+                                                                  x-text="'[' + log.step + ']'"></span>
+                                                            <span :class="logLevelClass(log.level)"
+                                                                  x-text="log.message"
+                                                                  class="whitespace-pre-wrap break-all"></span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </template>
+                    </table>
+                </div>
+            </template>
+
+            <!-- Error display for targets in error state -->
+            <template x-if="targets.some(t => t.status === 'error')">
+                <div class="mt-4">
+                    <template x-for="t in targets.filter(t => t.status === 'error')" :key="t.id">
+                        <div class="bg-red-900/30 border border-red-600 rounded-lg p-3 mb-2">
+                            <span class="text-red-400 font-medium" x-text="t.name + ':'"></span>
+                            <span class="text-gray-300 text-sm ml-2" x-text="t.error_message || 'Unknown error'"></span>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <!-- Error toast -->
+    <div x-show="error" x-transition
+         class="fixed bottom-4 right-4 bg-red-900/90 border border-red-600 text-white px-4 py-3 rounded-lg shadow-lg max-w-md z-50">
+        <div class="flex items-start">
+            <span class="text-red-400 mr-2">Error:</span>
+            <span class="text-sm" x-text="error"></span>
+            <button @click="error = ''" class="ml-4 text-gray-400 hover:text-white">&times;</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+<script src="/static/js/target_lab.js"></script>
+{% endblock %}

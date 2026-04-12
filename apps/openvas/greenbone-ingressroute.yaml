@@ -1,0 +1,21 @@
+# OpenVAS/Greenbone IngressRoute
+# Access via: https://openvas.knowledgeondemand.net
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: greenbone-gsa
+  namespace: openvas
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`openvas.knowledgeondemand.net`)
+      kind: Rule
+      services:
+        - name: greenbone
+          port: 80
+      middlewares:
+        - name: secure-headers
+          namespace: traefik
+  tls: {}

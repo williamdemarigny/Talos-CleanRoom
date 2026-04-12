@@ -1,0 +1,50 @@
+# Deployment Console External Service
+# =============================================================================
+# The Deployment Console runs in an LXC container (VMID 200) at 10.83.3.190:8000,
+# NOT inside the Kubernetes cluster. This ExternalName service + Endpoints pair
+# allows Traefik to route traffic to it, providing:
+# - TLS termination via wildcard cert (*.knowledgeondemand.net)
+# - FQDN via deploy.knowledgeondemand.net
+# - Consistent access pattern across all platform services
+#
+# Traefik allowExternalNameServices is already enabled (traefik/application.yaml:42)
+# =============================================================================
+---
+# Service with explicit Endpoints (more reliable than ExternalName for IP targets)
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployment-console
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: deployment-console
+    app.kubernetes.io/component: web-ui
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+---
+# EndpointSlice pointing to the LXC container IP
+# Using EndpointSlice instead of Endpoints to prevent K8s endpoints controller
+# from garbage-collecting manually-managed endpoints for a selector-less Service
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: deployment-console-external
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: deployment-console
+    app.kubernetes.io/component: web-ui
+    kubernetes.io/service-name: deployment-console
+addressType: IPv4
+ports:
+  - port: 8000
+    protocol: TCP
+    name: http
+endpoints:
+  - addresses:
+      - "10.83.3.190"
+    conditions:
+      ready: true

@@ -1,0 +1,105 @@
+[08:42:46] ============================================================
+[08:42:46]   OpenVAS Fix Strategy Tester
+[08:42:46] ============================================================
+[08:42:47]   Strategies:  S7,S8
+[08:42:47]   Max wait:    15 min per strategy
+[08:42:47]   Kubeconfig:  /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/kubeconfig.yaml
+[08:42:47]   Log file:    /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/openvas-test.log
+[08:42:47]   Diag dir:    /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/diag
+[08:42:47] 
+[08:42:47] === Pre-flight checks ===
+[08:42:52] All pre-flight checks passed.
+[08:42:53] 
+[08:42:53] ============================================================
+[08:42:53]   Testing strategy: S7
+[08:42:53] ============================================================
+[08:42:53]   Applying patch for S7...
+Warning: resource deployments/greenbone is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by kubectl apply. kubectl apply should only be used on resources created declaratively by either kubectl create --save-config or kubectl apply. The missing annotation will be patched automatically.
+deployment.apps/greenbone configured
+deployment.apps/greenbone patched
+deployment.apps/greenbone restarted
+[08:43:00]   Strategy applied. Waiting for new pod to roll out...
+[08:43:21]   Waiting for pod 6/6 Running (max 15m)...
+[08:43:38]     [15s] phase=Pending ready=0/6
+[08:43:55]     [30s] phase=Pending ready=0/6
+[08:44:12]     [45s] phase=Pending ready=0/6
+[08:44:30]     [60s] phase=Pending ready=0/6
+[08:44:47]     [75s] phase=Pending ready=0/6
+[08:45:06]     [90s] phase=Pending ready=0/6
+[08:45:23]     [105s] phase=Pending ready=0/6
+[08:45:41]     [120s] phase=Pending ready=0/6
+[08:45:59]     [135s] phase=Pending ready=0/6
+[08:46:16]     [150s] phase=Pending ready=0/6
+[08:46:34]     [165s] phase=Pending ready=0/6
+[08:46:51]     [180s] phase=Pending ready=0/6
+[08:47:08]     [195s] phase=Pending ready=0/6
+[08:47:25]     [210s] phase=Running ready=0/6
+[08:47:42]     [225s] phase=Running ready=1/6
+[08:47:59]     [240s] phase=Running ready=2/6
+[08:48:16]     [255s] phase=Running ready=3/6
+[08:48:32]     [270s] phase=Running ready=5/6
+[08:48:49]     [285s] phase=Running ready=6/6
+[08:48:49]   Pod is 6/6 Running
+[08:49:21]   Testing login API via internal curl pod...
+[08:49:26]   HTTP code: 000
+[08:49:26]   FAIL: HTTP 000 (expected 200 or 303)
+[08:49:26]   FAIL: S7 did not fix login
+[08:49:28]   Capturing diagnostics to /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/diag/S7-*.log
+[08:49:36] 
+[08:49:36] ============================================================
+[08:49:36]   Testing strategy: S8
+[08:49:36] ============================================================
+[08:49:36]   Applying patch for S8...
+Warning: resource deployments/greenbone is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by kubectl apply. kubectl apply should only be used on resources created declaratively by either kubectl create --save-config or kubectl apply. The missing annotation will be patched automatically.
+deployment.apps/greenbone configured
+deployment.apps/greenbone patched
+deployment.apps/greenbone restarted
+[08:49:43]   Strategy applied. Waiting for new pod to roll out...
+[08:50:03]   Waiting for pod 6/6 Running (max 15m)...
+[08:50:20]     [15s] phase=Pending ready=0/6
+[08:50:38]     [30s] phase=Pending ready=0/6
+[08:50:56]     [45s] phase=Pending ready=0/6
+[08:51:13]     [60s] phase=Pending ready=0/6
+[08:51:31]     [75s] phase=Pending ready=0/6
+[08:51:48]     [90s] phase=Pending ready=0/6
+[08:52:06]     [105s] phase=Pending ready=0/6
+[08:52:24]     [120s] phase=Pending ready=0/6
+[08:52:41]     [135s] phase=Pending ready=0/6
+[08:52:58]     [150s] phase=Pending ready=0/6
+[08:53:15]     [165s] phase=Pending ready=0/6
+[08:53:33]     [180s] phase=Pending ready=0/6
+[08:53:50]     [195s] phase=Pending ready=0/6
+[08:54:07]     [210s] phase=Pending ready=0/6
+[08:54:25]     [225s] phase=Pending ready=0/6
+[08:54:43]     [240s] phase=Failed ready=0/6
+[08:55:00]     [255s] phase=Pending ready=0/6
+[08:55:17]     [270s] phase=Pending ready=0/6
+[08:55:35]     [285s] phase=Pending ready=0/6
+[08:55:53]     [300s] phase=Pending ready=0/6
+[08:56:11]     [315s] phase=Pending ready=0/6
+[08:56:29]     [330s] phase=Pending ready=0/6
+[08:56:47]     [345s] phase=Pending ready=0/6
+[08:57:04]     [360s] phase=Pending ready=0/6
+[08:57:21]     [375s] phase=Pending ready=0/6
+[08:57:39]     [390s] phase=Pending ready=0/6
+[08:57:56]     [405s] phase=Pending ready=0/6
+[08:58:13]     [420s] phase=Pending ready=0/6
+[08:58:31]     [435s] phase=Pending ready=0/6
+[08:58:47]     [450s] phase=Pending ready=0/6
+[08:59:04]     [465s] phase=Pending ready=0/6
+[08:59:21]     [480s] phase=Running ready=0/6
+[08:59:38]     [495s] phase=Running ready=1/6
+[08:59:55]     [510s] phase=Running ready=1/6
+[09:00:12]     [525s] phase=Running ready=3/6
+[09:00:29]     [540s] phase=Running ready=6/6
+[09:00:29]   Pod is 6/6 Running
+[09:01:00]   Testing login API via internal curl pod...
+[09:01:06]   HTTP code: 000
+[09:01:06]   FAIL: HTTP 000 (expected 200 or 303)
+[09:01:06]   FAIL: S8 did not fix login
+[09:01:08]   Capturing diagnostics to /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/diag/S8-*.log
+[09:01:16] 
+[09:01:16] ============================================================
+[09:01:16]   ALL STRATEGIES FAILED
+[09:01:16] ============================================================
+[09:01:16]   See /c/Users/Administrator/Documents/GitHub/Talos-CleanRoom/apps/openvas/diag/ for per-strategy diagnostic captures.

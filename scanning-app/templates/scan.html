@@ -1,0 +1,498 @@
+{% extends "base.html" %}
+{% from "components.html" import spinner, spinner_short, form_input, log_viewer, connection_status %}
+
+{% block title %}Security Scanner - Talos CleanRoom{% endblock %}
+
+{% block content %}
+<div x-data="scanManager()" x-init="init()">
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-2xl font-bold text-white">Security Scanner</h1>
+            <p class="text-gray-400">Scan targets and import results to Faraday</p>
+        </div>
+        <div class="flex gap-4">
+            <button
+                @click="abortScan"
+                x-show="isRunning"
+                class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+            >
+                Abort Scan
+            </button>
+        </div>
+    </div>
+
+    <!-- Scan Configuration -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6" x-show="!isRunning && status !== 'running'">
+        <h2 class="text-lg font-medium text-white mb-4">Scan Configuration</h2>
+
+        <!-- Target Input -->
+        <div class="mb-6">
+            {{ form_input("Target", "target", "e.g. 192.168.1.0/24 or 10.0.0.1", "IP address, CIDR range, or hostname. Separate multiple targets with commas.", extra_attrs='@keydown.enter="startScan"') }}
+        </div>
+
+        <!-- Tool Selection -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-3">Scan Tools</label>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Nmap -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('nmap') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="nmap" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">Nmap</span>
+                        <p class="text-xs text-gray-400 mt-1">Port scanning & service detection. Fast network reconnaissance.</p>
+                    </div>
+                </label>
+
+                <!-- OpenVAS -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('openvas') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="openvas" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">OpenVAS</span>
+                        <p class="text-xs text-gray-400 mt-1">Vulnerability assessment with 100k+ NVT checks. Thorough but slower.</p>
+                    </div>
+                </label>
+
+                <!-- Metasploit -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('metasploit') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="metasploit" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">Metasploit</span>
+                        <p class="text-xs text-gray-400 mt-1">Vulnerability scanning with auxiliary modules (EternalBlue, BlueKeep, Heartbleed, etc).</p>
+                    </div>
+                </label>
+
+                <!-- WPScan -->
+                <label class="flex items-start p-4 bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-650 border-2 transition-colors"
+                       :class="selectedTools.includes('wpscan') ? 'border-cyan-500' : 'border-transparent'">
+                    <input type="checkbox" value="wpscan" x-model="selectedTools" class="mt-1 mr-3 accent-cyan-500">
+                    <div>
+                        <span class="text-white font-medium">WPScan</span>
+                        <p class="text-xs text-gray-400 mt-1">WordPress vulnerability scanner. Plugin, theme & core version detection with CVE matching.</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- Scan Profile -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Scan Profile</label>
+            <div class="flex gap-3">
+                <button @click="profile = 'quick'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'quick' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Quick
+                </button>
+                <button @click="profile = 'standard'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'standard' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Standard
+                </button>
+                <button @click="profile = 'thorough'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'thorough' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Thorough
+                </button>
+                <button @click="profile = 'custom'; fetchModules(); fetchOpenvasData()"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                        :class="profile === 'custom' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'">
+                    Custom
+                </button>
+            </div>
+            <div class="flex items-center gap-2 mt-2">
+                <p class="text-xs text-gray-500" x-text="profileDescriptions[profile]"></p>
+                <button @click="showProfileInfo = !showProfileInfo"
+                        class="text-gray-500 hover:text-cyan-400 transition-colors flex-shrink-0"
+                        :title="showProfileInfo ? 'Hide details' : 'Show what each profile does per tool'">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Profile Details Panel -->
+            <div x-show="showProfileInfo && profile !== 'custom'" x-collapse x-cloak class="mt-3 bg-gray-700/50 rounded-lg p-4 text-sm">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-gray-300 font-medium capitalize" x-text="profile + ' Profile'"></span>
+                    <span class="text-gray-500 text-xs">
+                        Est. time: <span class="text-gray-300" x-text="profileDetails[profile]?.time || ''"></span>
+                    </span>
+                </div>
+                <table class="w-full text-xs">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-gray-600">
+                            <th class="text-left pb-2 pr-4 w-24">Tool</th>
+                            <th class="text-left pb-2">What it does</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(desc, tool) in (profileDetails[profile]?.tools || {})" :key="tool">
+                            <tr class="border-b border-gray-700/50">
+                                <td class="py-2 pr-4 text-cyan-400 font-medium align-top" x-text="tool"></td>
+                                <td class="py-2 text-gray-400" x-text="desc"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Custom Module Picker (visible when Custom profile + Metasploit selected) -->
+            <div x-show="profile === 'custom' && selectedTools.includes('metasploit') && modulesLoaded" x-collapse x-cloak class="mt-3">
+                <div class="bg-gray-700/50 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-3">
+                            <span class="text-gray-300 font-medium">Metasploit Modules</span>
+                            <span class="text-xs px-2 py-0.5 rounded-full"
+                                  :class="customModules.length > 0 ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-400'"
+                                  x-text="customModules.length + ' / ' + moduleCatalog.length + ' selected'"></span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="loadPreset('standard')"
+                                    class="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                Load Standard (11)
+                            </button>
+                            <button @click="loadPreset('thorough')"
+                                    class="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                Load Thorough (39)
+                            </button>
+                            <button @click="customModules = []"
+                                    class="px-2 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                Clear All
+                            </button>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-3">db_nmap network discovery is always included. Select vulnerability modules below.</p>
+
+                    <div class="space-y-3 max-h-96 overflow-y-auto pr-2">
+                        <template x-for="category in moduleCategories" :key="category">
+                            <div class="bg-gray-800/50 rounded-lg p-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-medium text-cyan-400" x-text="category"></span>
+                                        <span class="text-xs text-gray-500"
+                                              x-text="'(' + categoryModules(category).filter(m => customModules.includes(m.id)).length + '/' + categoryModules(category).length + ')'"></span>
+                                    </div>
+                                    <div class="flex gap-1">
+                                        <button @click="selectCategory(category)"
+                                                class="px-1.5 py-0.5 text-xs bg-gray-700 text-gray-400 rounded hover:bg-gray-600 hover:text-gray-300">
+                                            All
+                                        </button>
+                                        <button @click="deselectCategory(category)"
+                                                class="px-1.5 py-0.5 text-xs bg-gray-700 text-gray-400 rounded hover:bg-gray-600 hover:text-gray-300">
+                                            None
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-1">
+                                    <template x-for="mod in categoryModules(category)" :key="mod.id">
+                                        <label class="flex items-start gap-2 p-1.5 rounded cursor-pointer hover:bg-gray-700/50 text-xs">
+                                            <input type="checkbox"
+                                                   :value="mod.id"
+                                                   :checked="customModules.includes(mod.id)"
+                                                   @change="toggleModule(mod.id)"
+                                                   class="mt-0.5 accent-cyan-500">
+                                            <div>
+                                                <span class="text-gray-200" x-text="mod.name"></span>
+                                                <span class="text-gray-500 ml-1" x-text="'— ' + mod.description"></span>
+                                            </div>
+                                        </label>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- OpenVAS Custom Configuration (visible when Custom profile + OpenVAS selected) -->
+            <div x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasDataLoaded" x-collapse x-cloak class="mt-3">
+                <div class="bg-gray-700/50 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <span class="text-gray-300 font-medium">OpenVAS Configuration</span>
+                        <div class="flex gap-2">
+                            <button @click="openvasCustomMode = 'preset'"
+                                    class="px-2 py-1 text-xs rounded transition-colors"
+                                    :class="openvasCustomMode === 'preset' ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'">
+                                Preset Config
+                            </button>
+                            <button @click="openvasCustomMode = 'families'"
+                                    class="px-2 py-1 text-xs rounded transition-colors"
+                                    :class="openvasCustomMode === 'families' ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-300 hover:bg-gray-500'">
+                                NVT Families
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Preset Config Selection -->
+                    <div x-show="openvasCustomMode === 'preset'">
+                        <p class="text-xs text-gray-500 mb-3">Select a scan configuration available on your GVM installation.</p>
+                        <div class="space-y-1 max-h-64 overflow-y-auto pr-2">
+                            <template x-for="cfg in openvasConfigs" :key="cfg.id">
+                                <label class="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-700/50 text-sm"
+                                       :class="selectedOpenvasConfig === cfg.id ? 'bg-gray-700/80 ring-1 ring-cyan-500' : ''">
+                                    <input type="radio"
+                                           name="openvas_config"
+                                           :value="cfg.id"
+                                           x-model="selectedOpenvasConfig"
+                                           class="accent-cyan-500">
+                                    <div>
+                                        <span class="text-gray-200" x-text="cfg.name"></span>
+                                        <span class="text-xs text-gray-500 ml-2" x-text="cfg.id"></span>
+                                    </div>
+                                </label>
+                            </template>
+                            <div x-show="openvasConfigs.length === 0" class="text-gray-500 text-sm p-2">
+                                No configs found. Is OpenVAS running?
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NVT Family Selection -->
+                    <div x-show="openvasCustomMode === 'families'">
+                        <div class="flex items-center justify-between mb-3">
+                            <p class="text-xs text-gray-500">Select NVT families to include. Each family contains many individual vulnerability tests.</p>
+                            <div class="flex gap-2 flex-shrink-0 ml-4">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :class="selectedOpenvasFamilies.length > 0 ? 'bg-cyan-600 text-white' : 'bg-gray-600 text-gray-400'"
+                                      x-text="selectedOpenvasFamilies.length + ' / ' + openvasFamilies.length + ' families'"></span>
+                                <button @click="selectedOpenvasFamilies = openvasFamilies.map(f => f.name)"
+                                        class="px-2 py-0.5 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                    All
+                                </button>
+                                <button @click="selectedOpenvasFamilies = []"
+                                        class="px-2 py-0.5 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500">
+                                    None
+                                </button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-1 max-h-72 overflow-y-auto pr-2">
+                            <template x-for="fam in openvasFamilies" :key="fam.name">
+                                <label class="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-gray-700/50 text-xs">
+                                    <input type="checkbox"
+                                           :value="fam.name"
+                                           :checked="selectedOpenvasFamilies.includes(fam.name)"
+                                           @change="toggleOpenvasFamily(fam.name)"
+                                           class="accent-cyan-500">
+                                    <span class="text-gray-200" x-text="fam.name"></span>
+                                    <span class="text-gray-500" x-text="'(' + fam.nvt_count + ' NVTs)'"></span>
+                                </label>
+                            </template>
+                            <div x-show="openvasFamilies.length === 0" class="text-gray-500 text-sm p-2 col-span-2">
+                                No NVT families found. Is OpenVAS running?
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Start Button -->
+        <button
+            @click="startScan"
+            :disabled="!target.trim() || selectedTools.length === 0 || customSelectionIncomplete"
+            class="px-6 py-3 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+            Start Scan
+        </button>
+        <span x-show="profile === 'custom' && selectedTools.includes('metasploit') && customModules.length === 0"
+              class="text-xs text-yellow-400 ml-3">Select at least one Metasploit module</span>
+        <span x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasCustomMode === 'families' && selectedOpenvasFamilies.length === 0"
+              class="text-xs text-yellow-400 ml-3">Select at least one OpenVAS NVT family</span>
+        <span x-show="profile === 'custom' && selectedTools.includes('openvas') && openvasCustomMode === 'preset' && !selectedOpenvasConfig"
+              class="text-xs text-yellow-400 ml-3">Select an OpenVAS scan config</span>
+    </div>
+
+    <!-- Scan Progress (visible during/after scan) -->
+    <div x-show="status !== 'idle'" class="mb-6">
+        <!-- Status Banner -->
+        <div class="mb-6 p-4 rounded-lg" :class="statusBannerClass">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <span class="text-lg font-medium" x-text="statusText"></span>
+                    <span x-show="isRunning" class="ml-3">
+                        {{ spinner() }}
+                    </span>
+                </div>
+                <div class="text-sm">
+                    <span x-show="scanTarget" class="text-gray-300">Target: <span x-text="scanTarget"></span></span>
+                    <span x-show="elapsedTime" class="ml-4">Elapsed: <span x-text="elapsedTime"></span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tool Progress Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <template x-for="tool in toolStates" :key="tool.tool">
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-white font-medium capitalize" x-text="tool.tool"></span>
+                        <!-- Status icon -->
+                        <span>
+                            <!-- Idle -->
+                            <span x-show="tool.status === 'idle'" class="text-gray-500">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="10" stroke-width="2"/>
+                                </svg>
+                            </span>
+                            <!-- Running -->
+                            <span x-show="tool.status === 'running'" class="text-yellow-400">
+                                {{ spinner_short() }}
+                            </span>
+                            <!-- Completed -->
+                            <span x-show="tool.status === 'completed'" class="text-green-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                            <!-- Failed -->
+                            <span x-show="tool.status === 'failed'" class="text-red-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                            <!-- Aborted -->
+                            <span x-show="tool.status === 'aborted'" class="text-orange-400">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                </svg>
+                            </span>
+                        </span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        <span x-show="tool.findings_count > 0" class="text-green-300" x-text="tool.findings_count + ' finding(s)'"></span>
+                        <span x-show="tool.uploaded_to_faraday" class="ml-2 text-cyan-400 text-xs">Uploaded to Faraday</span>
+                        <span x-show="tool.error_message" class="text-red-400 text-xs" x-text="tool.error_message"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Enrichment Progress (after scan completion) -->
+        <div x-show="enrichmentStatus === 'running'" class="bg-indigo-900/50 border border-indigo-500/30 rounded-lg p-4 mb-6">
+            <div class="flex items-center gap-3">
+                <svg class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span class="text-indigo-300 font-medium">Enriching vulnerabilities...</span>
+                <span class="text-indigo-400 text-sm" x-text="enrichmentProgress + '/' + enrichmentTotal + ' CVEs'"></span>
+                <div class="flex-1 bg-gray-700 rounded-full h-2 ml-2">
+                    <div class="bg-indigo-500 h-2 rounded-full transition-all"
+                         :style="'width:' + (enrichmentTotal > 0 ? Math.round(enrichmentProgress / enrichmentTotal * 100) : 0) + '%'"></div>
+                </div>
+            </div>
+        </div>
+        <div x-show="enrichmentStatus === 'completed'" class="bg-green-900/30 border border-green-500/30 rounded-lg p-4 mb-6">
+            <div class="flex items-center gap-3">
+                <span class="text-green-400">&#10003;</span>
+                <span class="text-green-300">Enrichment complete</span>
+                <span class="text-green-400 text-sm" x-text="enrichmentTotal + ' CVEs enriched with CVSS/EPSS data'"></span>
+                <a href="/reports/vulns" class="ml-auto text-cyan-400 hover:text-cyan-300 text-sm">View enriched results &rarr;</a>
+            </div>
+        </div>
+
+        <!-- Results Summary (after completion) -->
+        <div x-show="status === 'completed'" class="bg-gray-800 rounded-lg p-6 mb-6">
+            <h2 class="text-lg font-medium text-white mb-3">Results Summary</h2>
+            <div class="flex flex-wrap gap-4 items-center">
+                <span class="text-gray-300">
+                    <span class="text-green-400 font-bold" x-text="completedTools"></span> / <span x-text="toolStates.length"></span> tools completed
+                </span>
+                <span class="text-gray-300">
+                    <span class="text-cyan-400 font-bold" x-text="uploadedTools"></span> uploaded to Faraday
+                </span>
+                <a href="https://faraday.knowledgeondemand.net"
+                   target="_blank" rel="noopener noreferrer"
+                   class="px-4 py-2 bg-cyan-600 text-white rounded-md hover:bg-cyan-700 text-sm"
+                   x-show="uploadedTools > 0">
+                    Open Faraday
+                </a>
+                <button @click="resetScan"
+                        class="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 text-sm">
+                    New Scan
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Log Stream -->
+    <div class="bg-gray-800 rounded-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-medium text-white">Scan Log</h2>
+            <div class="flex gap-2">
+                <!-- Tool filter buttons -->
+                <button @click="logFilter = null"
+                        class="px-3 py-1 text-sm rounded"
+                        :class="logFilter === null ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'">
+                    All
+                </button>
+                <template x-for="tool in toolStates" :key="'filter-' + tool.tool">
+                    <button @click="logFilter = tool.tool"
+                            class="px-3 py-1 text-sm rounded capitalize"
+                            :class="logFilter === tool.tool ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'"
+                            x-text="tool.tool">
+                    </button>
+                </template>
+                <button
+                    @click="autoScroll = !autoScroll"
+                    class="px-3 py-1 text-sm rounded"
+                    :class="autoScroll ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'"
+                >
+                    Auto-scroll
+                </button>
+                <button
+                    @click="logs = []"
+                    class="px-3 py-1 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600"
+                >
+                    Clear
+                </button>
+            </div>
+        </div>
+        {% call log_viewer(ref_name="logContainer", height="h-80") %}
+            <template x-for="(log, idx) in filteredLogs" :key="idx">
+                <div :class="logClass(log)">
+                    <span class="text-gray-500" x-text="formatTime(log.timestamp)"></span>
+                    <span x-show="log.tool" class="text-cyan-400" x-text="'[' + log.tool + ']'"></span>
+                    <span x-text="log.message"></span>
+                </div>
+            </template>
+            <div x-show="filteredLogs.length === 0" class="text-gray-500">
+                No logs yet. Configure and start a scan to see output.
+            </div>
+        {% endcall %}
+    </div>
+
+    <!-- Scan History -->
+    <div class="bg-gray-800 rounded-lg p-6 mt-6" x-show="history.length > 0">
+        <h2 class="text-lg font-medium text-white mb-4">Scan History</h2>
+        <div class="space-y-2">
+            <template x-for="scan in history.slice().reverse()" :key="scan.id">
+                <div class="flex items-center justify-between p-3 bg-gray-700 rounded-lg text-sm">
+                    <div class="flex items-center gap-4">
+                        <span class="font-mono text-gray-400" x-text="scan.id"></span>
+                        <span class="text-white" x-text="scan.target"></span>
+                        <span class="text-gray-400 capitalize" x-text="scan.profile"></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <template x-for="t in scan.tools" :key="scan.id + t.tool">
+                            <span class="capitalize" :class="t.status === 'completed' ? 'text-green-400' : t.status === 'failed' ? 'text-red-400' : 'text-gray-400'"
+                                  x-text="t.tool + (t.findings_count > 0 ? ' (' + t.findings_count + ')' : '')"></span>
+                        </template>
+                        <span :class="scan.status === 'completed' ? 'text-green-400' : scan.status === 'failed' ? 'text-red-400' : 'text-orange-400'"
+                              x-text="scan.status" class="capitalize font-medium"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    {{ connection_status() }}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/scan.js"></script>
+{% endblock %}

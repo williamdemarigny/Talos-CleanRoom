@@ -36,7 +36,7 @@ SSH_USER_GROUPS="sudo,docker"    # Groups for the SSH user (docker for container
 # GitHub SSH Settings (for private repository access)
 GITHUB_SSH_KEY=""                # Path to SSH private key for GitHub
 GITHUB_REPO_URL="git@github.com:williamdemarigny/Talos-CleanRoom.git"
-GIT_BRANCH="main"                                  # Branch to clone
+GIT_BRANCH="refactor/restructure"                   # Branch to clone
 
 # Colors for output
 RED='\033[0;31m'
@@ -44,16 +44,19 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TERRAFORM_DIR="${SCRIPT_DIR}/../terraform/build-lxc"
+
+# Source shared LXC deploy functions
+source "${SCRIPT_DIR}/../lib/lxc-deploy-common.sh"
+
 echo -e "${GREEN}"
 echo "============================================"
 echo "Talos CleanRoom Build VM"
 echo "LXC Container Deployment"
 echo "============================================"
 echo -e "${NC}"
-
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="${SCRIPT_DIR}/terraform"
 
 # Check for terraform
 if ! command -v terraform &> /dev/null; then
@@ -68,57 +71,13 @@ fi
 echo -e "${YELLOW}Please provide the following credentials:${NC}"
 echo ""
 
-if [ -z "${PROXMOX_API_TOKEN:-}" ]; then
-    echo -e "${YELLOW}Proxmox API Token (format: user@pam!tokenid=secret):${NC}"
-    read -r PROXMOX_API_TOKEN
-fi
+prompt_credential PROXMOX_API_TOKEN "Proxmox API Token (format: user@pam!tokenid=secret)" false
+prompt_credential PROXMOX_SSH_PASSWORD "Proxmox SSH password for root" true
+prompt_credential LXC_ROOT_PASSWORD "Password for LXC container root user" true
+prompt_credential SSH_USER_PASSWORD "Password for deploy user '${SSH_USER}' (used for SSH to container)" true
 
-if [ -z "${PROXMOX_SSH_PASSWORD:-}" ]; then
-    echo -e "${YELLOW}Proxmox SSH password for root:${NC}"
-    read -rs PROXMOX_SSH_PASSWORD
-    echo ""
-fi
-
-if [ -z "${LXC_ROOT_PASSWORD:-}" ]; then
-    echo -e "${YELLOW}Password for LXC container root user:${NC}"
-    read -rs LXC_ROOT_PASSWORD
-    echo ""
-fi
-
-if [ -z "${SSH_USER_PASSWORD:-}" ]; then
-    echo -e "${YELLOW}Password for deploy user '${SSH_USER}' (used for SSH to container):${NC}"
-    read -rs SSH_USER_PASSWORD
-    echo ""
-fi
-
-# Prompt for GitHub SSH key
-if [ -z "${GITHUB_SSH_KEY:-}" ]; then
-    # Check common SSH key locations
-    DEFAULT_KEY=""
-    for key_path in ~/.ssh/id_ed25519 ~/.ssh/id_rsa ~/.ssh/github ~/.ssh/id_ecdsa; do
-        if [ -f "$key_path" ]; then
-            DEFAULT_KEY="$key_path"
-            break
-        fi
-    done
-
-    if [ -n "$DEFAULT_KEY" ]; then
-        echo -e "${YELLOW}Path to GitHub SSH private key [${DEFAULT_KEY}]:${NC}"
-        read -r GITHUB_SSH_KEY
-        GITHUB_SSH_KEY="${GITHUB_SSH_KEY:-$DEFAULT_KEY}"
-    else
-        echo -e "${YELLOW}Path to GitHub SSH private key:${NC}"
-        read -r GITHUB_SSH_KEY
-    fi
-fi
-
-# Validate SSH key exists
-if [ ! -f "$GITHUB_SSH_KEY" ]; then
-    echo -e "${RED}Error: SSH key not found at ${GITHUB_SSH_KEY}${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Using SSH key: ${GITHUB_SSH_KEY}${NC}"
+# Resolve and validate GitHub SSH key
+resolve_ssh_key "" || exit 1
 
 # ===========================================
 # VALIDATE KUBECONFIG
@@ -132,7 +91,7 @@ KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
 if [ -z "${KUBECONFIG_FILE}" ]; then
     DEFAULT_KUBECONFIG="${HOME}/.kube/config"
     if [ -f "$DEFAULT_KUBECONFIG" ]; then
-        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [${DEFAULT_KUBECONFIG}]:${NC}"
+        echo -e "${YELLOW}Path to kubeconfig for Talos cluster [$(display_path "$DEFAULT_KUBECONFIG")]:${NC}"
         read -r KUBECONFIG_FILE
         KUBECONFIG_FILE="${KUBECONFIG_FILE:-$DEFAULT_KUBECONFIG}"
     else
@@ -142,12 +101,12 @@ if [ -z "${KUBECONFIG_FILE}" ]; then
 fi
 
 if [ ! -f "$KUBECONFIG_FILE" ]; then
-    echo -e "${RED}Error: Kubeconfig not found at ${KUBECONFIG_FILE}${NC}"
+    echo -e "${RED}Error: Kubeconfig not found at $(display_path "${KUBECONFIG_FILE}")${NC}"
     echo "  The build VM needs kubectl access to create Harbor pull secrets."
     echo "  Generate one with: talosctl kubeconfig --nodes <control-plane-ip>"
     exit 1
 fi
-echo -e "${GREEN}Found kubeconfig: ${KUBECONFIG_FILE}${NC}"
+echo -e "${GREEN}Found kubeconfig: $(display_path "${KUBECONFIG_FILE}")${NC}"
 
 # ===========================================
 # SSH SETUP
@@ -420,7 +379,7 @@ echo "  - Kubeconfig (kubectl access to Talos cluster)"
 echo ""
 echo "To build and push the LOKI-RS image to Harbor:"
 echo "  ssh ${SSH_USER}@${CONTAINER_IP}"
-echo "  cd /opt/talos-cleanroom/Resources/IAC-DNS/infrastructure/projects/loki"
+echo "  cd /opt/talos-cleanroom/apps/loki"
 echo "  ./build-and-push.sh"
 echo ""
 echo -e "${YELLOW}Recovery (if locked out):${NC}"

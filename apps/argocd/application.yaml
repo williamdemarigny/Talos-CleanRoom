@@ -1,0 +1,49 @@
+# ArgoCD Self-Managing Application
+# After initial Helm bootstrap, ArgoCD manages its own configuration
+# Changes to values.yaml will be auto-synced
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+spec:
+  project: default
+  sources:
+    # Helm chart source
+    - repoURL: https://argoproj.github.io/argo-helm
+      targetRevision: 9.4.3
+      chart: argo-cd
+      helm:
+        valueFiles:
+          - $values/apps/argocd/values.yaml
+    # Git repo containing values.yaml
+    - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
+      targetRevision: refactor/restructure
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  ignoreDifferences:
+    # Ignore argocd-secret data which is managed externally (passwords)
+    - group: ""
+      kind: Secret
+      name: argocd-secret
+      jsonPointers:
+        - /data/admin.password
+        - /data/admin.passwordMtime
+        - /stringData
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

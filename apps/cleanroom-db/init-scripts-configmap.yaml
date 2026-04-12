@@ -1,0 +1,13 @@
+# ConfigMap containing SQL scripts run on first PostgreSQL initialization.
+# Scripts in /docker-entrypoint-initdb.d/ are executed alphabetically
+# ONLY on first startup (when PGDATA is empty).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cleanroom-db-init-scripts
+  namespace: cleanroom-db
+  labels:
+    app.kubernetes.io/name: cleanroom-db
+    app.kubernetes.io/component: database
+data: {}

@@ -1,0 +1,4839 @@
+"""Scan service for orchestrating security scans across multiple tools.
+
+This module provides the ScanService class which orchestrates vulnerability
+scans using Nmap, OpenVAS, and Metasploit, then uploads results to Faraday
+for consolidated vulnerability management.
+"""
+
+import asyncio
+import base64
+import json
+import logging
+import re
+import uuid
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from typing import Optional, Callable, Awaitable, List
+from dataclasses import dataclass, field
+
+from app.models.scan import (
+    ScanState, ScanStatus, ScanTool, ScanProfile,
+    ScanToolState, ScanLogEntry, ScanRequest
+)
+from talos_common.services.process_manager import ProcessManager
+from talos_common.services.kubectl_utils import KubernetesHelper
+from app.services.faraday_client import FaradayClient
+from app.services import result_store
+from app.db import engine as db_engine
+from talos_common.services.base_service import BaseServiceMixin
+
+logger = logging.getLogger(__name__)
+
+# Nmap NSE script severity classification
+NMAP_HIGH_SEVERITY_SCRIPTS = frozenset([
+    "vuln", "exploit", "cve", "ms17", "ms08",
+    "heartbleed", "shellshock", "log4shell", "bluekeep",
+])
+NMAP_INFO_SSL_SCRIPTS = frozenset([
+    "ssl-cert", "ssl-date", "tls-alpn", "tls-nextprotoneg",
+])
+
+# Metasploit severity classification
+MSF_CRITICAL_KEYWORDS = frozenset([
+    "ms17-010", "eternalblue", "bluekeep", "log4shell",
+    "shellshock", "heartbleed", "critical",
+])
+MSF_MEDIUM_KEYWORDS = frozenset(["exploit", "vuln", "weak"])
+
+# OpenVAS threat level to severity mapping
+OPENVAS_SEVERITY_MAP = {
+    "Alarm": "critical", "High": "high", "Medium": "medium",
+    "Low": "low", "Log": "info", "Debug": "info",
+}
+
+# Field truncation limits
+MAX_DESCRIPTION_LENGTH = 4000
+MAX_DATA_LENGTH = 8000
+
+# Nmap NSE script → CWE mapping for non-CVE enrichment
+NMAP_SCRIPT_CWE_MAP = {
+    "ssl-heartbleed": ["CWE-119"],
+    "ssl-poodle": ["CWE-310"],
+    "ssl-ccs-injection": ["CWE-310"],
+    "ssl-dh-params": ["CWE-310"],
+    "ssl-known-key": ["CWE-321"],
+    "sslv2-drown": ["CWE-310"],
+    "ssl-enum-ciphers": ["CWE-327"],
+    "ssh-auth-methods": ["CWE-287"],
+    "http-cross-domain-policy": ["CWE-942"],
+    "http-csrf": ["CWE-352"],
+    "http-dombased-xss": ["CWE-79"],
+    "http-stored-xss": ["CWE-79"],
+    "http-phpself-xss": ["CWE-79"],
+    "http-sql-injection": ["CWE-89"],
+    "http-shellshock": ["CWE-78"],
+    "http-slowloris-check": ["CWE-400"],
+    "http-vuln-cve2017-5638": ["CWE-20"],
+    "smb-vuln-ms17-010": ["CWE-20"],
+    "smb-vuln-ms08-067": ["CWE-94"],
+    "ftp-anon": ["CWE-284"],
+    "http-methods": ["CWE-749"],
+    "http-open-proxy": ["CWE-441"],
+    "dns-zone-transfer": ["CWE-200"],
+    "snmp-info": ["CWE-200"],
+    "telnet-encryption": ["CWE-319"],
+    "mysql-vuln-cve2012-2122": ["CWE-305"],
+    "http-drupal-enum": ["CWE-200"],
+    "http-wordpress-enum": ["CWE-200"],
+    "http-put": ["CWE-749"],
+    "smb-os-discovery": ["CWE-200"],
+    "smb-protocols": ["CWE-200"],
+}
+
+# Scan timeout defaults (seconds)
+NMAP_TIMEOUT_QUICK = 300       # 5 min for ping sweep
+NMAP_TIMEOUT_STANDARD = 900    # 15 min for service detection
+NMAP_TIMEOUT_THOROUGH = 3600   # 60 min for full port scan
+# OpenVAS timeouts per profile (seconds) — outer safety net for asyncio.wait_for.
+# GMP scripts self-terminate on stale progress (30min no change), so these are generous ceilings.
+OPENVAS_TIMEOUTS = {
+    ScanProfile.QUICK: 7500,        # 2h 5min — host discovery finishes fast
+    ScanProfile.STANDARD: 28800,    # 8h — full-and-fast on large subnets
+    ScanProfile.THOROUGH: 50400,    # 14h — full-and-deep, many hosts
+    ScanProfile.CUSTOM: 50400,      # 14h — custom family scans may be thorough
+}
+METASPLOIT_TIMEOUT_QUICK = 900       # 15 min for quick scan
+METASPLOIT_TIMEOUT_STANDARD = 5400   # 90 min for standard scan (12 vuln modules)
+METASPLOIT_TIMEOUT_THOROUGH = 10800  # 3 hours for thorough scan (39 vuln modules)
+WPSCAN_TIMEOUT_QUICK = 120          # 2 min for version detection only
+WPSCAN_TIMEOUT_STANDARD = 600       # 10 min for plugin/theme enumeration
+WPSCAN_TIMEOUT_THOROUGH = 1800      # 30 min for aggressive enumeration
+FARADAY_UPLOAD_TIMEOUT = 300   # 5 min for Faraday upload (one API call per result)
+
+# Nmap flags per profile
+# -Pn: skip host discovery — K8s ClusterIP services only forward traffic on
+# defined service ports, so ICMP and TCP 443/80 probes used for host discovery
+# are silently dropped, causing nmap to report "Host seems down" and skip the
+# scan entirely.  Metasploit's db_nmap already uses -Pn for this reason.
+NMAP_PROFILES = {
+    ScanProfile.QUICK: ["-Pn", "-T4", "--top-ports", "100"],
+    ScanProfile.STANDARD: ["-Pn", "-sV", "-sC"],
+    ScanProfile.THOROUGH: ["-Pn", "-sV", "-sC", "-p-", "-A"],
+}
+
+# OpenVAS scan config UUIDs
+# Quick uses the stock Host Discovery config.
+# Standard/Thorough use a clone of Full and Fast ("Talos CleanRoom Active Web")
+# with "Enable generic web application scanning" set to YES — without this,
+# Log4Shell active checks and other webapp NVTs are silently skipped.
+# The clone config (d5440c17) was created via direct GMP + SQL insert to set
+# NVT preference 12288:7 (Enable generic web application scanning) = yes.
+OPENVAS_SCAN_CONFIGS = {
+    ScanProfile.QUICK: "2d3f051c-55ba-11e3-bf43-406186ea4fc5",     # Host Discovery
+    ScanProfile.STANDARD: "d5440c17-a640-4cff-a67a-cb7742fec937",  # Talos CleanRoom Active Web
+    ScanProfile.THOROUGH: "d5440c17-a640-4cff-a67a-cb7742fec937",  # Talos CleanRoom Active Web
+}
+# Fallback: if the custom config UUID isn't found, use stock Full and Fast
+OPENVAS_FALLBACK_CONFIG = "daba56c8-73ec-11df-a475-002264764cea"
+
+# Greenbone XML report format UUID
+OPENVAS_XML_FORMAT = "a994b278-1f62-11e1-96ac-406186ea4fc5"
+
+# =============================================================================
+# Metasploit Module Catalog — single source of truth for all profiles
+# =============================================================================
+MSF_MODULE_CATALOG = [
+    # --- Critical CVEs (included in standard + thorough) ---
+    # default_port: the protocol's standard port. When scanning a target with an
+    # explicit port (e.g. host:8983), RPORT is only overridden for modules whose
+    # default_port matches the target port, or for HTTP modules (no default_port)
+    # which accept whatever port the user specifies.
+    # cve_id: authoritative CVE for this module — used as external_id when the
+    #   db_export XML or console output doesn't contain CVE refs.
+    # check_only: if True, use "check" instead of "run" (for exploit modules
+    #   that support safe vulnerability verification without exploitation).
+    {
+        "id": "auxiliary/scanner/smb/smb_ms17_010",
+        "name": "EternalBlue (MS17-010)",
+        "category": "Critical CVEs",
+        "description": "SMB Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 445,
+        "cve_id": "CVE-2017-0144",
+    },
+    {
+        "id": "auxiliary/scanner/rdp/cve_2019_0708_bluekeep",
+        "name": "BlueKeep (CVE-2019-0708)",
+        "category": "Critical CVEs",
+        "description": "RDP Remote Code Execution check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 3389,
+        "cve_id": "CVE-2019-0708",
+    },
+    {
+        "id": "auxiliary/scanner/ssl/openssl_heartbleed",
+        "name": "Heartbleed (CVE-2014-0160)",
+        "category": "Critical CVEs",
+        "description": "OpenSSL memory disclosure",
+        "profiles": ["standard", "thorough"],
+        "default_port": 443,
+        "cve_id": "CVE-2014-0160",
+    },
+    {
+        "id": "auxiliary/scanner/http/log4shell_scanner",
+        "name": "Log4Shell (CVE-2021-44228)",
+        "category": "Critical CVEs",
+        "description": "Apache Log4j Remote Code Execution",
+        "profiles": ["standard", "thorough"],
+        "needs_srvhost": True,  # scanner sends JNDI payload; target calls back to SRVHOST
+        "cve_id": "CVE-2021-44228",
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_mod_cgi_bash_env",
+        "name": "Shellshock (CVE-2014-6271)",
+        "category": "Critical CVEs",
+        "description": "Bash environment variable injection via CGI",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2014-6271",
+    },
+    {
+        "id": "auxiliary/scanner/http/ms15_034_http_sys_memory_dump",
+        "name": "HTTP.sys (MS15-034)",
+        "category": "Critical CVEs",
+        "description": "IIS HTTP.sys memory disclosure",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2015-1635",
+    },
+    {
+        "id": "exploit/linux/samba/is_known_pipename",
+        "name": "SambaCry (CVE-2017-7494)",
+        "category": "Critical CVEs",
+        "description": "Samba Remote Code Execution via writable share",
+        "profiles": ["standard", "thorough"],
+        "default_port": 445,
+        "cve_id": "CVE-2017-7494",
+        "check_only": True,  # safe check mode — verifies vuln without exploitation
+    },
+    # --- Vulhub Target Lab Exploits (included in standard + thorough) ---
+    # These modules target CVEs present in the Vulhub target lab environments.
+    # All use check_only: True for safe vulnerability verification without exploitation.
+    {
+        "id": "exploit/unix/webapp/drupal_drupalgeddon2",
+        "name": "Drupalgeddon 2 (CVE-2018-7600)",
+        "category": "Vulhub Labs",
+        "description": "Drupal 7 Form API RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2018-7600",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/phpmailer_arg_injection",
+        "name": "PHPMailer Arg Injection (CVE-2016-10033)",
+        "category": "Vulhub Labs",
+        "description": "PHPMailer sender argument injection RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2016-10033",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/tomcat_jsp_upload_bypass",
+        "name": "Tomcat PUT JSP Upload (CVE-2017-12615)",
+        "category": "Vulhub Labs",
+        "description": "Apache Tomcat PUT method JSP upload RCE check",
+        "profiles": ["standard", "thorough"],
+        "cve_id": "CVE-2017-12615",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/struts2_rest_xstream",
+        "name": "Struts2 REST XStream (CVE-2017-9805)",
+        "category": "Vulhub Labs",
+        "description": "Apache Struts2 REST plugin XStream deserialization",
+        "profiles": ["thorough"],
+        "cve_id": "CVE-2017-9805",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/http/oracle_weblogic_wsat_deserialization_rce",
+        "name": "WebLogic WLS-WSAT XMLDecoder (CVE-2017-10271)",
+        "category": "Vulhub Labs",
+        "description": "Oracle WebLogic WLS-WSAT XMLDecoder deserialization RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 7001,
+        "cve_id": "CVE-2017-10271",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/misc/weblogic_deserialize",
+        "name": "WebLogic T3 Deserialize (CVE-2015-4852)",
+        "category": "Vulhub Labs",
+        "description": "Oracle WebLogic T3 protocol deserialization RCE check",
+        "profiles": ["thorough"],
+        "default_port": 7001,
+        "cve_id": "CVE-2015-4852",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/elasticsearch/script_mvel_rce",
+        "name": "Elasticsearch MVEL Script RCE (CVE-2014-3120)",
+        "category": "Vulhub Labs",
+        "description": "Elasticsearch dynamic scripting MVEL RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 9200,
+        "cve_id": "CVE-2014-3120",
+        "check_only": True,
+    },
+    {
+        "id": "exploit/multi/elasticsearch/search_groovy_script",
+        "name": "Elasticsearch Groovy Script RCE (CVE-2015-1427)",
+        "category": "Vulhub Labs",
+        "description": "Elasticsearch Groovy script sandbox escape RCE check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 9200,
+        "cve_id": "CVE-2015-1427",
+        "check_only": True,
+    },
+    {
+        "id": "auxiliary/scanner/redis/redis_server",
+        "name": "Redis Server Info",
+        "category": "Vulhub Labs",
+        "description": "Redis unauthenticated server information disclosure",
+        "profiles": ["standard", "thorough"],
+        "default_port": 6379,
+    },
+    {
+        "id": "auxiliary/scanner/ssh/libssh_auth_bypass",
+        "name": "libssh Auth Bypass (CVE-2018-10933)",
+        "category": "Vulhub Labs",
+        "description": "libssh server-side authentication state bypass",
+        "profiles": ["standard", "thorough"],
+        "default_port": 2222,
+        "cve_id": "CVE-2018-10933",
+    },
+    # --- Service Detection (included in standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_version",
+        "name": "SMB Version",
+        "category": "Service Detection",
+        "description": "SMB protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/ssh/ssh_version",
+        "name": "SSH Version",
+        "category": "Service Detection",
+        "description": "SSH protocol version fingerprint",
+        "profiles": ["standard", "thorough"],
+        "default_port": 22,
+    },
+    {
+        "id": "auxiliary/scanner/http/http_version",
+        "name": "HTTP Version",
+        "category": "Service Detection",
+        "description": "HTTP server fingerprint",
+        "profiles": ["standard", "thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/ftp/anonymous",
+        "name": "FTP Anonymous",
+        "category": "Service Detection",
+        "description": "FTP anonymous access check",
+        "profiles": ["standard", "thorough"],
+        "default_port": 21,
+    },
+    # --- Extended SMB (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smb/smb_enumshares",
+        "name": "SMB Share Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB shares",
+        "profiles": ["thorough"],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb_enumusers",
+        "name": "SMB User Enumeration",
+        "category": "Extended SMB",
+        "description": "Enumerate SMB users",
+        "profiles": ["thorough"],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/smb/pipe_auditor",
+        "name": "SMB Pipe Auditor",
+        "category": "Extended SMB",
+        "description": "SMB named pipe auditing",
+        "profiles": ["thorough"],
+        "default_port": 445,
+    },
+    # --- Extended RDP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/rdp/rdp_scanner",
+        "name": "RDP Scanner",
+        "category": "Extended RDP",
+        "description": "RDP service detection",
+        "profiles": ["thorough"],
+        "default_port": 3389,
+    },
+    # --- Extended SSH (thorough only) ---
+    # libssh_auth_bypass moved to Vulhub Labs section (now in standard profile)
+    {
+        "id": "auxiliary/scanner/ssh/ssh_enumusers",
+        "name": "SSH User Enumeration",
+        "category": "Extended SSH",
+        "description": "Enumerate SSH users via wordlist",
+        "profiles": ["thorough"],
+        "default_port": 22,
+        "extra_opts": {"USER_FILE": "/opt/metasploit-framework/data/wordlists/unix_users.txt"},
+    },
+    # --- HTTP/Web (thorough only) ---
+    {
+        "id": "auxiliary/scanner/http/title",
+        "name": "HTTP Title",
+        "category": "HTTP/Web",
+        "description": "HTTP page title extraction",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/dir_scanner",
+        "name": "Directory Scanner",
+        "category": "HTTP/Web",
+        "description": "HTTP directory brute-force",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/robots_txt",
+        "name": "Robots.txt",
+        "category": "HTTP/Web",
+        "description": "robots.txt discovery",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/http_put",
+        "name": "HTTP PUT",
+        "category": "HTTP/Web",
+        "description": "HTTP PUT method test",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/tomcat_mgr_login",
+        "name": "Tomcat Manager Login",
+        "category": "HTTP/Web",
+        "description": "Tomcat default credentials check",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/wordpress_scanner",
+        "name": "WordPress Scanner",
+        "category": "HTTP/Web",
+        "description": "WordPress detection and enumeration",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/jenkins_enum",
+        "name": "Jenkins Enum",
+        "category": "HTTP/Web",
+        "description": "Jenkins open dashboard detection",
+        "profiles": ["thorough"],
+    },
+    {
+        "id": "auxiliary/scanner/http/webdav_scanner",
+        "name": "WebDAV Scanner",
+        "category": "HTTP/Web",
+        "description": "WebDAV detection",
+        "profiles": ["thorough"],
+    },
+    # --- SSL/TLS (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ssl/ssl_version",
+        "name": "SSL/TLS Version",
+        "category": "SSL/TLS",
+        "description": "SSL/TLS version and cipher analysis",
+        "profiles": ["thorough"],
+        "default_port": 443,
+    },
+    # --- FTP (thorough only) ---
+    {
+        "id": "auxiliary/scanner/ftp/ftp_version",
+        "name": "FTP Version",
+        "category": "FTP",
+        "description": "FTP version fingerprint",
+        "profiles": ["thorough"],
+        "default_port": 21,
+    },
+    # --- Email (thorough only) ---
+    {
+        "id": "auxiliary/scanner/smtp/smtp_version",
+        "name": "SMTP Version",
+        "category": "Email",
+        "description": "SMTP server version detection",
+        "profiles": ["thorough"],
+        "default_port": 25,
+    },
+    {
+        "id": "auxiliary/scanner/smtp/smtp_relay",
+        "name": "SMTP Open Relay",
+        "category": "Email",
+        "description": "Open SMTP relay check",
+        "profiles": ["thorough"],
+        "default_port": 25,
+    },
+    {
+        "id": "auxiliary/scanner/pop3/pop3_version",
+        "name": "POP3 Version",
+        "category": "Email",
+        "description": "POP3 server version detection",
+        "profiles": ["thorough"],
+        "default_port": 110,
+    },
+    # --- Database (standard + thorough) ---
+    {
+        "id": "auxiliary/scanner/mysql/mysql_version",
+        "name": "MySQL Version",
+        "category": "Database",
+        "description": "MySQL version detection",
+        "profiles": ["standard", "thorough"],
+        "default_port": 3306,
+    },
+    {
+        "id": "auxiliary/scanner/mysql/mysql_authbypass_hashdump",
+        "name": "MySQL Auth Bypass (CVE-2012-2122)",
+        "category": "Database",
+        "description": "MySQL/MariaDB authentication bypass via timing attack — dumps hashes on success",
+        "profiles": ["standard", "thorough"],
+        "default_port": 3306,
+        "cve_id": "CVE-2012-2122",
+    },
+    {
+        "id": "auxiliary/scanner/postgres/postgres_version",
+        "name": "PostgreSQL Version",
+        "category": "Database",
+        "description": "PostgreSQL version detection",
+        "profiles": ["thorough"],
+        "default_port": 5432,
+    },
+    {
+        "id": "auxiliary/scanner/mssql/mssql_ping",
+        "name": "MSSQL Discovery",
+        "category": "Database",
+        "description": "MSSQL instance discovery",
+        "profiles": ["thorough"],
+        "default_port": 1433,
+    },
+    {
+        "id": "auxiliary/scanner/mongodb/mongodb_login",
+        "name": "MongoDB Login",
+        "category": "Database",
+        "description": "MongoDB unauthenticated access check",
+        "profiles": ["thorough"],
+        "default_port": 27017,
+    },
+    # redis_server moved to Vulhub Labs section (now in standard profile)
+    # --- Network Infrastructure (thorough only) ---
+    {
+        "id": "auxiliary/scanner/telnet/telnet_version",
+        "name": "Telnet Version",
+        "category": "Network Infrastructure",
+        "description": "Telnet service detection",
+        "profiles": ["thorough"],
+        "default_port": 23,
+    },
+    {
+        "id": "auxiliary/scanner/snmp/snmp_enum",
+        "name": "SNMP Enumeration",
+        "category": "Network Infrastructure",
+        "description": "SNMP community string enumeration",
+        "profiles": ["thorough"],
+        "default_port": 161,
+    },
+    {
+        "id": "auxiliary/scanner/netbios/nbname",
+        "name": "NetBIOS Name",
+        "category": "Network Infrastructure",
+        "description": "NetBIOS name resolution",
+        "profiles": ["thorough"],
+        "default_port": 137,
+    },
+    {
+        "id": "auxiliary/scanner/discovery/udp_sweep",
+        "name": "UDP Sweep",
+        "category": "Network Infrastructure",
+        "description": "UDP service discovery",
+        "profiles": ["thorough"],
+    },
+    # --- Remote Access (thorough only) ---
+    {
+        "id": "auxiliary/scanner/vnc/vnc_none_auth",
+        "name": "VNC No-Auth",
+        "category": "Remote Access",
+        "description": "VNC no-authentication check",
+        "profiles": ["thorough"],
+        "default_port": 5900,
+    },
+    # =================================================================
+    # Additional modules (custom profile only — not in any preset)
+    # =================================================================
+    # --- Additional CVE Scanners ---
+    {
+        "id": "auxiliary/scanner/http/exchange_proxylogon",
+        "name": "ProxyLogon (CVE-2021-26855)",
+        "category": "Additional CVEs",
+        "description": "Exchange Server SSRF to RCE",
+        "profiles": [],
+        "cve_id": "CVE-2021-26855",
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_normalize_path",
+        "name": "Apache Path Traversal (CVE-2021-41773)",
+        "category": "Additional CVEs",
+        "description": "Apache HTTP Server path traversal",
+        "profiles": [],
+        "cve_id": "CVE-2021-41773",
+    },
+    {
+        "id": "auxiliary/scanner/http/citrix_dir_traversal",
+        "name": "Citrix ADC Traversal (CVE-2019-19781)",
+        "category": "Additional CVEs",
+        "description": "Citrix ADC/Gateway directory traversal",
+        "profiles": [],
+        "cve_id": "CVE-2019-19781",
+    },
+    {
+        "id": "auxiliary/scanner/http/apache_optionsbleed",
+        "name": "Optionsbleed (CVE-2017-9798)",
+        "category": "Additional CVEs",
+        "description": "Apache OPTIONS memory leak",
+        "profiles": [],
+        "cve_id": "CVE-2017-9798",
+    },
+    {
+        "id": "auxiliary/scanner/vmware/vmauthd_version",
+        "name": "VMware Auth Daemon",
+        "category": "Additional CVEs",
+        "description": "VMware authentication daemon detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_cipher_zero",
+        "name": "IPMI Cipher Zero",
+        "category": "Additional CVEs",
+        "description": "IPMI cipher zero authentication bypass",
+        "profiles": [],
+    },
+    # --- Credential Checks ---
+    {
+        "id": "auxiliary/scanner/smb/smb_login",
+        "name": "SMB Login",
+        "category": "Credential Checks",
+        "description": "SMB default/weak credential check",
+        "profiles": [],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/ssh/ssh_login",
+        "name": "SSH Login",
+        "category": "Credential Checks",
+        "description": "SSH default/weak credential check",
+        "profiles": [],
+        "default_port": 22,
+    },
+    {
+        "id": "auxiliary/scanner/ftp/ftp_login",
+        "name": "FTP Login",
+        "category": "Credential Checks",
+        "description": "FTP default/weak credential check",
+        "profiles": [],
+        "default_port": 21,
+    },
+    {
+        "id": "auxiliary/scanner/mysql/mysql_login",
+        "name": "MySQL Login",
+        "category": "Credential Checks",
+        "description": "MySQL default/weak credential check",
+        "profiles": [],
+        "default_port": 3306,
+    },
+    {
+        "id": "auxiliary/scanner/postgres/postgres_login",
+        "name": "PostgreSQL Login",
+        "category": "Credential Checks",
+        "description": "PostgreSQL default/weak credential check",
+        "profiles": [],
+        "default_port": 5432,
+    },
+    {
+        "id": "auxiliary/scanner/mssql/mssql_login",
+        "name": "MSSQL Login",
+        "category": "Credential Checks",
+        "description": "MSSQL default/weak credential check",
+        "profiles": [],
+        "default_port": 1433,
+    },
+    {
+        "id": "auxiliary/scanner/vnc/vnc_login",
+        "name": "VNC Login",
+        "category": "Credential Checks",
+        "description": "VNC default/weak credential check",
+        "profiles": [],
+        "default_port": 5900,
+    },
+    {
+        "id": "auxiliary/scanner/telnet/telnet_login",
+        "name": "Telnet Login",
+        "category": "Credential Checks",
+        "description": "Telnet default/weak credential check",
+        "profiles": [],
+        "default_port": 23,
+    },
+    {
+        "id": "auxiliary/scanner/snmp/snmp_login",
+        "name": "SNMP Login",
+        "category": "Credential Checks",
+        "description": "SNMP community string brute-force",
+        "profiles": [],
+        "default_port": 161,
+    },
+    {
+        "id": "auxiliary/scanner/winrm/winrm_login",
+        "name": "WinRM Login",
+        "category": "Credential Checks",
+        "description": "WinRM default/weak credential check",
+        "profiles": [],
+        "default_port": 5985,
+    },
+    # --- Additional Web Application ---
+    {
+        "id": "auxiliary/scanner/http/joomla_version",
+        "name": "Joomla Detection",
+        "category": "Additional Web",
+        "description": "Joomla CMS version detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/drupal_views_user_enum",
+        "name": "Drupal User Enum",
+        "category": "Additional Web",
+        "description": "Drupal views user enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/jboss_vulnscan",
+        "name": "JBoss Vuln Scan",
+        "category": "Additional Web",
+        "description": "JBoss application server vulnerability scan",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/verb_auth_bypass",
+        "name": "HTTP Verb Tampering",
+        "category": "Additional Web",
+        "description": "HTTP verb tampering authentication bypass",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/backup_file",
+        "name": "Backup File Discovery",
+        "category": "Additional Web",
+        "description": "Common backup file detection (.bak, .old, etc)",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/trace_axd",
+        "name": "ASP.NET Trace",
+        "category": "Additional Web",
+        "description": "ASP.NET trace.axd information disclosure",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/files_dir",
+        "name": "Sensitive File Discovery",
+        "category": "Additional Web",
+        "description": "Common sensitive file and directory detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/cert",
+        "name": "SSL Certificate Info",
+        "category": "Additional Web",
+        "description": "SSL/TLS certificate information extraction",
+        "profiles": [],
+    },
+    # --- Windows / Active Directory ---
+    {
+        "id": "auxiliary/scanner/smb/smb_lookupsid",
+        "name": "SMB SID Lookup",
+        "category": "Windows/AD",
+        "description": "SID enumeration for user discovery",
+        "profiles": [],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/smb/smb2",
+        "name": "SMBv2 Detection",
+        "category": "Windows/AD",
+        "description": "SMBv2 protocol support detection",
+        "profiles": [],
+        "default_port": 445,
+    },
+    {
+        "id": "auxiliary/scanner/winrm/winrm_auth_methods",
+        "name": "WinRM Auth Methods",
+        "category": "Windows/AD",
+        "description": "WinRM authentication method enumeration",
+        "profiles": [],
+        "default_port": 5985,
+    },
+    {
+        "id": "auxiliary/scanner/dcerpc/endpoint_mapper",
+        "name": "DCERPC Endpoint Mapper",
+        "category": "Windows/AD",
+        "description": "DCERPC endpoint mapper enumeration",
+        "profiles": [],
+        "default_port": 135,
+    },
+    {
+        "id": "auxiliary/scanner/dcerpc/management",
+        "name": "DCERPC Management",
+        "category": "Windows/AD",
+        "description": "DCERPC management interface detection",
+        "profiles": [],
+        "default_port": 135,
+    },
+    # --- Additional Network Infrastructure ---
+    {
+        "id": "auxiliary/scanner/dns/dns_amp",
+        "name": "DNS Amplification",
+        "category": "Additional Network",
+        "description": "DNS amplification vulnerability check",
+        "profiles": [],
+        "default_port": 53,
+    },
+    {
+        "id": "auxiliary/scanner/ntp/ntp_monlist",
+        "name": "NTP Monlist",
+        "category": "Additional Network",
+        "description": "NTP monlist amplification check",
+        "profiles": [],
+        "default_port": 123,
+    },
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_version",
+        "name": "IPMI Version",
+        "category": "Additional Network",
+        "description": "IPMI version and capability detection",
+        "profiles": [],
+        "default_port": 623,
+    },
+    {
+        "id": "auxiliary/scanner/nfs/nfsmount",
+        "name": "NFS Exports",
+        "category": "Additional Network",
+        "description": "NFS export enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/sip/enumerator",
+        "name": "SIP Enumerator",
+        "category": "Additional Network",
+        "description": "SIP user/extension enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rsync/modules_list",
+        "name": "Rsync Modules",
+        "category": "Additional Network",
+        "description": "Rsync module listing",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/elasticsearch/indices_enum",
+        "name": "Elasticsearch Indices",
+        "category": "Additional Network",
+        "description": "Elasticsearch index enumeration",
+        "profiles": [],
+    },
+    # --- Additional Web Discovery ---
+    {
+        "id": "auxiliary/scanner/http/open_proxy",
+        "name": "Open Proxy",
+        "category": "Additional Web",
+        "description": "Open HTTP proxy detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/sqli_simple",
+        "name": "SQL Injection Check",
+        "category": "Additional Web",
+        "description": "Simple SQL injection detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/iis_shortname_scanner",
+        "name": "IIS Short Name",
+        "category": "Additional Web",
+        "description": "IIS 8.3 short filename enumeration",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/svn_scanner",
+        "name": "SVN Repository",
+        "category": "Additional Web",
+        "description": "Exposed SVN repository detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/git_scanner",
+        "name": "Git Repository",
+        "category": "Additional Web",
+        "description": "Exposed .git directory detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/http/owa_login",
+        "name": "Outlook Web Access",
+        "category": "Additional Web",
+        "description": "OWA login page detection",
+        "profiles": [],
+    },
+    # --- Additional Service Discovery ---
+    {
+        "id": "auxiliary/scanner/misc/java_rmi_server",
+        "name": "Java RMI",
+        "category": "Additional Network",
+        "description": "Java RMI registry detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/x11/open_x11",
+        "name": "Open X11",
+        "category": "Additional Network",
+        "description": "Open X11 display detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rlogin_login",
+        "name": "rlogin Access",
+        "category": "Additional Network",
+        "description": "rlogin unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/rservices/rsh_login",
+        "name": "rsh Access",
+        "category": "Additional Network",
+        "description": "rsh unauthenticated access check",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/llmnr/query",
+        "name": "LLMNR Query",
+        "category": "Additional Network",
+        "description": "LLMNR poisoning target detection",
+        "profiles": [],
+    },
+    {
+        "id": "auxiliary/scanner/mdns/query",
+        "name": "mDNS Query",
+        "category": "Additional Network",
+        "description": "mDNS service discovery",
+        "profiles": [],
+    },
+    # --- IPMI Extended ---
+    {
+        "id": "auxiliary/scanner/ipmi/ipmi_dumphashes",
+        "name": "IPMI Hash Dump",
+        "category": "Additional Network",
+        "description": "IPMI password hash extraction",
+        "profiles": [],
+    },
+    # --- Printer/IoT ---
+    {
+        "id": "auxiliary/scanner/printer/printer_list_volumes",
+        "name": "Printer Volumes",
+        "category": "Additional Network",
+        "description": "Network printer volume enumeration",
+        "profiles": [],
+    },
+]
+
+# Build module ID → CVE lookup from catalog entries that have cve_id.
+# Used during result persistence: if db_export XML or console output lacks
+# CVE refs, we fall back to this mapping so enrichment can still run.
+_MSF_MODULE_CVE_MAP = {
+    m["id"]: m["cve_id"]
+    for m in MSF_MODULE_CATALOG
+    if m.get("cve_id")
+}
+# Also index by short module name (last path segment, e.g. "smb_ms17_010")
+# because console findings use module_name.split("/")[-1] as the vuln name.
+_MSF_MODULE_CVE_MAP_SHORT = {
+    m["id"].rsplit("/", 1)[-1]: m["cve_id"]
+    for m in MSF_MODULE_CATALOG
+    if m.get("cve_id")
+}
+
+
+@dataclass
+class ScanService(BaseServiceMixin):
+    """Service for orchestrating security scans.
+
+    Uses BaseServiceMixin for shared patterns (k8s helper, poll_until).
+    Uses KubernetesHelper for kubectl operations.
+    Uses FaradayClient for Faraday credential and upload operations.
+    """
+
+    process_manager: ProcessManager = field(default_factory=ProcessManager)
+    current_scan: Optional[ScanState] = None
+    logs: List[ScanLogEntry] = field(default_factory=list)
+    scan_history: List[dict] = field(default_factory=list)
+    log_callback: Optional[Callable[[ScanLogEntry], Awaitable[None]]] = None
+    tool_callback: Optional[Callable[[ScanToolState], Awaitable[None]]] = None
+
+    def __post_init__(self):
+        self._k8s_helper = KubernetesHelper(self.process_manager)
+        self.faraday_client = FaradayClient(self.process_manager)
+
+    async def log(self, tool: Optional[str], level: str, message: str):
+        """Log a message and notify via callback."""
+        entry = ScanLogEntry(
+            timestamp=datetime.utcnow(),
+            tool=tool,
+            level=level,
+            message=message
+        )
+        await self._log_with_callback(entry, self.log_callback)
+
+    async def _update_tool_state(self, tool: ScanTool, **kwargs):
+        """Update a tool's state and notify via callback."""
+        if not self.current_scan:
+            return
+        for ts in self.current_scan.tools:
+            if ts.tool == tool:
+                for key, value in kwargs.items():
+                    setattr(ts, key, value)
+                if self.tool_callback:
+                    try:
+                        await self.tool_callback(ts)
+                    except Exception as exc:
+                        logger.debug("Tool state broadcast callback failed: %s", exc)
+                break
+
+    def get_module_catalog(self) -> list:
+        """Return the Metasploit module catalog for custom profile selection."""
+        return MSF_MODULE_CATALOG
+
+    # ----- OpenVAS runtime discovery (configs & NVT families) ----------------
+
+    _openvas_configs_cache: Optional[list] = None
+    _openvas_families_cache: Optional[list] = None
+
+    async def _get_openvas_password(self) -> Optional[str]:
+        """Retrieve and decode the OpenVAS admin password from k8s secret."""
+        return await self.k8s.get_secret("openvas", "openvas-credentials", "admin-password")
+
+    async def get_openvas_configs(self) -> list:
+        """Query available OpenVAS scan configs from GVM via GMP."""
+        if self._openvas_configs_cache is not None:
+            return self._openvas_configs_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_configs_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(15)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_configs/>\')
+    root = ET.fromstring(resp)
+    for cfg in root.findall("config"):
+        cfg_id = cfg.attrib.get("id", "")
+        name = cfg.findtext("name", "")
+        # Skip the "empty" base configs used internally
+        if name and cfg_id:
+            print(f"CONFIG:{cfg_id}:{name}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=30
+        )
+
+        configs = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("CONFIG:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        configs.append({"id": parts[1], "name": parts[2]})
+
+        # Sort by name for consistent UI display
+        configs.sort(key=lambda c: c["name"])
+        if configs:  # Don't cache empty results (may be transient failure)
+            self._openvas_configs_cache = configs
+        return configs
+
+    async def get_openvas_families(self) -> list:
+        """Query available OpenVAS NVT families from GVM via GMP."""
+        if self._openvas_families_cache is not None:
+            return self._openvas_families_cache
+
+        password = await self._get_openvas_password()
+        if not password:
+            return []
+
+        script = '''
+import socket, os, sys
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            text = response.decode("utf-8", errors="replace")
+            for tag in ["authenticate_response", "get_nvt_families_response"]:
+                if f"</{tag}>" in text:
+                    return text
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{PASSWORD}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+
+    resp = send_gmp(sock, \'<get_nvt_families/>\')
+    root = ET.fromstring(resp)
+    for fam in root.findall(".//family"):
+        name = fam.findtext("name", "")
+        max_nvt = fam.findtext("max_nvt_count", "0")
+        if name:
+            print(f"FAMILY:{name}:{max_nvt}")
+
+    sock.close()
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+        result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={password}",
+             "python3", "-c", script],
+            timeout=60
+        )
+
+        families = []
+        if result.success and result.output:
+            for line in result.output.strip().split("\n"):
+                if line.startswith("FAMILY:"):
+                    parts = line.split(":", 2)
+                    if len(parts) == 3:
+                        families.append({
+                            "name": parts[1],
+                            "nvt_count": int(parts[2]) if parts[2].isdigit() else 0
+                        })
+
+        # Sort by name for consistent UI display
+        families.sort(key=lambda f: f["name"])
+        if families:  # Don't cache empty results (may be transient failure)
+            self._openvas_families_cache = families
+        return families
+
+    def get_status(self) -> Optional[ScanState]:
+        """Get current scan status."""
+        return self.current_scan
+
+    def is_running(self) -> bool:
+        """Check if a scan is currently running."""
+        return (self.current_scan is not None and
+                self.current_scan.status == ScanStatus.RUNNING)
+
+    async def start_scan(
+        self,
+        request: ScanRequest,
+        log_callback: Optional[Callable[[ScanLogEntry], Awaitable[None]]] = None,
+        tool_callback: Optional[Callable[[ScanToolState], Awaitable[None]]] = None
+    ) -> ScanState:
+        """Start a new scan."""
+        if self.is_running():
+            raise RuntimeError("Scan already in progress")
+
+        if log_callback is not None:
+            self.log_callback = log_callback
+        if tool_callback is not None:
+            self.tool_callback = tool_callback
+        self.logs = []
+
+        # Validate target format
+        target = request.target.strip()
+        if not self._validate_target(target):
+            raise ValueError(f"Invalid target: {target}")
+
+        # Initialize scan state
+        self.current_scan = ScanState(
+            id=str(uuid.uuid4())[:8],
+            target=target,
+            profile=request.profile,
+            custom_modules=request.custom_modules,
+            openvas_config=request.openvas_config,
+            openvas_families=request.openvas_families,
+            nmap_scripts=request.nmap_scripts,
+            lab_env_id=request.lab_env_id,
+            status=ScanStatus.RUNNING,
+            started_at=datetime.utcnow(),
+            tools=[
+                ScanToolState(tool=tool)
+                for tool in request.tools
+            ]
+        )
+
+        # Run scan in background with error handling
+        task = asyncio.create_task(self._run_scan())
+        task.add_done_callback(self._handle_task_exception)
+
+        return self.current_scan
+
+    def _handle_task_exception(self, task: asyncio.Task) -> None:
+        """Handle unhandled exceptions from background scan tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background scan task failed with unhandled exception: %s", exc, exc_info=exc)
+            if self.current_scan and self.current_scan.status == ScanStatus.RUNNING:
+                self.current_scan.status = ScanStatus.FAILED
+                self.current_scan.completed_at = datetime.utcnow()
+
+    async def abort_scan(self) -> bool:
+        """Abort the current scan."""
+        if not self.is_running():
+            return False
+
+        await self.process_manager.cancel()
+        self.current_scan.status = ScanStatus.ABORTED
+        self.current_scan.completed_at = datetime.utcnow()
+
+        # Mark any running tools as aborted
+        for ts in self.current_scan.tools:
+            if ts.status == ScanStatus.RUNNING:
+                ts.status = ScanStatus.ABORTED
+                ts.completed_at = datetime.utcnow()
+                if self.tool_callback:
+                    await self.tool_callback(ts)
+
+        await self.log(None, "warn", "Scan aborted by user")
+
+        # Persist abort to database
+        try:
+            if db_engine._session_factory is not None:
+                tools_json = [
+                    {"tool": t.tool.value, "status": t.status.value,
+                     "findings_count": t.findings_count}
+                    for t in self.current_scan.tools
+                ]
+                async with db_engine._session_factory() as session:
+                    await result_store.persist_scan_complete(
+                        session,
+                        scan_id=self.current_scan.id,
+                        status="aborted",
+                        tools_json=tools_json,
+                    )
+        except Exception as exc:
+            logger.warning("DB persistence failed: %s", exc)
+
+        self._save_to_history()
+        return True
+
+    @staticmethod
+    def _parse_target(target: str) -> tuple:
+        """Parse a target string into (host, port_or_none).
+
+        Handles formats: hostname, hostname:port, IP, IP:port, IP/CIDR.
+        Returns (host, int_port) or (host, None) if no port specified.
+        """
+        target = target.strip()
+        # Check for host:port pattern (but not CIDR like 10.0.0.0/24)
+        if ":" in target and "/" not in target:
+            last_colon = target.rfind(":")
+            host_part = target[:last_colon]
+            port_part = target[last_colon + 1:]
+            if port_part.isdigit():
+                port = int(port_part)
+                if 1 <= port <= 65535:
+                    return (host_part, port)
+        return (target, None)
+
+    def _validate_target(self, target: str) -> bool:
+        """Validate target is an IP address, CIDR, hostname, or host:port."""
+        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
+        hostname_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$'
+        # Allow comma-separated or space-separated targets
+        targets = re.split(r'[,\s]+', target)
+        for t in targets:
+            t = t.strip()
+            if not t:
+                continue
+            # Strip port suffix for validation
+            host, _port = self._parse_target(t)
+            if not (re.match(ip_pattern, host) or re.match(hostname_pattern, host)):
+                return False
+        return len(targets) > 0
+
+    async def _run_scan(self):
+        """Execute the scan workflow."""
+        try:
+            scan = self.current_scan
+            target = scan.target
+            profile = scan.profile
+            self._msf_console_findings = []  # Clear stale findings from previous scans
+
+            await self.log(None, "info", f"Starting security scan against {target}")
+            await self.log(None, "info", f"Profile: {profile.value} | Tools: {', '.join(t.tool.value for t in scan.tools)}")
+
+            # Persist scan start to PostgreSQL
+            db_scan_id = scan.id
+            try:
+                if db_engine._session_factory is not None:
+                    async with db_engine._session_factory() as session:
+                        await result_store.persist_scan_start(
+                            session,
+                            scan_id=db_scan_id,
+                            scan_type="security",
+                            target=target,
+                            profile=profile.value,
+                            tools_json=[t.tool.value for t in scan.tools],
+                            custom_modules=scan.custom_modules,
+                            openvas_config=scan.openvas_config,
+                            openvas_families=scan.openvas_families,
+                            lab_env_id=scan.lab_env_id,
+                        )
+                    await self.log(None, "info", "Scan recorded in database")
+                else:
+                    await self.log(None, "warn", "Database not initialized, skipping persistence")
+            except Exception as db_err:
+                await self.log(None, "warn", f"Failed to persist scan start to database: {db_err}")
+
+            # Check kubectl is available
+            if not await self.k8s.check_connectivity():
+                await self.log(None, "error", "Cannot connect to Kubernetes cluster. Is the deployment complete?")
+                scan.status = ScanStatus.FAILED
+                scan.completed_at = datetime.utcnow()
+                self._save_to_history()
+                return
+
+            # Get Faraday credentials and ensure admin user exists
+            faraday_creds = await self.faraday_client.get_credentials(
+                log_callback=lambda lvl, msg: self.log(None, lvl, msg)
+            )
+            if faraday_creds:
+                await self.faraday_client.ensure_admin(faraday_creds)
+
+            # Run each tool sequentially (to avoid resource contention)
+            for tool_state in scan.tools:
+                if scan.status != ScanStatus.RUNNING:
+                    break
+
+                tool = tool_state.tool
+                await self.log(tool.value, "info", f"--- Starting {tool.value.upper()} scan ---")
+                await self._update_tool_state(tool, status=ScanStatus.RUNNING, started_at=datetime.utcnow())
+
+                xml_result = None
+                try:
+                    if tool == ScanTool.NMAP:
+                        xml_result = await self._run_nmap_scan(target, profile)
+                    elif tool == ScanTool.OPENVAS:
+                        xml_result = await self._run_openvas_scan(target, profile)
+                    elif tool == ScanTool.METASPLOIT:
+                        xml_result = await self._run_metasploit_scan(target, profile)
+                    elif tool == ScanTool.WPSCAN:
+                        xml_result = await self._run_wpscan_scan(target, profile)
+
+                    if xml_result and scan.status == ScanStatus.RUNNING:
+                        await self._update_tool_state(tool, status=ScanStatus.COMPLETED, completed_at=datetime.utcnow())
+                        await self.log(tool.value, "info", f"{tool.value.upper()} scan completed")
+
+                        # Run DB persistence and Faraday upload in parallel
+                        faraday_uploaded = False
+                        persist_task = (
+                            self._persist_tool_results(xml_result, tool.value, scan.id)
+                            if db_engine._session_factory is not None
+                            else asyncio.sleep(0)
+                        )
+                        if faraday_creds:
+                            upload_task = self._upload_to_faraday(
+                                xml_result, tool.value, faraday_creds,
+                                scan_id=scan.id, scan_profile=profile.value
+                            )
+                            results = await asyncio.gather(persist_task, upload_task, return_exceptions=True)
+                            # Handle results
+                            if isinstance(results[0], Exception):
+                                await self.log(tool.value, "warn", f"DB persistence failed: {results[0]}")
+                            if isinstance(results[1], Exception):
+                                await self.log(tool.value, "warn", f"Faraday upload failed: {results[1]}")
+                                faraday_uploaded = False
+                            else:
+                                faraday_uploaded = bool(results[1])
+                            await self._update_tool_state(tool, uploaded_to_faraday=faraday_uploaded)
+                        else:
+                            try:
+                                await persist_task
+                            except Exception as db_err:
+                                await self.log(tool.value, "warn", f"Failed to persist {tool.value} results to database: {db_err}")
+                            await self.log(tool.value, "warn", "Faraday credentials unavailable, skipping upload")
+
+                        # Log Faraday sync status to database
+                        try:
+                            if db_engine._session_factory is not None:
+                                async with db_engine._session_factory() as session:
+                                    await result_store.persist_faraday_sync(
+                                        session,
+                                        scan_id=scan.id,
+                                        success=faraday_uploaded,
+                                        scan_type="security",
+                                        detail=f"{tool.value} upload {'succeeded' if faraday_uploaded else 'skipped/failed'}",
+                                    )
+                        except Exception as db_err:
+                            await self.log(tool.value, "warn", f"Failed to log Faraday sync to database: {db_err}")
+
+                        # Prefetch CVE enrichment data into cache (fire-and-forget)
+                        try:
+                            from app.config import get_settings as _get_settings
+                            _settings = _get_settings()
+                            if _settings.enrichment_enabled and db_engine.get_session_factory() is not None:
+                                from app.services.enrichment_service import get_enrichment_service
+                                # Extract CVE IDs from just-persisted vulns
+                                async with db_engine.get_session_factory()() as _session:
+                                    from sqlalchemy import select
+                                    from app.db.models import Vulnerability
+                                    _result = await _session.execute(
+                                        select(Vulnerability.external_id).where(
+                                            Vulnerability.scan_id == scan.id,
+                                            Vulnerability.external_id.isnot(None),
+                                            Vulnerability.external_id.like("CVE-%"),
+                                        )
+                                    )
+                                    cve_ids = [r[0] for r in _result.all()]
+                                if cve_ids:
+                                    asyncio.create_task(get_enrichment_service().prefetch_cves(cve_ids))
+                        except Exception:
+                            pass  # prefetch is best-effort
+
+                    elif scan.status == ScanStatus.RUNNING:
+                        await self._update_tool_state(
+                            tool, status=ScanStatus.FAILED,
+                            completed_at=datetime.utcnow(),
+                            error_message="No scan output produced"
+                        )
+                        await self.log(tool.value, "error", f"{tool.value.upper()} scan produced no results")
+
+                except Exception as e:
+                    await self._update_tool_state(
+                        tool, status=ScanStatus.FAILED,
+                        completed_at=datetime.utcnow(),
+                        error_message=str(e)
+                    )
+                    await self.log(tool.value, "error", f"{tool.value.upper()} scan failed: {e}")
+
+            # Final status
+            if scan.status == ScanStatus.RUNNING:
+                completed_tools = sum(1 for t in scan.tools if t.status == ScanStatus.COMPLETED)
+                total_tools = len(scan.tools)
+                uploaded_tools = sum(1 for t in scan.tools if t.uploaded_to_faraday)
+
+                scan.status = ScanStatus.COMPLETED
+                scan.completed_at = datetime.utcnow()
+
+                # Broadcast completion to all WebSocket clients
+                if self.tool_callback:
+                    for ts in scan.tools:
+                        try:
+                            await self.tool_callback(ts)
+                        except Exception:
+                            pass
+
+                await self.log(None, "info", "")
+                await self.log(None, "info", "=== Scan Complete ===")
+                await self.log(None, "info", f"Tools: {completed_tools}/{total_tools} succeeded")
+                await self.log(None, "info", f"Faraday uploads: {uploaded_tools}/{completed_tools}")
+                if uploaded_tools > 0:
+                    await self.log(None, "info",
+                        "Results available in Faraday workspace 'pentest': "
+                        "https://faraday.knowledgeondemand.net")
+
+                # Persist scan completion to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session,
+                                scan_id=scan.id,
+                                status=scan.status.value,
+                                tools_json=[
+                                    {
+                                        "tool": ts.tool.value,
+                                        "status": ts.status.value,
+                                        "findings_count": ts.findings_count,
+                                        "uploaded_to_faraday": ts.uploaded_to_faraday,
+                                    }
+                                    for ts in scan.tools
+                                ],
+                            )
+                except Exception as db_err:
+                    await self.log(None, "warn", f"Failed to persist scan completion to database: {db_err}")
+
+                # Correlate with lab catalog expected CVEs (before enrichment)
+                await self._correlate_lab_findings(scan.id)
+
+                # Trigger background vulnerability enrichment (NVD/EPSS)
+                try:
+                    from app.config import get_settings as _get_settings
+                    _settings = _get_settings()
+                    if _settings.enrichment_enabled and _settings.enrichment_auto_trigger:
+                        from app.services.enrichment_service import get_enrichment_service
+                        enrichment = get_enrichment_service()
+                        task = asyncio.create_task(enrichment.enrich_scan(scan.id))
+                        task.add_done_callback(enrichment._handle_task_exception)
+                        await self.log(None, "info", "Background vulnerability enrichment started")
+                except Exception as enrich_err:
+                    logger.debug("Enrichment trigger failed: %s", enrich_err)
+
+        except Exception as e:
+            await self.log(None, "error", f"Scan failed: {e}")
+            if self.current_scan:
+                self.current_scan.status = ScanStatus.FAILED
+                self.current_scan.completed_at = datetime.utcnow()
+                # Persist failure to PostgreSQL
+                try:
+                    if db_engine._session_factory is not None:
+                        tools_json = None
+                        if self.current_scan and self.current_scan.tools:
+                            tools_json = [
+                                {"tool": t.tool.value, "status": t.status.value,
+                                 "findings_count": t.findings_count}
+                                for t in self.current_scan.tools
+                            ]
+                        async with db_engine._session_factory() as session:
+                            await result_store.persist_scan_complete(
+                                session,
+                                scan_id=self.current_scan.id,
+                                status="failed",
+                                error_message=str(e),
+                                tools_json=tools_json,
+                            )
+                except Exception as exc:
+                    logger.warning("DB persistence failed: %s", exc)
+        finally:
+            self._save_to_history()
+
+    # =========================================================================
+    # NMAP
+    # =========================================================================
+
+    async def _run_nmap_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run an Nmap scan via a temporary Kubernetes pod."""
+        scan_id = self.current_scan.id
+        pod_name = f"nmap-scan-{scan_id}"
+        nmap_scripts = self.current_scan.nmap_scripts
+
+        timeout = {
+            ScanProfile.QUICK: NMAP_TIMEOUT_QUICK,
+            ScanProfile.STANDARD: NMAP_TIMEOUT_STANDARD,
+            ScanProfile.THOROUGH: NMAP_TIMEOUT_THOROUGH,
+        }.get(profile, NMAP_TIMEOUT_STANDARD)
+
+        # Parse host:port — nmap needs port via -p flag, not in target
+        nmap_host, nmap_port = self._parse_target(target)
+
+        # Build flags: when an explicit port is given, drop --top-ports to avoid
+        # the nmap "no tcp ports specified" warning that skips the entire TCP scan.
+        if nmap_port:
+            base_flags = {
+                ScanProfile.QUICK: ["-Pn", "-T4"],
+                ScanProfile.STANDARD: ["-Pn", "-sV", "-sC"],
+                ScanProfile.THOROUGH: ["-Pn", "-sV", "-sC", "-A"],
+            }.get(profile, ["-Pn", "-sV", "-sC"])
+            flags = base_flags + ["-p", str(nmap_port)]
+        else:
+            flags = list(NMAP_PROFILES.get(profile, NMAP_PROFILES[ScanProfile.STANDARD]))
+
+        # Append custom NSE scripts when specified (e.g. ssl-heartbleed, dns-zone-transfer)
+        if nmap_scripts:
+            flags.extend(["--script", nmap_scripts])
+            await self.log("nmap", "info", f"NSE scripts: {nmap_scripts}")
+
+        if nmap_port:
+            await self.log("nmap", "info",
+                f"Launching Nmap pod '{pod_name}' targeting {nmap_host} port {nmap_port} with flags: {' '.join(flags)}")
+        else:
+            await self.log("nmap", "info", f"Launching Nmap pod '{pod_name}' with flags: {' '.join(flags)}")
+
+        # Create the nmap pod (don't use --attach/--rm since stdout capture is unreliable)
+        # Instead: create pod → wait for completion → read logs → delete pod
+        nmap_ns = "nmap-scanner"
+        # Ensure namespace exists (privileged — nmap needs NET_RAW for SYN scanning)
+        await self.k8s.ensure_namespace(nmap_ns, privileged=True)
+
+        create_result = await self.process_manager.run_command_simple(
+            ["kubectl", "run", pod_name,
+             "--image=instrumentisto/nmap:latest",
+             "--restart=Never",
+             f"--namespace={nmap_ns}",
+             "--", "nmap"] + flags + ["-oX", "-", nmap_host],
+            timeout=30
+        )
+
+        if not create_result.success:
+            await self.log("nmap", "error", f"Failed to create Nmap pod: {create_result.output}")
+            return None
+
+        await self.log("nmap", "info", "Nmap pod created, waiting for scan to complete...")
+
+        # Wait for pod to complete
+        wait_result = await self.process_manager.run_command_simple(
+            ["kubectl", "wait", "--for=condition=Ready=false",
+             f"pod/{pod_name}", f"--namespace={nmap_ns}",
+             f"--timeout={timeout}s"],
+            timeout=timeout + 30
+        )
+
+        # Also wait for the pod phase to be Succeeded/Failed
+        # (kubectl wait --for=condition doesn't work well for completed pods)
+        poll_attempts = timeout // 5
+        pod_done = False
+        for attempt in range(poll_attempts):
+            phase = await self.k8s.get_pod_phase(nmap_ns, pod_name)
+            if phase in ("Succeeded", "Failed"):
+                pod_done = True
+                await self.log("nmap", "info", f"Nmap pod finished (phase: {phase})")
+                break
+            elif phase is None or phase == "":
+                # Pod may have been deleted already
+                pod_done = True
+                break
+            await asyncio.sleep(5)
+
+        if not pod_done:
+            await self.log("nmap", "error", f"Nmap scan timed out after {timeout}s")
+            await self.k8s.delete_pod(nmap_ns, pod_name, force=True, timeout=15)
+            return None
+
+        # Read the pod logs (contains nmap XML output)
+        logs_result = await self.k8s.get_pod_logs(nmap_ns, pod_name, timeout=30)
+
+        # Clean up the pod
+        await self.k8s.delete_pod(nmap_ns, pod_name, force=True, timeout=15)
+
+        output = logs_result.output or ""
+
+        # Extract XML content from output
+        xml_start = output.find("<?xml")
+        xml_end = output.rfind("</nmaprun>")
+
+        if xml_start >= 0 and xml_end >= 0:
+            xml_content = output[xml_start:xml_end + len("</nmaprun>")]
+            # Count hosts found
+            host_count = xml_content.count("<host ")
+            await self.log("nmap", "info", f"Nmap found {host_count} host(s)")
+
+            if host_count == 0:
+                # Diagnose why nmap found no hosts
+                if "Host seems down" in output or 'down="1"' in xml_content:
+                    await self.log("nmap", "warn",
+                        "Nmap reports host as down. Check that the target is reachable "
+                        "and that network policies allow egress from nmap-scanner namespace.")
+                else:
+                    await self.log("nmap", "warn",
+                        "Nmap XML has zero hosts. First 500 chars of output:")
+                    await self.log("nmap", "warn", f"  {xml_content[:500]}")
+
+            # Update findings count
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.NMAP:
+                    ts.findings_count = host_count
+                    break
+
+            return xml_content
+        else:
+            # Log raw output for debugging
+            output_len = len(output)
+            await self.log("nmap", "warn", f"Could not extract XML from Nmap output ({output_len} bytes)")
+            for line in output.split("\n")[-30:]:
+                line = line.strip()
+                if line:
+                    await self.log("nmap", "info", f"  {line}")
+            return None
+
+    # =========================================================================
+    # OPENVAS
+    # =========================================================================
+
+    async def _run_openvas_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run an OpenVAS scan via GMP protocol inside the gvmd container."""
+        # OpenVAS GMP <hosts> element accepts only hostnames/IPs, not host:port.
+        # Extract port if present — when set, a custom port list is created with
+        # just that port instead of scanning the entire profile port range.
+        ov_host, ov_port = self._parse_target(target)
+        if ov_port:
+            await self.log("openvas", "info",
+                f"Target includes port {ov_port} — OpenVAS will create a focused port list for {ov_host}:{ov_port}")
+        target = ov_host  # Pass only host to GMP scripts
+
+        scan_id = self.current_scan.id
+        openvas_config = self.current_scan.openvas_config
+        openvas_families = self.current_scan.openvas_families
+
+        # Determine config_id based on custom settings or profile
+        if profile == ScanProfile.CUSTOM and openvas_config:
+            # User selected a specific preset config
+            config_id = openvas_config
+            use_custom_families = False
+        elif profile == ScanProfile.CUSTOM and openvas_families:
+            # User selected specific NVT families — will create a custom config
+            config_id = None
+            use_custom_families = True
+        else:
+            # Standard profile-based config
+            config_id = OPENVAS_SCAN_CONFIGS.get(profile, OPENVAS_SCAN_CONFIGS[ScanProfile.STANDARD])
+            use_custom_families = False
+
+        await self.log("openvas", "info", "Connecting to OpenVAS GVM daemon...")
+
+        # Get OpenVAS admin password from k8s secret
+        openvas_password = await self._get_openvas_password()
+        if not openvas_password:
+            await self.log("openvas", "error", "Could not retrieve OpenVAS credentials from cluster")
+            return None
+
+        # Python GMP script that runs inside the gvmd container
+        # Uses stdlib only: socket + xml.etree.ElementTree
+        if use_custom_families:
+            gmp_script = self._build_gmp_custom_families_script(scan_id, target, openvas_families, profile, target_port=ov_port)
+        else:
+            gmp_script = self._build_gmp_script(scan_id, target, config_id, profile, target_port=ov_port)
+
+        if use_custom_families:
+            await self.log("openvas", "info", f"Creating custom config with {len(openvas_families)} NVT families for {target}...")
+        elif profile == ScanProfile.CUSTOM and openvas_config:
+            await self.log("openvas", "info", f"Using selected config for {target}...")
+        else:
+            await self.log("openvas", "info", f"Creating scan target and task for {target}...")
+
+        # Execute the GMP script inside the gvmd container
+        openvas_timeout = OPENVAS_TIMEOUTS.get(profile, OPENVAS_TIMEOUTS[ScanProfile.STANDARD])
+        result = await self.process_manager.run_command(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={openvas_password}",
+             "python3", "-u", "-c", gmp_script],
+            on_output=lambda line: self._log_openvas_line(line),
+            timeout=openvas_timeout
+        )
+
+        output = result.output or ""
+
+        # Log command result for debugging
+        if not result.success:
+            last_lines = "\n".join(output.split("\n")[-10:]) if output else "(empty)"
+            await self.log("openvas", "error",
+                           f"GMP script exited with code {result.return_code} — last output:\n{last_lines}")
+            # Still try to extract results in case the script wrote the report before dying
+
+        # Parse task_id, target_id, port_list_id, and report_id from output (needed for recovery/cleanup)
+        gmp_task_id = ""
+        gmp_target_id = ""
+        gmp_report_id = ""
+        gmp_port_list_id = ""
+        for line in output.split("\n"):
+            line = line.strip()
+            if "Created target " in line:
+                # STATUS: Created target <uuid>
+                parts = line.split("Created target ")
+                if len(parts) >= 2:
+                    gmp_target_id = parts[-1].strip()
+            elif "Created task " in line:
+                # STATUS: Created task <uuid>
+                parts = line.split("Created task ")
+                if len(parts) >= 2:
+                    gmp_task_id = parts[-1].strip()
+            elif "Scan started (report " in line:
+                # STATUS: Scan started (report <uuid>)
+                parts = line.split("(report ")
+                if len(parts) >= 2:
+                    gmp_report_id = parts[-1].rstrip(")")
+            elif "Created custom port list for port " in line:
+                # STATUS: Created custom port list for port 80 (<uuid>)
+                parts = line.split("(")
+                if len(parts) >= 2:
+                    gmp_port_list_id = parts[-1].rstrip(")")
+
+        # Parse status lines from the script
+        if "SCAN:FAILED" in output:
+            error_line = [l for l in output.split("\n") if "SCAN:FAILED" in l]
+            error_str = str(error_line)
+            await self.log("openvas", "error", f"OpenVAS scan failed: {error_str}")
+            # If the failure was during report retrieval (not scan itself), try recovery
+            scan_was_running = any("PROGRESS:" in l and "Running" in l for l in output.split("\n"))
+            retrieval_failure = any(kw in error_str for kw in [
+                "Empty response", "No <report>", "No report ID", "parse"
+            ])
+            if scan_was_running and (retrieval_failure or not result.success) and gmp_task_id:
+                await self.log("openvas", "warn", "Scan was progressing before failure — attempting report recovery...")
+                recovered = await self._attempt_openvas_recovery(
+                    scan_id, gmp_task_id, gmp_target_id, gmp_report_id, openvas_password)
+                if recovered:
+                    result_count = recovered.count("<result ")
+                    await self.log("openvas", "info", f"Recovery returned {result_count} results — proceeding to Faraday upload")
+                    return recovered
+                else:
+                    await self.log("openvas", "error", "Recovery did not return usable report data")
+            return None
+
+        # The GMP script writes the report to a temp file inside the container.
+        # Look for REPORT_FILE:<path>:<size> in the output, then kubectl cp it out.
+        report_file_line = None
+        for line in output.split("\n"):
+            if line.strip().startswith("REPORT_FILE:"):
+                report_file_line = line.strip()
+                break
+
+        if report_file_line:
+            # Parse REPORT_FILE:/tmp/gvm-report-xxx.xml:12345
+            parts = report_file_line.split(":", 3)  # REPORT_FILE, /tmp/gvm-report-xxx.xml, size
+            remote_path = parts[1] if len(parts) >= 2 else ""
+            report_size = parts[2] if len(parts) >= 3 else "?"
+            await self.log("openvas", "info", f"Report written to container ({report_size} bytes), retrieving...")
+
+            # Get the pod name for kubectl exec
+            pod_name = await self.k8s.get_pod_name("openvas", "app.kubernetes.io/name=greenbone", timeout=15)
+            if not pod_name:
+                await self.log("openvas", "error", "Could not determine greenbone pod name")
+                return None
+
+            # Retrieve via base64 to avoid kubectl SPDY chunking limits on large files
+            await self.log("openvas", "info", f"Downloading report from {pod_name} via base64...")
+            b64_result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                 "--", "base64", remote_path],
+                timeout=120
+            )
+
+            # Clean up the temp file in the container
+            await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                 "--", "rm", "-f", remote_path],
+                timeout=15
+            )
+
+            if b64_result.success and b64_result.output:
+                await self.log("openvas", "info", f"Received {len(b64_result.output)} bytes (base64), decoding...")
+                try:
+                    xml_content = base64.b64decode(b64_result.output.strip()).decode("utf-8")
+                    result_count = xml_content.count("<result ")
+                    await self.log("openvas", "info", f"OpenVAS found {result_count} result(s) ({len(xml_content)} bytes)")
+                    for ts in self.current_scan.tools:
+                        if ts.tool == ScanTool.OPENVAS:
+                            ts.findings_count = result_count
+                            break
+                    # Report successfully transferred — now safe to clean up GVM
+                    await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password, gmp_port_list_id)
+                    return xml_content
+                except Exception as decode_err:
+                    await self.log("openvas", "error", f"Failed to decode report: {decode_err}")
+                    return None
+            else:
+                await self.log("openvas", "error",
+                               f"Failed to retrieve report file from container: {b64_result.output or 'no output'}")
+                return None
+
+        # Fallback: try to extract from stdout (for backwards compatibility or small reports)
+        xml_start = output.find("<?xml")
+        report_end = output.rfind("</report>")
+        if xml_start >= 0 and report_end >= 0:
+            xml_content = output[xml_start:report_end + len("</report>")]
+            result_count = xml_content.count("<result ")
+            await self.log("openvas", "info", f"OpenVAS found {result_count} result(s)")
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.OPENVAS:
+                    ts.findings_count = result_count
+                    break
+            await self._cleanup_gvm_task(gmp_task_id, gmp_target_id, openvas_password, gmp_port_list_id)
+            return xml_content
+
+        output_len = len(output)
+        has_report_file = "REPORT_FILE:" in output
+        has_done = "Done" in output
+        has_xml = "<?xml" in output
+        await self.log("openvas", "warn",
+                       f"Could not extract XML report ({output_len} bytes, "
+                       f"REPORT_FILE={has_report_file}, Done={has_done}, XML={has_xml}, "
+                       f"exit_code={result.return_code})")
+        for line in output.split("\n")[-15:]:
+            line = line.strip()
+            if line and not line.startswith("<"):
+                await self.log("openvas", "debug", f"  {line}")
+
+        # Recovery: if the scan was making progress but the GMP script died
+        # (kubectl drop, pod restart, etc.), the report may still exist in GVM.
+        # Try a separate kubectl exec to retrieve it.
+        if gmp_task_id:
+            scan_was_progressing = any("PROGRESS:" in l for l in output.split("\n"))
+            if scan_was_progressing:
+                await self.log("openvas", "warn",
+                               "Scan was progressing before script exited — attempting report recovery...")
+                recovered = await self._attempt_openvas_recovery(
+                    scan_id, gmp_task_id, gmp_target_id, gmp_report_id, openvas_password)
+                if recovered:
+                    return recovered
+                await self.log("openvas", "error", "Report recovery failed")
+
+        return None
+
+    async def _cleanup_gvm_task(self, task_id: str, target_id: str,
+                                openvas_password: str, port_list_id: str = ""):
+        """Delete a scan task, target, and custom port list from GVM after report transfer.
+
+        Runs a short GMP script via kubectl exec. Failures are non-fatal — orphaned
+        tasks/targets in GVM are harmless and can be cleaned up manually.
+        """
+        if not task_id and not target_id and not port_list_id:
+            return
+
+        delete_cmds = []
+        if task_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_task task_id="{task_id}" ultimate="1"/>\')')
+        if target_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_target target_id="{target_id}" ultimate="1"/>\')')
+        if port_list_id:
+            delete_cmds.append(f'send_gmp(sock, \'<delete_port_list port_list_id="{port_list_id}" ultimate="1"/>\')')
+        delete_block = "\n    ".join(delete_cmds)
+
+        cleanup_script = f'''
+import socket, os, sys
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+def send_gmp(sock, xml_str):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            if b"_response>" in response[-128:]:
+                break
+        except socket.timeout:
+            break
+    return response
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    auth = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
+    send_gmp(sock, auth)
+    {delete_block}
+    sock.close()
+    print("CLEANUP:OK", flush=True)
+except Exception as e:
+    print(f"CLEANUP:FAIL:{{e}}", flush=True)
+'''
+        try:
+            result = await self.process_manager.run_command_simple(
+                ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+                 "--", "env", f"GMP_PASSWORD={openvas_password}",
+                 "python3", "-u", "-c", cleanup_script],
+                timeout=60
+            )
+            if result.success and "CLEANUP:OK" in (result.output or ""):
+                await self.log("openvas", "debug", "GVM task/target cleaned up")
+            else:
+                await self.log("openvas", "debug",
+                               f"GVM cleanup returned non-OK (non-fatal): {(result.output or '')[-100:]}")
+        except Exception as e:
+            await self.log("openvas", "debug", f"GVM cleanup failed (non-fatal): {e}")
+
+    async def _attempt_openvas_recovery(self, scan_id: str, task_id: str,
+                                         target_id: str, report_id: str,
+                                         openvas_password: str) -> Optional[str]:
+        """Attempt to recover an OpenVAS report after the primary GMP script failed.
+
+        Runs a separate GMP script that waits for the task to complete (if still
+        running) and retrieves the report. This handles the case where kubectl exec
+        dropped but the scan continued running in GVM.
+        """
+        recovery_script = self._build_gmp_recovery_script(scan_id, task_id, target_id, report_id)
+
+        recovery_result = await self.process_manager.run_command(
+            ["kubectl", "exec", "-n", "openvas", "deployment/greenbone", "-c", "gvmd",
+             "--", "env", f"GMP_PASSWORD={openvas_password}",
+             "python3", "-u", "-c", recovery_script],
+            on_output=lambda line: self._log_openvas_line(line),
+            timeout=1200  # 20 min max for recovery (15 min poll + report retrieval)
+        )
+
+        recovery_output = recovery_result.output or ""
+
+        if "SCAN:FAILED" in recovery_output:
+            error_line = [l for l in recovery_output.split("\n") if "SCAN:FAILED" in l]
+            await self.log("openvas", "error", f"Recovery failed: {error_line}")
+            return None
+
+        # Look for REPORT_FILE in recovery output
+        for line in recovery_output.split("\n"):
+            if line.strip().startswith("REPORT_FILE:"):
+                parts = line.strip().split(":", 3)
+                remote_path = parts[1] if len(parts) >= 2 else ""
+                report_size = parts[2] if len(parts) >= 3 else "?"
+                await self.log("openvas", "info",
+                               f"Recovery: report written to container ({report_size} bytes), retrieving...")
+
+                # Get pod name and retrieve via base64
+                pod_name = await self.k8s.get_pod_name("openvas", "app.kubernetes.io/name=greenbone", timeout=15)
+                if not pod_name:
+                    await self.log("openvas", "error", "Recovery: could not determine pod name")
+                    return None
+
+                b64_result = await self.process_manager.run_command_simple(
+                    ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                     "--", "base64", remote_path],
+                    timeout=120
+                )
+
+                # Clean up temp file
+                await self.process_manager.run_command_simple(
+                    ["kubectl", "exec", "-n", "openvas", f"pod/{pod_name}", "-c", "gvmd",
+                     "--", "rm", "-f", remote_path],
+                    timeout=15
+                )
+
+                if b64_result.success and b64_result.output:
+                    try:
+                        xml_content = base64.b64decode(b64_result.output.strip()).decode("utf-8")
+                        result_count = xml_content.count("<result ")
+                        await self.log("openvas", "info",
+                                       f"Recovery successful: {result_count} result(s) ({len(xml_content)} bytes)")
+                        for ts in self.current_scan.tools:
+                            if ts.tool == ScanTool.OPENVAS:
+                                ts.findings_count = result_count
+                                break
+                        return xml_content
+                    except Exception as decode_err:
+                        await self.log("openvas", "error", f"Recovery: failed to decode report: {decode_err}")
+                        return None
+                else:
+                    await self.log("openvas", "error", "Recovery: failed to retrieve report file")
+                    return None
+
+        await self.log("openvas", "error", "Recovery: no REPORT_FILE in output")
+        return None
+
+    async def _log_openvas_line(self, line: str):
+        """Process and log OpenVAS output lines."""
+        line = line.strip()
+        if not line or line.startswith("<?xml") or line.startswith("<"):
+            return  # Don't log XML content
+        if line.startswith("STATUS:"):
+            await self.log("openvas", "info", line.replace("STATUS:", "").strip())
+        elif line.startswith("ERROR:"):
+            await self.log("openvas", "error", line.replace("ERROR:", "").strip())
+        elif line.startswith("PROGRESS:"):
+            await self.log("openvas", "info", line.replace("PROGRESS:", "").strip())
+        elif line.startswith("REPORT_FILE:"):
+            parts = line.split(":", 3)
+            size = parts[2] if len(parts) >= 3 else "?"
+            await self.log("openvas", "info", f"Report saved in container ({size} bytes)")
+        elif line.startswith("DEBUG"):
+            await self.log("openvas", "debug", line)
+
+    @staticmethod
+    def _gmp_common_functions() -> str:
+        """Return shared Python function definitions for GMP scripts.
+
+        Includes send_gmp(), get_status_info(), and reconnect_gmp().
+        All references use double-braces (runtime script vars, not f-string subs).
+        """
+        return '''
+def send_gmp(sock, xml_str, end_tag=None):
+    """Send a GMP command and receive the response."""
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "create_target_response",
+                    "create_config_response", "modify_config_response",
+                    "create_task_response", "start_task_response",
+                    "get_tasks_response", "get_reports_response",
+                    "delete_target_response", "delete_task_response",
+                    "delete_config_response", "get_port_lists_response",
+                    "get_scanners_response", "create_port_list_response",
+                    "delete_port_list_response"]
+    while True:
+        try:
+            chunk = sock.recv(131072)
+            if not chunk:
+                break
+            response += chunk
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{tag}>" in tail:
+                    return response.decode("utf-8", errors="replace")
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+def get_status_info(xml_text):
+    """Get the status code and status_text from a GMP response."""
+    try:
+        root = ET.fromstring(xml_text)
+        return root.attrib.get("status", ""), root.attrib.get("status_text", "")
+    except ET.ParseError:
+        return "", ""
+
+def reconnect_gmp(old_sock, password, max_retries=3):
+    """Reconnect to GVM daemon after a connection drop."""
+    try:
+        old_sock.close()
+    except:
+        pass
+    for attempt in range(1, max_retries + 1):
+        try:
+            new_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            new_sock.settimeout(30)
+            new_sock.connect(SOCK_PATH)
+            auth_xml = f\'<authenticate><credentials><username>admin</username><password>{password}</password></credentials></authenticate>\'
+            resp = send_gmp(new_sock, auth_xml)
+            status, _ = get_status_info(resp)
+            if status == "200":
+                print(f"STATUS: Reconnected to GVM (attempt {attempt}/{max_retries})", flush=True)
+                return new_sock, True
+        except Exception as re_err:
+            print(f"STATUS: Reconnect attempt {attempt}/{max_retries} failed: {re_err}", flush=True)
+        time.sleep(5)
+    return old_sock, False
+'''
+
+    @staticmethod
+    def _gmp_poll_and_retrieve() -> str:
+        """Return the shared polling loop + report retrieval code for GMP scripts.
+
+        Expects these variables to be defined in the calling scope:
+        sock, task_id, report_id, SCAN_ID, REPORT_FORMAT, PASSWORD, stale_limit,
+        and the functions: send_gmp, reconnect_gmp.
+        """
+        return '''
+    # Poll for completion — progress-aware timeout
+    # Stale limit: if no progress change for 60 minutes, bail out
+    # Tracks overall progress, result count, AND per-host NVT progress
+    # No fixed max — the outer asyncio timeout (profile-dependent) is the hard ceiling
+    stale_count = 0
+    last_result_count = 0
+    last_progress_val = -1
+    last_host_progress_sig = ""
+    poll_count = 0
+    scan_done = False
+    while True:
+        time.sleep(10)
+        poll_count += 1
+        get_task = f\'<get_tasks task_id="{task_id}" details="1"/>\'
+        # Reconnect on socket errors (GVM may reset connections during state transitions)
+        try:
+            resp = send_gmp(sock, get_task)
+        except (ConnectionResetError, BrokenPipeError, ConnectionRefusedError, OSError) as conn_err:
+            print(f"STATUS: GVM connection lost during polling ({conn_err}), reconnecting...", flush=True)
+            sock, reconnected = reconnect_gmp(sock, PASSWORD)
+            if not reconnected:
+                raise
+            continue
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                if poll_count <= 3:
+                    progress_elem_dump = task_elem.find("progress")
+                    if progress_elem_dump is not None:
+                        prog_xml = ET.tostring(progress_elem_dump, encoding="unicode")
+                        if len(prog_xml) > 500:
+                            prog_xml = prog_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_PROGRESS_XML: {prog_xml}", flush=True)
+                    cr_dump = task_elem.find(".//current_report")
+                    if cr_dump is not None:
+                        cr_xml = ET.tostring(cr_dump, encoding="unicode")
+                        if len(cr_xml) > 500:
+                            cr_xml = cr_xml[:500] + "...(truncated)"
+                        print(f"DEBUG_REPORT_XML: {cr_xml}", flush=True)
+                    elif poll_count == 1:
+                        print("DEBUG: No current_report element found in get_tasks response", flush=True)
+                task_status = task_elem.findtext("status", "")
+                progress_elem = task_elem.find("progress")
+                progress = progress_elem.text.strip() if progress_elem is not None and progress_elem.text else "0"
+                progress_int = int(progress) if progress.lstrip("-").isdigit() else 0
+                result_count = 0
+                current_report = task_elem.find(".//current_report")
+                if current_report is not None:
+                    for rc_path in [".//result_count/full", ".//result_count", "result_count/full", "result_count"]:
+                        rc = current_report.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                if result_count == 0:
+                    for rc_path in [".//result_count/full", ".//result_count"]:
+                        rc = task_elem.findtext(rc_path, "")
+                        if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                            result_count = int(rc.strip())
+                            break
+                host_progress_elems = task_elem.findall(".//progress/host_progress")
+                if not host_progress_elems and progress_elem is not None:
+                    host_progress_elems = list(progress_elem)
+                active_hosts = 0
+                host_pcts = []
+                host_progress_parts = []
+                for hp in host_progress_elems:
+                    host_text = (hp.text or "").strip()
+                    if ":" in host_text:
+                        host_progress_parts.append(host_text)
+                        parts = host_text.rsplit(":", 1)
+                        try:
+                            pct = int(parts[1])
+                            if pct >= 0:
+                                host_pcts.append(pct)
+                                if 0 < pct < 100:
+                                    active_hosts += 1
+                        except (ValueError, IndexError):
+                            pass
+                avg_host_pct = sum(host_pcts) // len(host_pcts) if host_pcts else 0
+                host_progress_sig = "|".join(sorted(host_progress_parts))
+                elapsed = poll_count * 10
+                elapsed_str = f"{elapsed // 3600}h {(elapsed % 3600) // 60}m {elapsed % 60}s"
+                detail = f"{task_status} ({progress}% overall"
+                if host_pcts:
+                    detail += f", {avg_host_pct}% avg host, {active_hosts} active"
+                detail += f") | {result_count} results | elapsed {elapsed_str}"
+                stale_remaining = (stale_limit - stale_count) * 10 // 60
+                detail += f" | stale timeout in {stale_remaining}m"
+                print(f"PROGRESS: {detail}", flush=True)
+                if (result_count != last_result_count
+                        or progress_int != last_progress_val
+                        or host_progress_sig != last_host_progress_sig):
+                    stale_count = 0
+                    last_result_count = result_count
+                    last_progress_val = progress_int
+                    last_host_progress_sig = host_progress_sig
+                else:
+                    stale_count += 1
+                if task_status == "Done":
+                    if not report_id:
+                        report_elem = task_elem.find(".//report")
+                        report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                    scan_done = True
+                    break
+                elif task_status in ("Stop Requested", "Stopped", "Error"):
+                    if progress_int >= 80 and task_status == "Stopped":
+                        print(f"STATUS: Scan stopped at {progress_int}% — attempting to retrieve partial results", flush=True)
+                        if not report_id:
+                            report_elem = task_elem.find(".//report")
+                            report_id = report_elem.attrib.get("id", "") if report_elem is not None else ""
+                        scan_done = True
+                        break
+                    print(f"SCAN:FAILED:Task ended with status {task_status}", flush=True)
+                    sys.exit(1)
+                # Early abort if stuck at 0% for 10 minutes (likely scanner issue)
+                if progress_int <= 0 and result_count == 0 and stale_count >= 60:  # 60 x 10s = 10 min
+                    print("SCAN:FAILED:Scan stuck at 0% for 10 minutes — OpenVAS scanner may not be functioning. Check ospd-openvas logs.", flush=True)
+                    sys.exit(1)
+                if stale_count >= stale_limit:
+                    elapsed_total = poll_count * 10
+                    print(f"SCAN:FAILED:Scan stalled — no progress change for 60 minutes (elapsed {elapsed_total // 3600}h {(elapsed_total % 3600) // 60}m)", flush=True)
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+    if not scan_done:
+        print("SCAN:FAILED:Polling loop exited unexpectedly", flush=True)
+        sys.exit(1)
+
+    # Get report in XML format — write to temp file (too large for kubectl stdout)
+    REPORT_FILE = f"/tmp/gvm-report-{SCAN_ID}.xml"
+    if report_id:
+        print("STATUS: Retrieving scan report...", flush=True)
+        get_report = f\'<get_reports report_id="{report_id}" format_id="{REPORT_FORMAT}" details="1" filter="rows=-1 first=1 min_qod=0"/>\'
+        sock.settimeout(600)
+        try:
+            resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        except (ConnectionResetError, BrokenPipeError, ConnectionRefusedError, OSError) as conn_err:
+            print(f"STATUS: GVM connection lost during report retrieval ({conn_err}), reconnecting...", flush=True)
+            sock, reconnected = reconnect_gmp(sock, PASSWORD)
+            if not reconnected:
+                raise
+            sock.settimeout(600)
+            resp = send_gmp(sock, get_report, end_tag="get_reports_response")
+        resp_len = len(resp)
+        print(f"STATUS: Report response received ({resp_len} bytes)", flush=True)
+        if resp_len == 0:
+            print("SCAN:FAILED:Empty response when retrieving report", flush=True)
+            sys.exit(1)
+        try:
+            root = ET.fromstring(resp)
+            report_elem = root.find(".//report")
+            if report_elem is not None:
+                report_xml = ET.tostring(report_elem, encoding="unicode")
+                with open(REPORT_FILE, "w") as f:
+                    f.write(report_xml)
+                print(f"REPORT_FILE:{REPORT_FILE}:{len(report_xml)}", flush=True)
+            else:
+                print(f"SCAN:FAILED:No <report> element found in response ({resp_len} bytes)", flush=True)
+                sys.exit(1)
+        except ET.ParseError as parse_err:
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{REPORT_FILE}:{resp_len}", flush=True)
+            print(f"STATUS: Warning - XML parse failed ({parse_err}), wrote raw response", flush=True)
+    else:
+        print("SCAN:FAILED:No report ID available", flush=True)
+        sys.exit(1)
+'''
+
+    def _build_gmp_recovery_script(self, scan_id: str, task_id: str,
+                                    target_id: str, report_id: str) -> str:
+        """Build a GMP script that waits for a task to finish and retrieves its report.
+
+        Used when the primary GMP script was interrupted (kubectl drop, pod restart)
+        but the scan was still running in GVM. Polls the task until Done, then retrieves
+        the report and writes it to a temp file. Cleans up the task and target afterward.
+        """
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+SCAN_ID = "{scan_id}"
+TASK_ID = "{task_id}"
+TARGET_ID = "{target_id}"
+REPORT_ID = "{report_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+
+def send_gmp(sock, xml_str, end_tag=None):
+    sock.sendall(xml_str.encode("utf-8"))
+    response = b""
+    if end_tag:
+        search_tags = [end_tag]
+    else:
+        search_tags = ["authenticate_response", "get_tasks_response", "get_reports_response",
+                        "delete_task_response", "delete_target_response"]
+    while True:
+        try:
+            chunk = sock.recv(131072)
+            if not chunk:
+                break
+            response += chunk
+            tail = response[-256:].decode("utf-8", errors="replace")
+            for tag in search_tags:
+                if f"</{{tag}}>" in tail:
+                    return response.decode("utf-8", errors="replace")
+        except socket.timeout:
+            break
+    return response.decode("utf-8", errors="replace")
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Recovery - connected to GVM daemon", flush=True)
+
+    # Authenticate
+    auth_xml = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
+    resp = send_gmp(sock, auth_xml)
+    try:
+        root = ET.fromstring(resp)
+        if root.attrib.get("status") != "200":
+            print(f"SCAN:FAILED:Recovery auth failed", flush=True)
+            sys.exit(1)
+    except:
+        print("SCAN:FAILED:Recovery auth parse error", flush=True)
+        sys.exit(1)
+    print("STATUS: Recovery - authenticated", flush=True)
+
+    # Poll task until Done (max 15 min = 90 x 10s)
+    report_id = REPORT_ID
+    for i in range(90):
+        resp = send_gmp(sock, f'<get_tasks task_id="{{TASK_ID}}" details="1"/>')
+        try:
+            root = ET.fromstring(resp)
+            task_elem = root.find(".//task")
+            if task_elem is not None:
+                task_status = task_elem.findtext("status", "")
+                progress = task_elem.findtext("progress", "0").strip()
+                result_count = 0
+                for rc_path in [".//result_count/full", ".//result_count"]:
+                    rc = task_elem.findtext(rc_path, "")
+                    if rc and rc.strip().isdigit() and int(rc.strip()) > 0:
+                        result_count = int(rc.strip())
+                        break
+                print(f"PROGRESS: Recovery - {{task_status}} ({{progress}}%) | {{result_count}} results | poll {{i+1}}/90", flush=True)
+                if task_status == "Done":
+                    if not report_id:
+                        re = task_elem.find(".//report")
+                        report_id = re.attrib.get("id", "") if re is not None else ""
+                    break
+                elif task_status in ("Stopped", "Error"):
+                    if not report_id:
+                        re = task_elem.find(".//report")
+                        report_id = re.attrib.get("id", "") if re is not None else ""
+                    if report_id:
+                        print(f"STATUS: Recovery - task {{task_status}}, attempting report retrieval", flush=True)
+                        break
+                    print(f"SCAN:FAILED:Recovery - task {{task_status}} with no report", flush=True)
+                    sys.exit(1)
+        except ET.ParseError:
+            pass
+        time.sleep(10)
+    else:
+        print("SCAN:FAILED:Recovery - task did not complete within 15 minutes", flush=True)
+        sys.exit(1)
+
+    if not report_id:
+        print("SCAN:FAILED:Recovery - no report ID found", flush=True)
+        sys.exit(1)
+
+    # Retrieve report
+    REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}-recovery.xml"
+    print(f"STATUS: Recovery - retrieving report {{report_id}}...", flush=True)
+    sock.settimeout(600)
+    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1 min_qod=0"/>', end_tag="get_reports_response")
+    resp_len = len(resp)
+    print(f"STATUS: Recovery - report response ({{resp_len}} bytes)", flush=True)
+    if resp_len == 0:
+        print("SCAN:FAILED:Recovery - empty report response", flush=True)
+        sys.exit(1)
+
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report")
+        if report_elem is not None:
+            report_xml = ET.tostring(report_elem, encoding="unicode")
+            with open(REPORT_FILE, "w") as f:
+                f.write(report_xml)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{len(report_xml)}}", flush=True)
+        else:
+            # No report element but we have data — write raw response as fallback
+            print(f"STATUS: Recovery - no report element in response, writing raw ({{resp_len}} bytes)", flush=True)
+            with open(REPORT_FILE, "w") as f:
+                f.write(resp)
+            print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+    except Exception as pe:
+        # Catch ALL exceptions (not just ParseError) — MemoryError, ValueError, etc.
+        with open(REPORT_FILE, "w") as f:
+            f.write(resp)
+        print(f"REPORT_FILE:{{REPORT_FILE}}:{{resp_len}}", flush=True)
+        print(f"STATUS: Recovery - XML processing failed ({{pe}}), wrote raw response", flush=True)
+
+    # Cleanup: delete task and target from GVM
+    try:
+        if TASK_ID:
+            send_gmp(sock, f'<delete_task task_id="{{TASK_ID}}" ultimate="1"/>')
+        if TARGET_ID:
+            send_gmp(sock, f'<delete_target target_id="{{TARGET_ID}}" ultimate="1"/>')
+        print("STATUS: Recovery - cleaned up task and target from GVM", flush=True)
+    except:
+        print("STATUS: Recovery - cleanup failed (non-fatal)", flush=True)
+
+    sock.close()
+    print("STATUS: Recovery complete", flush=True)
+
+except Exception as e:
+    print(f"SCAN:FAILED:Recovery error: {{e}}", flush=True)
+    sys.exit(1)
+'''
+
+    def _build_gmp_script(self, scan_id: str, target: str, config_id: str,
+                          profile: ScanProfile = ScanProfile.STANDARD,
+                          target_port: int = None) -> str:
+        """Build a self-contained Python GMP script for OpenVAS scanning."""
+        port_list_pref = {
+            ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
+            ScanProfile.STANDARD: "all_tcp",
+            ScanProfile.THOROUGH: "all_tcp_udp",
+            ScanProfile.CUSTOM: "all_tcp_udp",
+        }.get(profile, "all_tcp")
+
+        common_funcs = self._gmp_common_functions()
+        poll_and_retrieve = self._gmp_poll_and_retrieve()
+
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+TARGET = "{target}"
+CONFIG_ID = "{config_id}"
+SCAN_ID = "{scan_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+PREFERRED_PORT_LIST = "{port_list_pref}"
+TARGET_PORT = {target_port if target_port else 0}
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+    "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
+}}
+''' + common_funcs + f'''
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Connected to GVM daemon", flush=True)
+
+    # Authenticate
+    auth_xml = f'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>'
+    resp = send_gmp(sock, auth_xml)
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}", flush=True)
+        sys.exit(1)
+    print("STATUS: Authenticated with GVM", flush=True)
+
+    # Find the OpenVAS scanner (type 2) — required for network scanning.
+    # Without explicit scanner_id, gvmd may use the CVE scanner (type 3)
+    # which only does local CVE matching and never sends network probes,
+    # causing scans to stay at 0% forever.
+    scanner_id = ""
+    resp = send_gmp(sock, '<get_scanners/>')
+    try:
+        root = ET.fromstring(resp)
+        for sc in root.findall("scanner"):
+            sc_type = sc.findtext("type", "")
+            sc_name = sc.findtext("name", "")
+            sc_id = sc.attrib.get("id", "")
+            print(f"STATUS: Found scanner: {{sc_name}} (type={{sc_type}}, id={{sc_id}})", flush=True)
+            if sc_type == "2":  # type 2 = OpenVAS scanner (connected via ospd-openvas)
+                scanner_id = sc_id
+        if scanner_id:
+            print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
+        else:
+            print("SCAN:FAILED:No OpenVAS scanner (type 2) found — ospd-openvas may not be running or connected to gvmd", flush=True)
+            sys.exit(1)
+    except ET.ParseError:
+        print("SCAN:FAILED:Could not parse scanner list — gvmd may be unavailable", flush=True)
+        sys.exit(1)
+
+    # Port list selection — when TARGET_PORT is set (e.g. lab targets), create a
+    # custom port list with just that port for a focused scan. Otherwise use the
+    # profile-based port list (all_tcp, all_tcp_udp, etc.).
+    custom_port_list_id = ""
+    if TARGET_PORT:
+        pl_name = f"scan-{{SCAN_ID}}-ports"
+        create_pl = f'<create_port_list><name>{{pl_name}}</name><port_range>T:{{TARGET_PORT}}</port_range></create_port_list>'
+        resp = send_gmp(sock, create_pl)
+        status, status_text = get_status_info(resp)
+        if status in ("200", "201"):
+            try:
+                root = ET.fromstring(resp)
+                custom_port_list_id = root.attrib.get("id", "")
+                port_list_id = custom_port_list_id
+                print(f"STATUS: Created custom port list for port {{TARGET_PORT}} ({{custom_port_list_id}})", flush=True)
+            except ET.ParseError:
+                print(f"STATUS: Warning — could not parse port list response, falling back to profile port list", flush=True)
+                custom_port_list_id = ""
+        else:
+            print(f"STATUS: Warning — create port list failed ({{status}}): {{status_text}}, falling back to profile port list", flush=True)
+
+    if not custom_port_list_id:
+        preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, "")
+        port_list_id = preferred_id
+        resp = send_gmp(sock, '<get_port_lists/>')
+        try:
+            root = ET.fromstring(resp)
+            available_pls = {{}}
+            for pl in root.findall("port_list"):
+                available_pls[pl.attrib.get("id", "")] = pl.findtext("name", "")
+            if preferred_id and preferred_id in available_pls:
+                port_list_id = preferred_id
+                print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+            else:
+                fallback = PORT_LISTS.get("all_tcp", "")
+                if fallback in available_pls:
+                    port_list_id = fallback
+                elif available_pls:
+                    port_list_id = next(iter(available_pls))
+                print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
+        except ET.ParseError:
+            print(f"STATUS: Using default port list {{port_list_id}}", flush=True)
+
+    # Create target — alive_tests="Consider Alive" skips host discovery probes.
+    # K8s ClusterIP services only forward traffic on defined service ports, so
+    # ICMP/TCP 443/80 alive checks fail and GVM marks the host as unreachable.
+    target_name = f"scan-{{SCAN_ID}}-target"
+    create_target = f'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/><alive_tests>Consider Alive</alive_tests></create_target>'
+    resp = send_gmp(sock, create_target)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        target_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse target ID", flush=True)
+        sys.exit(1)
+    print(f"STATUS: Created target {{target_id}}", flush=True)
+
+    # Create task — include scanner_id to ensure OpenVAS (not CVE) scanner is used
+    task_name = f"scan-{{SCAN_ID}}-task"
+    create_task = f'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{CONFIG_ID}}"/><scanner id="{{scanner_id}}"/></create_task>'
+    resp = send_gmp(sock, create_task)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        task_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse task ID", flush=True)
+        sys.exit(1)
+    print(f"STATUS: Created task {{task_id}}", flush=True)
+
+    # Start task
+    start = f'<start_task task_id="{{task_id}}"/>'
+    resp = send_gmp(sock, start)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "202"):
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report_id")
+        report_id = report_elem.text if report_elem is not None else ""
+    except:
+        report_id = ""
+    print(f"STATUS: Scan started (report {{report_id}})", flush=True)
+
+    stale_limit = 360  # 360 x 10s = 60 min with no progress change
+''' + poll_and_retrieve + '''
+    # NOTE: Do NOT delete task/target here — report must be transferred first.
+    sock.close()
+    print("STATUS: OpenVAS scan complete", flush=True)
+
+except Exception as e:
+    print(f"SCAN:FAILED:{e}", flush=True)
+    sys.exit(1)
+'''
+
+    def _build_gmp_custom_families_script(self, scan_id: str, target: str,
+                                            families: List[str],
+                                            profile: ScanProfile = ScanProfile.STANDARD,
+                                            target_port: int = None) -> str:
+        """Build a GMP script that creates a custom config with selected NVT families."""
+        # Build the family XML for modify_config
+        family_xml_parts = []
+        for fam in families:
+            family_xml_parts.append(
+                f'<family><name>{fam}</name><all>1</all><growing>1</growing></family>'
+            )
+        families_xml = "".join(family_xml_parts)
+
+        # Map profile to preferred port list key (same logic as standard script)
+        # Custom families are typically used with Standard+ profiles
+        port_list_pref = {
+            ScanProfile.QUICK: "all_tcp_nmap_top100_udp",
+            ScanProfile.STANDARD: "all_tcp",
+            ScanProfile.THOROUGH: "all_tcp_udp",
+            ScanProfile.CUSTOM: "all_tcp_udp",
+        }.get(profile, "all_tcp")
+
+        common_funcs = self._gmp_common_functions()
+        poll_and_retrieve = self._gmp_poll_and_retrieve()
+
+        return f'''
+import socket, os, sys, time
+import xml.etree.ElementTree as ET
+
+SOCK_PATH = "/run/gvmd/gvmd.sock"
+PASSWORD = os.environ.get("GMP_PASSWORD", "")
+TARGET = "{target}"
+SCAN_ID = "{scan_id}"
+REPORT_FORMAT = "{OPENVAS_XML_FORMAT}"
+# Base config: Full and Fast (we clone it, then replace families)
+BASE_CONFIG_ID = "daba56c8-73ec-11df-a475-002264764cea"
+# Profile-based port list preference
+PREFERRED_PORT_LIST = "{port_list_pref}"
+TARGET_PORT = {target_port if target_port else 0}
+PORT_LISTS = {{
+    "all_tcp_udp": "4a4717fe-57d2-11e1-9a26-406186ea4fc5",
+    "all_tcp": "33d0cd82-57c6-11e1-8ed1-406186ea4fc5",
+    "all_tcp_nmap_top100_udp": "730ef368-57e2-11e1-a90f-406186ea4fc5",
+}}
+''' + common_funcs + f'''
+custom_config_id = None
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30)
+    sock.connect(SOCK_PATH)
+    print("STATUS: Connected to GVM daemon", flush=True)
+
+    # Authenticate
+    auth_xml = f\'<authenticate><credentials><username>admin</username><password>{{PASSWORD}}</password></credentials></authenticate>\'
+    resp = send_gmp(sock, auth_xml)
+    status, status_text = get_status_info(resp)
+    if status != "200":
+        print(f"SCAN:FAILED:Authentication failed: {{status_text}}", flush=True)
+        sys.exit(1)
+    print("STATUS: Authenticated with GVM", flush=True)
+
+    # Find the OpenVAS scanner (type 2) — required for network scanning.
+    # Without explicit scanner_id, gvmd may use the CVE scanner (type 3)
+    # which only does local CVE matching and never sends network probes.
+    scanner_id = ""
+    resp = send_gmp(sock, '<get_scanners/>')
+    try:
+        root = ET.fromstring(resp)
+        for sc in root.findall("scanner"):
+            sc_type = sc.findtext("type", "")
+            sc_name = sc.findtext("name", "")
+            sc_id = sc.attrib.get("id", "")
+            print(f"STATUS: Found scanner: {{sc_name}} (type={{sc_type}}, id={{sc_id}})", flush=True)
+            if sc_type == "2":
+                scanner_id = sc_id
+        if scanner_id:
+            print(f"STATUS: Using OpenVAS scanner {{scanner_id}}", flush=True)
+        else:
+            print("SCAN:FAILED:No OpenVAS scanner (type 2) found — ospd-openvas may not be running or connected to gvmd", flush=True)
+            sys.exit(1)
+    except ET.ParseError:
+        print("SCAN:FAILED:Could not parse scanner list — gvmd may be unavailable", flush=True)
+        sys.exit(1)
+
+    # Port list selection — when TARGET_PORT is set (e.g. lab targets), create a
+    # custom port list with just that port for a focused scan.
+    custom_port_list_id = ""
+    if TARGET_PORT:
+        pl_name = f"scan-{{SCAN_ID}}-ports"
+        create_pl = f\'<create_port_list><name>{{pl_name}}</name><port_range>T:{{TARGET_PORT}}</port_range></create_port_list>\'
+        resp = send_gmp(sock, create_pl)
+        status, status_text = get_status_info(resp)
+        if status in ("200", "201"):
+            try:
+                root = ET.fromstring(resp)
+                custom_port_list_id = root.attrib.get("id", "")
+                port_list_id = custom_port_list_id
+                print(f"STATUS: Created custom port list for port {{TARGET_PORT}} ({{custom_port_list_id}})", flush=True)
+            except ET.ParseError:
+                custom_port_list_id = ""
+        else:
+            print(f"STATUS: Warning — create port list failed ({{status}}): {{status_text}}, falling back to profile port list", flush=True)
+
+    if not custom_port_list_id:
+        preferred_id = PORT_LISTS.get(PREFERRED_PORT_LIST, PORT_LISTS["all_tcp"])
+        port_list_id = preferred_id
+        resp = send_gmp(sock, '<get_port_lists/>')
+        try:
+            root = ET.fromstring(resp)
+            available_pls = {{pl.attrib.get("id", ""): pl.findtext("name", "") for pl in root.findall("port_list")}}
+            if preferred_id in available_pls:
+                port_list_id = preferred_id
+                print(f"STATUS: Using port list {{available_pls[port_list_id]}} (profile: {{PREFERRED_PORT_LIST}})", flush=True)
+            else:
+                fallback = PORT_LISTS.get("all_tcp", "")
+                if fallback in available_pls:
+                    port_list_id = fallback
+                elif available_pls:
+                    port_list_id = next(iter(available_pls))
+                print(f"STATUS: Preferred port list unavailable, using {{available_pls.get(port_list_id, port_list_id)}}", flush=True)
+        except ET.ParseError:
+            pass
+
+    # Create custom config by cloning base
+    config_name = f"scan-{{SCAN_ID}}-custom-config"
+    create_cfg = f\'<create_config><copy>{{BASE_CONFIG_ID}}</copy><name>{{config_name}}</name></create_config>\'
+    resp = send_gmp(sock, create_cfg)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create config failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        custom_config_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse config ID", flush=True)
+        sys.exit(1)
+    print(f"STATUS: Created custom config {{custom_config_id}}", flush=True)
+
+    # Modify config to set selected NVT families
+    modify_xml = f\'<modify_config config_id="{{custom_config_id}}"><nvt_family_selection>{families_xml}</nvt_family_selection></modify_config>\'
+    resp = send_gmp(sock, modify_xml)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"STATUS: Warning - modify config returned status {{status}}: {{status_text}}", flush=True)
+    else:
+        print("STATUS: Configured NVT families on custom config", flush=True)
+
+    # Create target (with port_list_id — required by GVM 22+)
+    # alive_tests="Consider Alive": skip host discovery (ClusterIP targets don't respond to ICMP)
+    target_name = f"scan-{{SCAN_ID}}-target"
+    create_target = f\'<create_target><name>{{target_name}}</name><hosts>{{TARGET}}</hosts><port_list id="{{port_list_id}}"/><alive_tests>Consider Alive</alive_tests></create_target>\'
+    resp = send_gmp(sock, create_target)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create target failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        target_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse target ID", flush=True)
+        sys.exit(1)
+    print(f"STATUS: Created target {{target_id}}", flush=True)
+
+    # Create task with custom config — include scanner_id to ensure OpenVAS scanner is used
+    task_name = f"scan-{{SCAN_ID}}-task"
+    create_task = f\'<create_task><name>{{task_name}}</name><target id="{{target_id}}"/><config id="{{custom_config_id}}"/><scanner id="{{scanner_id}}"/></create_task>\'
+    resp = send_gmp(sock, create_task)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "201"):
+        print(f"SCAN:FAILED:Create task failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        task_id = root.attrib.get("id", "")
+    except:
+        print("SCAN:FAILED:Could not parse task ID", flush=True)
+        sys.exit(1)
+    print(f"STATUS: Created task {{task_id}}", flush=True)
+
+    # Start task
+    start = f\'<start_task task_id="{{task_id}}"/>\'
+    resp = send_gmp(sock, start)
+    status, status_text = get_status_info(resp)
+    if status not in ("200", "202"):
+        print(f"SCAN:FAILED:Start task failed (status {{status}}): {{status_text}}", flush=True)
+        sys.exit(1)
+    try:
+        root = ET.fromstring(resp)
+        report_elem = root.find(".//report_id")
+        report_id = report_elem.text if report_elem is not None else ""
+    except:
+        report_id = ""
+    print(f"STATUS: Scan started (report {{report_id}})", flush=True)
+
+    stale_limit = 360  # 360 x 10s = 60 min with no progress change at any level
+''' + poll_and_retrieve + '''
+    # NOTE: Do NOT delete task/target/config here. The report file must be transferred
+    # out of the container first (done by _run_openvas_scan via base64). Cleanup
+    # happens after successful transfer to avoid data loss.
+    sock.close()
+    print("STATUS: OpenVAS scan complete", flush=True)
+
+except Exception as e:
+    print(f"SCAN:FAILED:{e}", flush=True)
+    # Try to clean up custom config on failure
+    try:
+        if custom_config_id:
+            send_gmp(sock, f'<delete_config config_id="{custom_config_id}" ultimate="1"/>')
+    except:
+        pass
+    sys.exit(1)
+'''
+
+    # =========================================================================
+    # METASPLOIT
+    # =========================================================================
+
+    def _build_msf_resource_script(self, target: str, profile: ScanProfile,
+                                     scan_id: str, xml_path: str,
+                                     custom_modules: list = None,
+                                     srvhost: str = None) -> str:
+        """Build a Metasploit resource script based on scan profile.
+
+        Quick:    db_nmap discovery only (fast port scan, no vuln modules)
+        Standard: db_nmap service detection + common vulnerability scanners
+        Thorough: db_nmap full scan + comprehensive auxiliary scanner suite
+        Custom:   db_nmap + user-selected modules from catalog
+
+        srvhost: pod IP for callback-based modules (e.g. log4shell_scanner)
+        """
+        # Parse host:port — db_nmap uses nmap (needs -p flag), modules need RPORT
+        msf_host, msf_port = self._parse_target(target)
+
+        lines = []
+
+        # Ensure database connection is active before scanning
+        lines.append("db_status")
+        lines.append("db_rebuild_cache")
+
+        # Isolate this scan in its own workspace so db_export only includes
+        # hosts/services/vulns from THIS scan, not leftovers from previous scans
+        ws_name = f"scan-{scan_id}"
+        lines.append(f"workspace -a {ws_name}")
+
+        # Phase 1: Network discovery via db_nmap
+        # -Pn: skip host discovery (target VMs may block ICMP ping)
+        # When an explicit port is given, drop --top-ports to avoid nmap conflict
+        if msf_port:
+            nmap_flags = {
+                ScanProfile.QUICK: "-Pn -T4",
+                ScanProfile.STANDARD: "-Pn -T4 -sV",
+                ScanProfile.THOROUGH: "-Pn -T4 -sV -sC",
+                ScanProfile.CUSTOM: "-Pn -T4 -sV",
+            }.get(profile, "-Pn -T4 -sV")
+            lines.append(f"db_nmap {nmap_flags} -p {msf_port} {msf_host}")
+        else:
+            nmap_flags = {
+                ScanProfile.QUICK: "-Pn -T4 --top-ports 100",
+                ScanProfile.STANDARD: "-Pn -T4 -sV --top-ports 1000",
+                ScanProfile.THOROUGH: "-Pn -T4 -sV -sC --top-ports 1000",
+                ScanProfile.CUSTOM: "-Pn -T4 -sV --top-ports 1000",
+            }.get(profile, "-Pn -T4 -sV --top-ports 1000")
+            lines.append(f"db_nmap {nmap_flags} {msf_host}")
+
+        # Helper to add a module block.
+        # mod_entry: full catalog dict (or plain id string for backwards compat)
+        # RPORT is only overridden when:
+        #   - target has an explicit port, AND
+        #   - the module has no default_port (HTTP/generic — accepts any port), OR
+        #   - the module's default_port matches the target port
+        # This prevents SMB/RDP/SSH/DB modules from inheriting an HTTP target port
+        # and getting immediate connection refused errors.
+        def add_module(mod_entry, extra_opts=None, needs_srvhost=False):
+            if isinstance(mod_entry, dict):
+                mod_id = mod_entry["id"]
+                default_port = mod_entry.get("default_port")
+                check_only = mod_entry.get("check_only", False)
+            else:
+                mod_id = mod_entry
+                default_port = None
+                check_only = False
+            lines.append(f"use {mod_id}")
+            lines.append(f"set RHOSTS {msf_host}")
+            if msf_port:
+                if default_port is None or default_port == msf_port:
+                    lines.append(f"set RPORT {msf_port}")
+            lines.append(f"set THREADS 5")
+            if needs_srvhost and srvhost:
+                lines.append(f"set SRVHOST {srvhost}")
+                lines.append(f"set LHOST {srvhost}")
+            if extra_opts:
+                for k, v in extra_opts.items():
+                    lines.append(f"set {k} {v}")
+            # exploit modules with check_only use "check" to verify vulnerability
+            # without exploitation; auxiliary modules use "run"
+            lines.append("check" if check_only else "run")
+            lines.append(f"back")
+
+        # Select modules from catalog based on profile
+        if profile == ScanProfile.CUSTOM:
+            selected_ids = set(custom_modules or [])
+            modules = [m for m in MSF_MODULE_CATALOG if m["id"] in selected_ids]
+        elif profile == ScanProfile.QUICK:
+            modules = []
+        else:
+            # standard or thorough — filter by profile name
+            modules = [m for m in MSF_MODULE_CATALOG if profile.value in m["profiles"]]
+
+        for mod in modules:
+            add_module(mod, mod.get("extra_opts"), mod.get("needs_srvhost", False))
+
+        # Print discovered vulns summary
+        lines.append("vulns")
+
+        # Export results (workspace-scoped — only this scan's data)
+        lines.append(f"db_export -f xml {xml_path}")
+
+        # Clean up workspace — switch to default first (can't delete current workspace)
+        lines.append("workspace default")
+        lines.append(f"workspace -d {ws_name}")
+        lines.append("exit")
+
+        return "\n".join(lines) + "\n"
+
+    async def _run_metasploit_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run a Metasploit scan via resource script with vulnerability modules."""
+        # Pre-flight: check if Metasploit deployment exists and has a ready pod
+        check = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "deployment/metasploit", "-n", "metasploit",
+             "-o", "name", "--ignore-not-found"],
+            timeout=10
+        )
+        if not check.success or not check.output.strip():
+            # Log diagnostics to help identify why Metasploit is missing
+            ns_check = await self.process_manager.run_command_simple(
+                ["kubectl", "get", "namespace", "metasploit", "--ignore-not-found",
+                 "-o", "jsonpath={.metadata.name}"],
+                timeout=10
+            )
+            if not ns_check.output.strip():
+                await self.log("metasploit", "warning",
+                    "Metasploit namespace does not exist — has the deployment step run?")
+            else:
+                # Namespace exists but no deployment — check for pods/events
+                pods = await self.process_manager.run_command_simple(
+                    ["kubectl", "get", "pods", "-n", "metasploit", "--no-headers"],
+                    timeout=10
+                )
+                if pods.output and pods.output.strip():
+                    await self.log("metasploit", "warning",
+                        f"Metasploit namespace exists but deployment not found. Pods: {pods.output.strip()}")
+                else:
+                    await self.log("metasploit", "warning",
+                        "Metasploit namespace exists but has no deployment or pods — "
+                        "check ArgoCD sync status for the metasploit application")
+            if not check.success:
+                await self.log("metasploit", "warning",
+                    f"kubectl error: {(check.output or '').strip()}")
+            await self._update_tool_state(
+                ScanTool.METASPLOIT, status=ScanStatus.COMPLETED,
+                completed_at=datetime.utcnow())
+            return None
+
+        scan_id = self.current_scan.id
+        xml_path = f"/tmp/msf-scan-{scan_id}.xml"
+        rc_path = f"/tmp/scan-{scan_id}.rc"
+        custom_modules = self.current_scan.custom_modules
+
+        # Get pod IP for callback-based modules (e.g. log4shell_scanner sends JNDI
+        # payloads and the target calls back to SRVHOST — must be a routable pod IP)
+        srvhost = None
+        pod_ip_result = await self.process_manager.run_command_simple(
+            ["kubectl", "get", "pods", "-n", "metasploit",
+             "-l", "app.kubernetes.io/name=metasploit",
+             "-o", "jsonpath={.items[0].status.podIP}"],
+            timeout=10
+        )
+        if pod_ip_result.success and pod_ip_result.output.strip():
+            srvhost = pod_ip_result.output.strip()
+            await self.log("metasploit", "info", f"SRVHOST (pod IP): {srvhost}")
+        else:
+            await self.log("metasploit", "warning",
+                "Could not determine pod IP — callback-based modules (log4shell) may fail")
+
+        # Select timeout based on profile
+        if profile == ScanProfile.CUSTOM:
+            module_count_est = len(custom_modules) if custom_modules else 0
+            # Base 15 min for db_nmap + ~3 min per module
+            msf_timeout = 900 + (module_count_est * 180)
+        else:
+            msf_timeout = {
+                ScanProfile.QUICK: METASPLOIT_TIMEOUT_QUICK,
+                ScanProfile.STANDARD: METASPLOIT_TIMEOUT_STANDARD,
+                ScanProfile.THOROUGH: METASPLOIT_TIMEOUT_THOROUGH,
+            }.get(profile, METASPLOIT_TIMEOUT_STANDARD)
+
+        # Build the resource script
+        rc_content = self._build_msf_resource_script(
+            target, profile, scan_id, xml_path, custom_modules=custom_modules,
+            srvhost=srvhost
+        )
+
+        module_count = rc_content.count("use auxiliary/")
+        if module_count > 0:
+            await self.log("metasploit", "info",
+                f"Preparing resource script: db_nmap + {module_count} vulnerability scanner module(s)")
+        else:
+            await self.log("metasploit", "info", "Preparing resource script: db_nmap discovery only")
+
+        # Write resource script into the container via heredoc (handles newlines properly)
+        write_rc = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
+             "-c", "metasploit", "--",
+             "bash", "-c", f"cat > {rc_path} << 'RCEOF'\n{rc_content}RCEOF"],
+            timeout=15
+        )
+
+        if not write_rc.success:
+            await self.log("metasploit", "error", f"Failed to write resource script: {write_rc.output}")
+            return None
+
+        nmap_flags = {
+            ScanProfile.QUICK: "-T4 --top-ports 100",
+            ScanProfile.STANDARD: "-T4 -sV --top-ports 1000",
+            ScanProfile.THOROUGH: "-T4 -sV -sC --top-ports 1000",
+            ScanProfile.CUSTOM: "-T4 -sV --top-ports 1000",
+        }.get(profile, "-T4 -sV --top-ports 1000")
+        await self.log("metasploit", "info", f"Phase 1: db_nmap {nmap_flags} {target}")
+        if module_count > 0:
+            await self.log("metasploit", "info", f"Phase 2: Running {module_count} auxiliary scanner(s)...")
+
+        # Collect [+] positive findings from console output — many auxiliary
+        # scanners (libssh_auth_bypass, etc.) report results to stdout but
+        # don't call report_vuln(), so they're missing from db_export XML.
+        console_findings = []
+        current_module = [None]  # mutable container for closure
+
+        async def _capture_msf_line(line: str):
+            stripped = line.strip()
+            # Track which module is running — MSF echoes RC commands with
+            # prompt prefixes like "msf6 > use auxiliary/..." or just "use ..."
+            if "use auxiliary/" in stripped or "use exploit/" in stripped:
+                idx = stripped.find("use ")
+                if idx >= 0:
+                    current_module[0] = stripped[idx + 4:]
+            elif stripped.startswith("[+]") and current_module[0]:
+                console_findings.append({
+                    "module": current_module[0],
+                    "message": stripped,
+                })
+            await self._log_msf_line(line)
+
+        # Run msfconsole with the resource script
+        result = await self.process_manager.run_command(
+            ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
+             "-c", "metasploit", "--",
+             "./msfconsole", "-q", "-r", rc_path],
+            on_output=_capture_msf_line,
+            timeout=msf_timeout
+        )
+
+        if not result.success:
+            output = result.output or ""
+            if "TIMEOUT" in output:
+                await self.log("metasploit", "error", "Metasploit scan timed out")
+            else:
+                await self.log("metasploit", "error", f"Metasploit scan failed (exit code non-zero)")
+                for line in output.split("\n")[-15:]:
+                    line = line.strip()
+                    if line:
+                        await self.log("metasploit", "error", f"  {line}")
+            return None
+
+        # Read the exported XML file
+        await self.log("metasploit", "info", "Reading Metasploit export...")
+        xml_result = await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
+             "-c", "metasploit", "--",
+             "cat", xml_path],
+            timeout=30
+        )
+
+        # Cleanup temp files
+        await self.process_manager.run_command_simple(
+            ["kubectl", "exec", "-n", "metasploit", "deployment/metasploit",
+             "-c", "metasploit", "--",
+             "bash", "-c", f"rm -f {rc_path} {xml_path}"],
+            timeout=10
+        )
+
+        if xml_result.success and xml_result.output and "<?xml" in xml_result.output:
+            xml_content = xml_result.output.strip()
+            host_count = xml_content.count("<host>")
+            service_count = xml_content.count("<service>")
+            vuln_count = xml_content.count("<vuln>")
+            await self.log("metasploit", "info",
+                f"Metasploit found {host_count} host(s), {service_count} service(s), {vuln_count} vuln(s)")
+
+            # Store console [+] findings for persistence — many auxiliary modules
+            # report to stdout but don't call report_vuln() in the MSF DB
+            if console_findings:
+                await self.log("metasploit", "info",
+                    f"Additionally captured {len(console_findings)} positive finding(s) from console output")
+                self._msf_console_findings = console_findings
+
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.METASPLOIT:
+                    total_findings = vuln_count + len(console_findings)
+                    ts.findings_count = total_findings if total_findings > 0 else host_count
+                    break
+
+            return xml_content
+        else:
+            await self.log("metasploit", "warn", "No XML output from Metasploit export")
+            if xml_result.output:
+                for line in xml_result.output.split("\n")[-10:]:
+                    if line.strip():
+                        await self.log("metasploit", "info", f"  {line.strip()}")
+            return None
+
+    async def _log_msf_line(self, line: str):
+        """Process and log Metasploit output lines."""
+        line = line.strip()
+        if not line:
+            return
+        # Filter out noisy MSF banner/prompt lines
+        if line.startswith("=") or line.startswith("[*] ==="):
+            return
+        if "metasploit" in line.lower() and "http" not in line and "ms17" not in line.lower():
+            return
+        # Vulnerability findings (green [+] = positive hit)
+        if line.startswith("[+]"):
+            await self.log("metasploit", "warn", line)  # yellow for vuln findings
+        elif line.startswith("[-]"):
+            await self.log("metasploit", "info", line)
+        elif line.startswith("[!]"):
+            await self.log("metasploit", "warn", line)
+        elif line.startswith("[*]"):
+            await self.log("metasploit", "info", line)
+        elif "Nmap scan report" in line or "open" in line.lower():
+            await self.log("metasploit", "info", line)
+        # Vuln table output
+        elif line.startswith("Vuln") or "host" in line.lower() and "refs" in line.lower():
+            await self.log("metasploit", "info", line)
+
+    # =========================================================================
+    # WPSCAN
+    # =========================================================================
+
+    async def _run_wpscan_scan(self, target: str, profile: ScanProfile) -> Optional[str]:
+        """Run a WPScan scan via a temporary Kubernetes pod.
+
+        WPScan is a WordPress-specific vulnerability scanner that detects outdated
+        core/plugin/theme versions and known CVEs. It outputs JSON which we return
+        as-is for parsing by _persist_wpscan_results.
+        """
+        scan_id = self.current_scan.id
+        pod_name = f"wpscan-scan-{scan_id}"
+
+        timeout = {
+            ScanProfile.QUICK: WPSCAN_TIMEOUT_QUICK,
+            ScanProfile.STANDARD: WPSCAN_TIMEOUT_STANDARD,
+            ScanProfile.THOROUGH: WPSCAN_TIMEOUT_THOROUGH,
+        }.get(profile, WPSCAN_TIMEOUT_STANDARD)
+
+        # Parse host:port — build target URL for WPScan
+        wp_host, wp_port = self._parse_target(target)
+        if wp_port and wp_port == 443:
+            target_url = f"https://{wp_host}:{wp_port}"
+        elif wp_port:
+            target_url = f"http://{wp_host}:{wp_port}"
+        else:
+            target_url = f"http://{wp_host}"
+
+        # Build WPScan flags based on profile
+        # --no-banner: suppress ASCII art header
+        # --format json: machine-readable output
+        # --random-user-agent: avoid bot detection
+        # --disable-tls-checks: K8s internal certs are self-signed
+        base_flags = [
+            "--url", target_url,
+            "--format", "json",
+            "--no-banner",
+            "--random-user-agent",
+            "--disable-tls-checks",
+        ]
+
+        if profile == ScanProfile.QUICK:
+            # Version detection only — no plugin/theme enumeration
+            flags = base_flags
+        elif profile == ScanProfile.THOROUGH:
+            # Aggressive enumeration: all plugins, all themes, users, config backups
+            flags = base_flags + [
+                "--enumerate", "ap,at,u,cb,dbe",
+                "--plugins-detection", "aggressive",
+            ]
+        else:
+            # Standard: popular plugins + themes + users
+            flags = base_flags + [
+                "--enumerate", "vp,vt,u",
+                "--plugins-detection", "mixed",
+            ]
+
+        await self.log("wpscan", "info",
+            f"Launching WPScan pod '{pod_name}' targeting {target_url} ({profile.value} profile)")
+
+        # Create pod in wpscan-scanner namespace
+        wpscan_ns = "wpscan-scanner"
+        await self.k8s.ensure_namespace(wpscan_ns)
+
+        create_result = await self.process_manager.run_command_simple(
+            ["kubectl", "run", pod_name,
+             "--image=wpscanteam/wpscan:latest",
+             "--restart=Never",
+             f"--namespace={wpscan_ns}",
+             "--"] + flags,
+            timeout=30
+        )
+
+        if not create_result.success:
+            await self.log("wpscan", "error", f"Failed to create WPScan pod: {create_result.output}")
+            return None
+
+        await self.log("wpscan", "info", "WPScan pod created, waiting for scan to complete...")
+
+        # Wait for pod to complete
+        await self.process_manager.run_command_simple(
+            ["kubectl", "wait", "--for=condition=Ready=false",
+             f"pod/{pod_name}", f"--namespace={wpscan_ns}",
+             f"--timeout={timeout}s"],
+            timeout=timeout + 30
+        )
+
+        # Poll for pod phase (Succeeded/Failed)
+        poll_attempts = timeout // 5
+        pod_done = False
+        for attempt in range(poll_attempts):
+            phase = await self.k8s.get_pod_phase(wpscan_ns, pod_name)
+            if phase in ("Succeeded", "Failed"):
+                pod_done = True
+                await self.log("wpscan", "info", f"WPScan pod finished (phase: {phase})")
+                break
+            elif phase is None or phase == "":
+                pod_done = True
+                break
+            await asyncio.sleep(5)
+
+        if not pod_done:
+            await self.log("wpscan", "error", f"WPScan scan timed out after {timeout}s")
+            await self.k8s.delete_pod(wpscan_ns, pod_name, force=True, timeout=15)
+            return None
+
+        # Read the pod logs (contains WPScan JSON output)
+        logs_result = await self.k8s.get_pod_logs(wpscan_ns, pod_name, timeout=30)
+
+        # Clean up the pod
+        await self.k8s.delete_pod(wpscan_ns, pod_name, force=True, timeout=15)
+
+        output = logs_result.output or ""
+
+        # WPScan JSON output starts with { and ends with }
+        json_start = output.find("{")
+        json_end = output.rfind("}")
+
+        if json_start >= 0 and json_end > json_start:
+            json_content = output[json_start:json_end + 1]
+            try:
+                data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                await self.log("wpscan", "error", f"Failed to parse WPScan JSON: {e}")
+                return None
+
+            # Count findings
+            vuln_count = 0
+            # WordPress core vulns
+            wp_version = data.get("version", {})
+            if wp_version:
+                vuln_count += len(wp_version.get("vulnerabilities", []))
+            # Plugin vulns
+            for plugin_data in data.get("plugins", {}).values():
+                vuln_count += len(plugin_data.get("vulnerabilities", []))
+            # Theme vulns
+            for theme_data in data.get("themes", {}).values():
+                vuln_count += len(theme_data.get("vulnerabilities", []))
+
+            await self.log("wpscan", "info",
+                f"WPScan found {vuln_count} vulnerability(ies)")
+
+            for ts in self.current_scan.tools:
+                if ts.tool == ScanTool.WPSCAN:
+                    ts.findings_count = vuln_count
+                    break
+
+            return json_content
+        else:
+            # No JSON found — log raw output for debugging
+            await self.log("wpscan", "warn",
+                f"Could not extract JSON from WPScan output ({len(output)} bytes)")
+            # WPScan exits non-zero when target isn't WordPress
+            if "does not seem to be running WordPress" in output:
+                await self.log("wpscan", "warn",
+                    "Target does not appear to be running WordPress — skipping WPScan")
+            else:
+                for line in output.split("\n")[-20:]:
+                    line = line.strip()
+                    if line:
+                        await self.log("wpscan", "info", f"  {line}")
+            return None
+
+    # =========================================================================
+    # FARADAY UPLOAD
+    # =========================================================================
+
+    async def _get_faraday_credentials(self) -> Optional[dict]:
+        """Get Faraday credentials from k8s secrets.
+
+        Delegates to FaradayClient.get_credentials().
+        """
+        return await self.faraday_client.get_credentials(
+            log_callback=lambda lvl, msg: self.log(None, lvl, msg)
+        )
+
+    async def _ensure_faraday_admin(self, creds: dict) -> bool:
+        """Ensure the Faraday admin user exists (create if missing).
+
+        Delegates to FaradayClient.ensure_admin().
+        """
+        return await self.faraday_client.ensure_admin(creds)
+
+    async def _upload_to_faraday(self, xml_content: str, tool_name: str, creds: dict,
+                                scan_id: str = "", scan_profile: str = "") -> bool:
+        """Upload scan results to Faraday via individual REST API calls.
+
+        Uses faraday-plugins to parse XML, then creates hosts/services/vulns
+        one by one via the synchronous REST API (avoids bulk_create which
+        requires a Celery worker that isn't running in our deployment).
+
+        Enhanced fields passed to Faraday:
+        - tags: tool source + scan profile for filtering
+        - data: raw evidence/proof from scan output
+        - external_id: CVE identifiers for cross-referencing
+        - policyviolations: compliance findings
+        - VulnWeb type: for HTTP-related findings (path, method, website, etc.)
+        """
+        await self.log(tool_name, "info", f"Uploading {tool_name} results to Faraday workspace 'pentest'...")
+
+        import tempfile
+        import os
+
+        # Map tool names to faraday-plugins plugin names
+        plugin_map = {
+            "nmap": "nmap",
+            "openvas": "openvas",
+            "metasploit": "metasploit",
+            "wpscan": "wpscan",
+        }
+        plugin_name = plugin_map.get(tool_name, tool_name)
+
+        tmp_file = None
+        try:
+            # Write XML to temp file
+            tmp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False)
+            tmp_file.write(xml_content)
+            tmp_file.close()
+
+            # Copy XML into Faraday container
+            container_xml = f"/tmp/upload-{self.current_scan.id}-{tool_name}.xml"
+
+            # Get the faraday pod name
+            pod_name = await self.faraday_client.get_pod_name()
+
+            if not pod_name:
+                await self.log(tool_name, "warn", "Could not find Faraday pod")
+                return False
+
+            # kubectl cp the XML file into the container
+            cp_result = await self.process_manager.run_command_simple(
+                ["kubectl", "cp", tmp_file.name, f"faraday/{pod_name}:{container_xml}",
+                 "-c", "faraday"],
+                timeout=30
+            )
+
+            if not cp_result.success:
+                await self.log(tool_name, "warn", f"Failed to copy XML to Faraday container: {cp_result.output}")
+                return False
+
+            # Python script that:
+            # 1. Logs in to Faraday API
+            # 2. Ensures 'pentest' workspace exists
+            # 3. Parses XML with faraday-plugins
+            # 4. Creates hosts/services/vulns with full context via REST API
+            upload_script = (
+                "import urllib.request, json, http.cookiejar, os, sys\n"
+                "BASE = 'http://127.0.0.1:5985'\n"
+                "WS = 'pentest'\n"
+                f"TOOL = '{tool_name}'\n"
+                f"SCAN_ID = '{scan_id}'\n"
+                f"SCAN_PROFILE = '{scan_profile}'\n"
+                "TOOL_TAGS = [f'tool:{TOOL}', f'profile:{SCAN_PROFILE}', f'scan:{SCAN_ID}']\n"
+                "cj = http.cookiejar.CookieJar()\n"
+                "opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))\n"
+                "csrf = ''\n"
+                "\n"
+                "def api_post(path, body):\n"
+                "    data = json.dumps(body).encode()\n"
+                "    req = urllib.request.Request(BASE + path, method='POST',\n"
+                "        headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=data)\n"
+                "    resp = opener.open(req)\n"
+                "    return json.loads(resp.read().decode())\n"
+                "\n"
+                "def api_put(path, body):\n"
+                "    data = json.dumps(body).encode()\n"
+                "    req = urllib.request.Request(BASE + path, method='PUT',\n"
+                "        headers={'Content-Type': 'application/json', 'X-CSRFToken': csrf}, data=data)\n"
+                "    resp = opener.open(req)\n"
+                "    return json.loads(resp.read().decode())\n"
+                "\n"
+                "def api_get(path):\n"
+                "    req = urllib.request.Request(BASE + path, headers={'X-CSRFToken': csrf})\n"
+                "    resp = opener.open(req)\n"
+                "    return json.loads(resp.read().decode())\n"
+                "\n"
+                "VALID_SEVERITIES = {'critical', 'high', 'medium', 'low', 'info', 'unclassified'}\n"
+                "def normalize_severity(sev):\n"
+                "    s = (sev or 'unclassified').lower().strip()\n"
+                "    if s in VALID_SEVERITIES: return s\n"
+                "    if s in ('information', 'informational', 'log'): return 'info'\n"
+                "    if s in ('warning', 'moderate'): return 'medium'\n"
+                "    if s in ('error', 'important', 'urgent'): return 'high'\n"
+                "    return 'unclassified'\n"
+                "\n"
+                "def extract_cves(refs):\n"
+                "    cves = []\n"
+                "    for r in (refs or []):\n"
+                "        r_str = str(r).upper()\n"
+                "        if 'CVE-' in r_str:\n"
+                "            import re\n"
+                "            found = re.findall(r'CVE-\\d{4}-\\d{4,}', r_str)\n"
+                "            cves.extend(found)\n"
+                "    return list(set(cves))\n"
+                "\n"
+                "def is_web_vuln(vuln):\n"
+                "    web_fields = ['path', 'website', 'method', 'request', 'response', 'query']\n"
+                "    return any(vuln.get(f) for f in web_fields)\n"
+                "\n"
+                "def build_vuln_body(vuln, parent_id, parent_type):\n"
+                "    severity = normalize_severity(vuln.get('severity', 'info'))\n"
+                "    refs = vuln.get('refs', [])\n"
+                "    cves = extract_cves(refs)\n"
+                "    tags = list(TOOL_TAGS)\n"
+                "    tags.append(f'severity:{severity}')\n"
+                "    for cve in cves:\n"
+                "        tags.append(f'cve:{cve}')\n"
+                "    extra_tags = vuln.get('tags', [])\n"
+                "    if extra_tags:\n"
+                "        tags.extend([str(t) for t in extra_tags])\n"
+                "    body = {\n"
+                "        'name': vuln.get('name', 'Unknown'),\n"
+                "        'desc': vuln.get('desc', ''),\n"
+                "        'severity': severity,\n"
+                "        'refs': refs,\n"
+                "        'resolution': vuln.get('resolution', ''),\n"
+                "        'data': vuln.get('data', ''),\n"
+                "        'external_id': cves[0] if cves else vuln.get('external_id', ''),\n"
+                "        'tags': tags,\n"
+                "        'policyviolations': vuln.get('policyviolations', []),\n"
+                "        'parent': parent_id,\n"
+                "        'parent_type': parent_type,\n"
+                "    }\n"
+                "    if is_web_vuln(vuln):\n"
+                "        body['type'] = 'VulnerabilityWeb'\n"
+                "        for f in ['path', 'website', 'method', 'request', 'response',\n"
+                "                  'query', 'params', 'pname', 'category']:\n"
+                "            val = vuln.get(f, '')\n"
+                "            if val:\n"
+                "                body[f] = val\n"
+                "    else:\n"
+                "        body['type'] = 'Vulnerability'\n"
+                "    return body\n"
+                "\n"
+                "# Login\n"
+                "try:\n"
+                "    data = json.dumps({'email': os.environ['F_USER'], 'password': os.environ['F_PASS']}).encode()\n"
+                "    req = urllib.request.Request(BASE + '/_api/login', method='POST',\n"
+                "        headers={'Content-Type': 'application/json'}, data=data)\n"
+                "    resp = opener.open(req)\n"
+                "    login = json.loads(resp.read().decode())\n"
+                "    csrf = login['response']['csrf_token']\n"
+                "except Exception as e:\n"
+                "    print(f'UPLOAD:LOGIN_FAILED:{e}')\n"
+                "    sys.exit(0)\n"
+                "\n"
+                "# Ensure 'pentest' workspace exists\n"
+                "try:\n"
+                "    api_get(f'/_api/v3/ws/{WS}')\n"
+                "except urllib.error.HTTPError as e:\n"
+                "    if e.code == 404:\n"
+                "        try:\n"
+                "            api_post('/_api/v3/ws', {'name': WS, 'description': 'CleanRoom automated security scans'})\n"
+                "            print('UPLOAD:WS_CREATED:pentest')\n"
+                "        except Exception as we:\n"
+                "            print(f'UPLOAD:WS_CREATE_FAILED:{we}')\n"
+                "            sys.exit(0)\n"
+                "\n"
+                "# Parse and upload — OpenVAS uses direct XML parsing (faraday-plugins\n"
+                "# skips Log/Debug severity, losing most results). Other tools use faraday-plugins.\n"
+                "created_hosts = 0\n"
+                "created_services = 0\n"
+                "created_vulns = 0\n"
+                "created_vulnwebs = 0\n"
+                "errors = 0\n"
+                "\n"
+                "if TOOL == 'openvas':\n"
+                "    # --- Direct XML parsing for OpenVAS (includes ALL severities) ---\n"
+                "    import xml.etree.ElementTree as ET\n"
+                "    try:\n"
+                f"        tree = ET.parse('{container_xml}')\n"
+                "        root = tree.getroot()\n"
+                "        # Navigate: outer <report> → inner <report> → <results>/<host>\n"
+                "        inner = root.find('report')\n"
+                "        if inner is None:\n"
+                "            inner = root\n"
+                "        results_elem = inner.find('results')\n"
+                "        if results_elem is None:\n"
+                "            results_elem = inner\n"
+                "        result_nodes = results_elem.findall('result')\n"
+                "        # Also get host detail elements for OS/hostname/service info\n"
+                "        host_detail_map = {}\n"
+                "        svc_name_map = {}  # (ip, port, protocol) -> service name\n"
+                "        for helem in inner.findall('host'):\n"
+                "            ip = (helem.findtext('ip') or '').strip()\n"
+                "            if not ip:\n"
+                "                continue\n"
+                "            hostnames = []\n"
+                "            os_txt = ''\n"
+                "            for d in helem.findall('detail'):\n"
+                "                dname = (d.findtext('name') or '').strip()\n"
+                "                dval = (d.findtext('value') or '').strip()\n"
+                "                if dname == 'hostname' and dval:\n"
+                "                    hostnames.append(dval)\n"
+                "                elif dname == 'best_os_txt' and dval:\n"
+                "                    os_txt = dval\n"
+                "                elif dname.lower() == 'services' and dval:\n"
+                "                    # GVM format: '80/tcp//http///' or '443/tcp//https///'\n"
+                "                    parts = dval.split('/')\n"
+                "                    if len(parts) >= 4:\n"
+                "                        try:\n"
+                "                            sp = int(parts[0])\n"
+                "                            sproto = parts[1] or 'tcp'\n"
+                "                            sname = parts[3]\n"
+                "                            if sname:\n"
+                "                                svc_name_map[(ip, sp, sproto)] = sname\n"
+                "                        except ValueError:\n"
+                "                            pass\n"
+                "            host_detail_map[ip] = {'os': os_txt, 'hostnames': hostnames}\n"
+                "\n"
+                "        # Fallback: extract service names from 'Services' NVT results\n"
+                "        # NVT OID 1.3.6.1.4.1.25623.1.0.10330 detects services on ports\n"
+                "        if len(svc_name_map) == 0:\n"
+                "            for r in result_nodes:\n"
+                "                nvt = r.find('nvt')\n"
+                "                if nvt is None:\n"
+                "                    continue\n"
+                "                nvt_oid = nvt.get('oid', '')\n"
+                "                nvt_name = (nvt.findtext('name') or '').strip()\n"
+                "                if nvt_oid != '1.3.6.1.4.1.25623.1.0.10330' and nvt_name != 'Services':\n"
+                "                    continue\n"
+                "                rhost = (r.findtext('host') or '').strip()\n"
+                "                rport = (r.findtext('port') or '').strip()\n"
+                "                rdesc = (r.findtext('description') or '').strip().lower()\n"
+                "                if not rhost or '/' not in rport:\n"
+                "                    continue\n"
+                "                pp = rport.split('/')\n"
+                "                try:\n"
+                "                    pnum = int(pp[0])\n"
+                "                except ValueError:\n"
+                "                    continue\n"
+                "                proto = pp[1] if len(pp) > 1 else 'tcp'\n"
+                "                skey = (rhost, pnum, proto)\n"
+                "                if skey in svc_name_map:\n"
+                "                    continue\n"
+                "                # Parse service from description like 'a http server is running'\n"
+                "                for kw in ['http', 'https', 'ssh', 'ftp', 'smtp', 'dns', 'imap',\n"
+                "                           'pop3', 'snmp', 'telnet', 'smb', 'rdp', 'vnc', 'mysql',\n"
+                "                           'postgresql', 'mssql', 'oracle', 'redis', 'mongodb',\n"
+                "                           'ldap', 'ntp', 'kerberos', 'sip', 'rtsp']:\n"
+                "                    if kw in rdesc:\n"
+                "                        svc_name_map[skey] = kw\n"
+                "                        break\n"
+                "            if svc_name_map:\n"
+                "                print(f'UPLOAD:SVC_NAMES_FALLBACK:{len(svc_name_map)} service names from NVT results')\n"
+                "\n"
+                "        # Last resort: extract service type from any NVT name matching patterns\n"
+                "        # e.g. 'HTTP Server Detection' -> http for that port\n"
+                "        if len(svc_name_map) == 0:\n"
+                "            SVC_PATTERNS = {\n"
+                "                'http': ['HTTP Server', 'Web Server', 'HTTP Detection'],\n"
+                "                'https': ['HTTPS Detection', 'SSL/TLS'],\n"
+                "                'ssh': ['SSH Server', 'SSH Detection', 'SSH Protocol'],\n"
+                "                'ftp': ['FTP Server', 'FTP Detection'],\n"
+                "                'smtp': ['SMTP Server', 'SMTP Detection'],\n"
+                "                'dns': ['DNS Server', 'DNS Detection'],\n"
+                "                'smb': ['SMB Detection', 'SMB Server', 'Microsoft SMB'],\n"
+                "                'rdp': ['RDP Detection', 'Remote Desktop'],\n"
+                "                'telnet': ['Telnet Server', 'Telnet Detection'],\n"
+                "                'mysql': ['MySQL Detection', 'MySQL Server'],\n"
+                "                'postgresql': ['PostgreSQL Detection'],\n"
+                "                'vnc': ['VNC Detection', 'VNC Server'],\n"
+                "            }\n"
+                "            for r in result_nodes:\n"
+                "                nvt = r.find('nvt')\n"
+                "                if nvt is None:\n"
+                "                    continue\n"
+                "                nvt_name = (nvt.findtext('name') or '').strip()\n"
+                "                rhost = (r.findtext('host') or '').strip()\n"
+                "                rport = (r.findtext('port') or '').strip()\n"
+                "                if not rhost or '/' not in rport:\n"
+                "                    continue\n"
+                "                pp = rport.split('/')\n"
+                "                try:\n"
+                "                    pnum = int(pp[0])\n"
+                "                except ValueError:\n"
+                "                    continue\n"
+                "                proto = pp[1] if len(pp) > 1 else 'tcp'\n"
+                "                skey = (rhost, pnum, proto)\n"
+                "                if skey in svc_name_map:\n"
+                "                    continue\n"
+                "                for svc, patterns in SVC_PATTERNS.items():\n"
+                "                    if any(p in nvt_name for p in patterns):\n"
+                "                        svc_name_map[skey] = svc\n"
+                "                        break\n"
+                "            if svc_name_map:\n"
+                "                print(f'UPLOAD:SVC_NAMES_NVT:{len(svc_name_map)} service names from NVT names')\n"
+                "\n"
+                "        # Final fallback: parse /etc/services for port->name mapping\n"
+                "        os_svc_db = {}\n"
+                "        if len(svc_name_map) == 0:\n"
+                "            try:\n"
+                "                with open('/etc/services') as sf:\n"
+                "                    for sline in sf:\n"
+                "                        sline = sline.strip()\n"
+                "                        if not sline or sline.startswith('#'):\n"
+                "                            continue\n"
+                "                        sp = sline.split()\n"
+                "                        if len(sp) >= 2 and '/' in sp[1]:\n"
+                "                            sn = sp[0]\n"
+                "                            pp = sp[1].split('/')\n"
+                "                            try:\n"
+                "                                os_svc_db[(int(pp[0]), pp[1])] = sn\n"
+                "                            except ValueError:\n"
+                "                                pass\n"
+                "                print(f'UPLOAD:SVC_DB:loaded {len(os_svc_db)} entries from /etc/services')\n"
+                "            except Exception as ef:\n"
+                "                print(f'UPLOAD:SVC_DB:failed to read /etc/services: {ef}')\n"
+                "\n"
+                "        print(f'UPLOAD:PARSED:{len(result_nodes)} results, {len(host_detail_map)} hosts, {len(svc_name_map)} svc names from XML')\n"
+                "    except Exception as e:\n"
+                "        print(f'UPLOAD:PARSE_FAILED:{e}')\n"
+                "        sys.exit(0)\n"
+                "\n"
+                "    SMAP = {'Alarm': 'critical', 'High': 'high', 'Medium': 'medium',\n"
+                "            'Low': 'low', 'Log': 'info', 'Debug': 'info'}\n"
+                "    host_ids = {}\n"
+                "    svc_ids = {}\n"
+                "\n"
+                "    for r in result_nodes:\n"
+                "        host_ip = (r.findtext('host') or '').strip()\n"
+                "        if not host_ip:\n"
+                "            continue\n"
+                "        port_str = (r.findtext('port') or '').strip()\n"
+                "        threat = (r.findtext('threat') or 'Log').strip()\n"
+                "        severity = SMAP.get(threat, 'info')\n"
+                "        nvt = r.find('nvt')\n"
+                "        vuln_name = nvt.findtext('name', 'Unknown') if nvt is not None else 'Unknown'\n"
+                "        desc = (r.findtext('description') or '').strip()\n"
+                "        # Parse NVT tags (pipe-delimited key=value)\n"
+                "        tags_str = nvt.findtext('tags', '') if nvt is not None else ''\n"
+                "        td = {}\n"
+                "        if tags_str:\n"
+                "            for part in tags_str.split('|'):\n"
+                "                if '=' in part:\n"
+                "                    k, v = part.split('=', 1)\n"
+                "                    td[k.strip()] = v.strip()\n"
+                "        summary = td.get('summary', '')\n"
+                "        solution = td.get('solution', '')\n"
+                "        # Extract CVEs\n"
+                "        cve_str = nvt.findtext('cve', '') if nvt is not None else ''\n"
+                "        cves = [c.strip() for c in cve_str.split(',') if c.strip() and c.strip() != 'NOCVE']\n"
+                "        refs = list(cves)\n"
+                "        xref = nvt.findtext('xref', '') if nvt is not None else ''\n"
+                "        if xref and xref != 'NOXREF':\n"
+                "            refs.extend([x.strip() for x in xref.split(',') if x.strip()])\n"
+                "        # Parse port\n"
+                "        port_num = 0\n"
+                "        protocol = 'tcp'\n"
+                "        if '/' in port_str:\n"
+                "            pp = port_str.split('/')\n"
+                "            protocol = pp[1] if len(pp) > 1 else 'tcp'\n"
+                "            try:\n"
+                "                port_num = int(pp[0])\n"
+                "            except ValueError:\n"
+                "                pass\n"
+                "\n"
+                "        # Ensure host exists in Faraday\n"
+                "        if host_ip not in host_ids:\n"
+                "            hd = host_detail_map.get(host_ip, {})\n"
+                "            hbody = {'ip': host_ip, 'os': hd.get('os', ''), 'description': '',\n"
+                "                     'hostnames': hd.get('hostnames', []), 'tags': list(TOOL_TAGS)}\n"
+                "            try:\n"
+                "                hr = api_post(f'/_api/v3/ws/{WS}/hosts', hbody)\n"
+                "                host_ids[host_ip] = hr.get('id')\n"
+                "                created_hosts += 1\n"
+                "            except urllib.error.HTTPError as e:\n"
+                "                body = e.read().decode()\n"
+                "                if e.code == 409:\n"
+                "                    try:\n"
+                "                        ex = json.loads(body)\n"
+                "                        host_ids[host_ip] = ex.get('object', {}).get('id')\n"
+                "                        if host_ids[host_ip]:\n"
+                "                            created_hosts += 1\n"
+                "                    except:\n"
+                "                        pass\n"
+                "                else:\n"
+                "                    print(f'UPLOAD:ERR:host {host_ip}: HTTP {e.code}: {body[:200]}')\n"
+                "                    errors += 1\n"
+                "            except Exception as e:\n"
+                "                print(f'UPLOAD:ERR:host {host_ip}: {e}')\n"
+                "                errors += 1\n"
+                "        hid = host_ids.get(host_ip)\n"
+                "        if not hid:\n"
+                "            continue\n"
+                "\n"
+                "        # Ensure service exists (if real port)\n"
+                "        sid = None\n"
+                "        if port_num > 0:\n"
+                "            skey = (host_ip, port_num, protocol)\n"
+                "            if skey not in svc_ids:\n"
+                "                svc_name = svc_name_map.get(skey, '') or os_svc_db.get((port_num, protocol), '')\n"
+                "                sbody = {'name': svc_name, 'ports': [port_num], 'protocol': protocol,\n"
+                "                         'status': 'open', 'parent': hid, 'type': 'Service'}\n"
+                "                try:\n"
+                "                    sr = api_post(f'/_api/v3/ws/{WS}/services', sbody)\n"
+                "                    svc_ids[skey] = sr.get('id')\n"
+                "                    created_services += 1\n"
+                "                except urllib.error.HTTPError as e:\n"
+                "                    body = e.read().decode()\n"
+                "                    if e.code == 409:\n"
+                "                        try:\n"
+                "                            ex = json.loads(body)\n"
+                "                            svc_ids[skey] = ex.get('object', {}).get('id')\n"
+                "                            if svc_ids[skey]:\n"
+                "                                created_services += 1\n"
+                "                        except:\n"
+                "                            pass\n"
+                "                    else:\n"
+                "                        print(f'UPLOAD:ERR:svc {host_ip}:{port_num}: HTTP {e.code}: {body[:200]}')\n"
+                "                        errors += 1\n"
+                "                except Exception as e:\n"
+                "                    print(f'UPLOAD:ERR:svc {host_ip}:{port_num}: {e}')\n"
+                "                    errors += 1\n"
+                "            sid = svc_ids.get(skey)\n"
+                "\n"
+                "        # Create vulnerability\n"
+                "        vbody = {\n"
+                "            'name': vuln_name,\n"
+                "            'desc': summary or desc,\n"
+                "            'severity': severity,\n"
+                "            'resolution': solution,\n"
+                "            'data': desc if summary else '',\n"
+                "            'refs': refs,\n"
+                "            'external_id': cves[0] if cves else '',\n"
+                "            'tags': list(TOOL_TAGS) + [f'severity:{severity}', f'threat:{threat}'],\n"
+                "            'type': 'Vulnerability',\n"
+                "            'parent': sid if sid else hid,\n"
+                "            'parent_type': 'Service' if sid else 'Host',\n"
+                "        }\n"
+                "        try:\n"
+                "            api_post(f'/_api/v3/ws/{WS}/vulns', vbody)\n"
+                "            created_vulns += 1\n"
+                "        except urllib.error.HTTPError as e:\n"
+                "            body = e.read().decode()\n"
+                "            if e.code == 409:\n"
+                "                created_vulns += 1\n"
+                "            else:\n"
+                "                if errors < 5:\n"
+                "                    print(f'UPLOAD:ERR:vuln {host_ip}:{port_num} \"{vuln_name[:50]}\": HTTP {e.code}: {body[:200]}')\n"
+                "                errors += 1\n"
+                "        except Exception as e:\n"
+                "            if errors < 5:\n"
+                "                print(f'UPLOAD:ERR:vuln {host_ip}:{port_num}: {e}')\n"
+                "            errors += 1\n"
+                "\n"
+                "else:\n"
+                "    # --- faraday-plugins for nmap/metasploit ---\n"
+                "    try:\n"
+                "        import importlib\n"
+                f"        mod = importlib.import_module('faraday_plugins.plugins.repo.{plugin_name}.plugin')\n"
+                "        plugin_cls = None\n"
+                "        for name in dir(mod):\n"
+                "            obj = getattr(mod, name)\n"
+                "            if isinstance(obj, type) and name.endswith('Plugin') and name != 'PluginBase':\n"
+                "                plugin_cls = obj\n"
+                "                break\n"
+                "        if not plugin_cls:\n"
+                "            print('UPLOAD:FAILED:Could not find plugin class')\n"
+                "            sys.exit(0)\n"
+                "        plugin = plugin_cls()\n"
+                f"        with open('{container_xml}', 'rb') as f:\n"
+                "            xml_data = f.read()\n"
+                "        plugin.parseOutputString(xml_data)\n"
+                "        bulk_json = json.loads(plugin.get_json())\n"
+                "        hosts = bulk_json.get('hosts', [])\n"
+                "        print(f'UPLOAD:PARSED:{len(hosts)} hosts')\n"
+                "    except Exception as e:\n"
+                "        print(f'UPLOAD:PARSE_FAILED:{e}')\n"
+                "        sys.exit(0)\n"
+                "\n"
+                "    for h in hosts:\n"
+                "        host_body = {\n"
+                "            'ip': h.get('ip', ''),\n"
+                "            'os': h.get('os', ''),\n"
+                "            'hostnames': h.get('hostnames', []),\n"
+                "            'description': h.get('description', ''),\n"
+                "            'mac': h.get('mac', ''),\n"
+                "            'tags': list(TOOL_TAGS),\n"
+                "        }\n"
+                "        try:\n"
+                "            host_resp = api_post(f'/_api/v3/ws/{WS}/hosts', host_body)\n"
+                "            host_id = host_resp.get('id')\n"
+                "            created_hosts += 1\n"
+                "        except urllib.error.HTTPError as e:\n"
+                "            body = e.read().decode()\n"
+                "            if e.code == 409:\n"
+                "                try:\n"
+                "                    existing = json.loads(body)\n"
+                "                    host_id = existing.get('object', {}).get('id')\n"
+                "                    if host_id:\n"
+                "                        created_hosts += 1\n"
+                "                    else:\n"
+                "                        errors += 1\n"
+                "                        continue\n"
+                "                except:\n"
+                "                    errors += 1\n"
+                "                    continue\n"
+                "            else:\n"
+                "                errors += 1\n"
+                "                continue\n"
+                "        except Exception:\n"
+                "            errors += 1\n"
+                "            continue\n"
+                "        if not host_id:\n"
+                "            continue\n"
+                "        svc_id_map = {}\n"
+                "        for svc in h.get('services', []):\n"
+                "            port_val = svc.get('port', 0) or 0\n"
+                "            svc_body = {\n"
+                "                'name': svc.get('name', ''), 'ports': [int(port_val)],\n"
+                "                'protocol': svc.get('protocol', 'tcp'), 'status': svc.get('status', 'open'),\n"
+                "                'version': svc.get('version', ''), 'parent': host_id, 'type': 'Service',\n"
+                "            }\n"
+                "            try:\n"
+                "                svc_resp = api_post(f'/_api/v3/ws/{WS}/services', svc_body)\n"
+                "                svc_id_map[int(port_val)] = svc_resp.get('id')\n"
+                "                created_services += 1\n"
+                "            except urllib.error.HTTPError as se:\n"
+                "                if se.code == 409:\n"
+                "                    try:\n"
+                "                        existing_svc = json.loads(se.read().decode())\n"
+                "                        svc_id_map[int(port_val)] = existing_svc.get('object', {}).get('id')\n"
+                "                        created_services += 1\n"
+                "                    except:\n"
+                "                        errors += 1\n"
+                "                else:\n"
+                "                    errors += 1\n"
+                "            except Exception:\n"
+                "                errors += 1\n"
+                "        for vuln in h.get('vulnerabilities', []):\n"
+                "            vuln_body = build_vuln_body(vuln, host_id, 'Host')\n"
+                "            try:\n"
+                "                api_post(f'/_api/v3/ws/{WS}/vulns', vuln_body)\n"
+                "                created_vulns += 1\n"
+                "            except Exception:\n"
+                "                errors += 1\n"
+                "        for svc in h.get('services', []):\n"
+                "            svc_port = int(svc.get('port', 0) or 0)\n"
+                "            svc_id = svc_id_map.get(svc_port)\n"
+                "            if not svc_id:\n"
+                "                continue\n"
+                "            for vuln in svc.get('vulnerabilities', []):\n"
+                "                vuln_body = build_vuln_body(vuln, svc_id, 'Service')\n"
+                "                try:\n"
+                "                    api_post(f'/_api/v3/ws/{WS}/vulns', vuln_body)\n"
+                "                    created_vulns += 1\n"
+                "                except Exception:\n"
+                "                    errors += 1\n"
+                "\n"
+                "# Cleanup temp file\n"
+                "try:\n"
+                f"    os.unlink('{container_xml}')\n"
+                "except:\n"
+                "    pass\n"
+                "\n"
+                "total = created_hosts + created_services + created_vulns + created_vulnwebs\n"
+                "if total > 0:\n"
+                "    parts = [f'{created_hosts} hosts', f'{created_services} services', f'{created_vulns} vulns']\n"
+                "    if created_vulnwebs > 0:\n"
+                "        parts.append(f'{created_vulnwebs} web vulns')\n"
+                "    if errors > 0:\n"
+                "        parts.append(f'{errors} errors')\n"
+                "    print(f'UPLOAD:OK:' + ', '.join(parts))\n"
+                "else:\n"
+                "    print(f'UPLOAD:FAILED:No objects created ({errors} errors)')\n"
+            )
+
+            result = await self.k8s.exec_in_pod(
+                namespace="faraday",
+                pod_name=pod_name,
+                command=["python3", "-c", upload_script],
+                container="faraday",
+                env={"F_USER": creds["username"], "F_PASS": creds["password"]},
+                timeout=FARADAY_UPLOAD_TIMEOUT
+            )
+
+            output = (result.output or "").strip()
+            return await self.faraday_client.parse_and_log_upload_output(
+                output,
+                log_callback=lambda lvl, msg: self.log(tool_name, lvl, msg)
+            )
+
+        finally:
+            if tmp_file and os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
+
+    # =========================================================================
+    # DATABASE PERSISTENCE
+    # =========================================================================
+
+    async def _parse_xml(self, xml_content: str, tool_name: str) -> Optional[ET.Element]:
+        """Parse XML content in a thread, returning the root element or None on failure."""
+        try:
+            root = await asyncio.to_thread(ET.fromstring, xml_content)
+            return root
+        except ET.ParseError as e:
+            await self.log(tool_name, "warn", f"Failed to parse {tool_name} XML for DB persistence: {e}")
+            return None
+
+    async def _log_persist_summary(self, tool_name: str, hosts: int, services: int, vulns: int):
+        """Log a standardized DB persistence summary."""
+        await self.log(tool_name, "info",
+                       f"Database: persisted {hosts} host(s), "
+                       f"{services} service(s), {vulns} vuln(s)")
+
+    # ── Lab catalog correlation ──────────────────────────────────────
+
+    async def _correlate_lab_findings(self, scan_id: str):
+        """Cross-reference scan results with the Vulhub catalog's expected CVEs.
+
+        If the scan was launched against a known lab target (lab_env_id is set):
+        1. Checks whether scanners detected the expected CVE.
+        2. If detected — tags the finding as 'lab_expected'.
+        3. If NOT detected — creates a catalog-sourced finding with the CVE
+           so enrichment can fetch CVSS/EPSS data.
+        4. Logs lab coverage status.
+        """
+        env_id = self.current_scan.lab_env_id
+        if not env_id:
+            return
+
+        from app.services.vulhub_catalog import VULHUB_CATALOG
+        catalog_entry = VULHUB_CATALOG.get(env_id)
+        if not catalog_entry or "cve" not in catalog_entry:
+            return
+
+        expected_cve = catalog_entry["cve"]
+        catalog_name = catalog_entry.get("name", expected_cve)
+        catalog_desc = catalog_entry.get("description", "")
+        catalog_category = catalog_entry.get("category", "")
+
+        # Map catalog difficulty to severity
+        difficulty = catalog_entry.get("difficulty", "medium")
+        severity_map = {"easy": "high", "medium": "medium", "hard": "low"}
+        severity = severity_map.get(difficulty, "medium")
+
+        await self.log(None, "info", "")
+        await self.log(None, "info", f"=== Lab Coverage Check ({catalog_name}) ===")
+        await self.log(None, "info", f"Expected CVE: {expected_cve}")
+
+        try:
+            if db_engine._session_factory is None:
+                await self.log(None, "warn", "Database not available — skipping lab correlation")
+                return
+
+            from sqlalchemy import select
+            from app.db.models import Vulnerability, Host, Service
+
+            async with db_engine._session_factory() as session:
+                # Check if any scanner found this CVE
+                result = await session.execute(
+                    select(Vulnerability).where(
+                        Vulnerability.scan_id == scan_id,
+                        Vulnerability.external_id == expected_cve,
+                    )
+                )
+                detected_vulns = list(result.scalars().all())
+
+                if detected_vulns:
+                    # CVE was detected — tag it
+                    for v in detected_vulns:
+                        tags = list(v.tags) if v.tags else []
+                        if "lab_expected" not in tags:
+                            tags.append("lab_expected")
+                            v.tags = tags
+                    await session.commit()
+                    await self.log(None, "info",
+                                   f"Lab coverage: DETECTED — {expected_cve} found by "
+                                   f"{detected_vulns[0].tool_source or 'scanner'} "
+                                   f"({len(detected_vulns)} finding(s))")
+                else:
+                    # CVE not detected — create a catalog-sourced finding
+                    # Find the host from this scan
+                    host_result = await session.execute(
+                        select(Host).where(Host.scan_id == scan_id).limit(1)
+                    )
+                    host_row = host_result.scalar_one_or_none()
+                    if not host_row:
+                        await self.log(None, "warn",
+                                       "Lab correlation: no host found in scan results — "
+                                       "cannot create expected finding")
+                        return
+
+                    # Find a relevant service on the expected port(s)
+                    service_id = None
+                    expected_ports = catalog_entry.get("ports", [])
+                    if expected_ports:
+                        svc_result = await session.execute(
+                            select(Service).where(
+                                Service.host_id == host_row.id,
+                                Service.port.in_(expected_ports),
+                            ).limit(1)
+                        )
+                        svc_row = svc_result.scalar_one_or_none()
+                        if svc_row:
+                            service_id = svc_row.id
+                    if service_id is None:
+                        # Fall back to any service on this host
+                        svc_result = await session.execute(
+                            select(Service).where(
+                                Service.host_id == host_row.id
+                            ).limit(1)
+                        )
+                        svc_row = svc_result.scalar_one_or_none()
+                        if svc_row:
+                            service_id = svc_row.id
+
+                    await result_store.persist_vulnerability(
+                        session,
+                        scan_id=scan_id,
+                        host_id=host_row.id,
+                        service_id=service_id,
+                        name=catalog_name,
+                        severity=severity,
+                        description=(
+                            f"{catalog_desc}\n\n"
+                            f"[Expected vulnerability from lab catalog — "
+                            f"not detected by scanners]"
+                        ),
+                        refs=[expected_cve],
+                        external_id=expected_cve,
+                        tool_source="lab_expected",
+                        tags=["lab_expected", "not_detected"],
+                        enrichment_status="pending",
+                    )
+
+                    await self.log(None, "warn",
+                                   f"Lab coverage: NOT DETECTED — {expected_cve} was not found "
+                                   f"by scanners. Catalog finding created for enrichment.")
+                    await self.log(None, "info",
+                                   f"Category: {catalog_category} | Severity: {severity} | "
+                                   f"Enrichment will fetch CVSS/EPSS data")
+
+        except Exception as err:
+            logger.error("Lab correlation failed for scan %s: %s", scan_id, err)
+            await self.log(None, "warn", f"Lab correlation failed: {err}")
+
+    async def _persist_tool_results(self, xml_content: str, tool_name: str, scan_id: str):
+        """Dispatch XML persistence to the appropriate tool-specific parser."""
+        if tool_name == "nmap":
+            await self._persist_nmap_results(xml_content, scan_id)
+        elif tool_name == "openvas":
+            await self._persist_openvas_results(xml_content, scan_id)
+        elif tool_name == "metasploit":
+            await self._persist_metasploit_results(xml_content, scan_id)
+        elif tool_name == "wpscan":
+            await self._persist_wpscan_results(xml_content, scan_id)
+        else:
+            await self.log(tool_name, "warn", f"No DB persistence parser for tool: {tool_name}")
+
+    async def _persist_nmap_results(self, xml_content: str, scan_id: str):
+        """Parse nmap XML and persist hosts, services, and script vulns to PostgreSQL."""
+        root = await self._parse_xml(xml_content, "nmap")
+        if root is None:
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        async with db_engine._session_factory() as session:
+            for host_elem in root.findall("host"):
+                # Skip hosts that are down
+                status_elem = host_elem.find("status")
+                if status_elem is not None and status_elem.get("state") == "down":
+                    continue
+
+                # Extract IP address
+                addr_elem = host_elem.find("address[@addrtype='ipv4']")
+                if addr_elem is None:
+                    addr_elem = host_elem.find("address")
+                if addr_elem is None:
+                    continue
+                ip = addr_elem.get("addr", "")
+                if not ip:
+                    continue
+
+                # Extract OS
+                os_name = None
+                os_match = host_elem.find("os/osmatch")
+                if os_match is not None:
+                    os_name = os_match.get("name")
+
+                # Extract hostnames
+                hostnames = []
+                for hn in host_elem.findall("hostnames/hostname"):
+                    name = hn.get("name")
+                    if name:
+                        hostnames.append(name)
+
+                # Persist host
+                host_id = await result_store.persist_host(
+                    session, scan_id=scan_id, ip=ip,
+                    os=os_name, hostnames=hostnames or None,
+                )
+                hosts_created += 1
+
+                # Extract ports/services
+                ports_elem = host_elem.find("ports")
+                if ports_elem is None:
+                    continue
+
+                for port_elem in ports_elem.findall("port"):
+                    protocol = port_elem.get("protocol", "tcp")
+                    portid = port_elem.get("portid", "0")
+                    try:
+                        port_num = int(portid)
+                    except ValueError:
+                        continue
+
+                    state_elem = port_elem.find("state")
+                    port_state = state_elem.get("state", "unknown") if state_elem is not None else "unknown"
+                    if port_state != "open":
+                        continue
+
+                    svc_elem = port_elem.find("service")
+                    svc_name = svc_elem.get("name") if svc_elem is not None else None
+                    svc_product = svc_elem.get("product", "") if svc_elem is not None else ""
+                    svc_version = svc_elem.get("version", "") if svc_elem is not None else ""
+                    version_str = f"{svc_product} {svc_version}".strip() or None
+
+                    service_id = await result_store.persist_service(
+                        session, host_id=host_id, scan_id=scan_id,
+                        port=port_num, protocol=protocol,
+                        name=svc_name, version=version_str, status=port_state,
+                    )
+                    services_created += 1
+
+                    # Extract NSE script results as vulnerabilities
+                    for script_elem in port_elem.findall("script"):
+                        script_id = script_elem.get("id", "unknown")
+                        script_output = script_elem.get("output", "")
+
+                        # Determine severity from script ID heuristics
+                        severity = "info"
+                        sid_lower = script_id.lower()
+                        if any(kw in sid_lower for kw in NMAP_HIGH_SEVERITY_SCRIPTS):
+                            severity = "high"
+                        elif sid_lower in NMAP_INFO_SSL_SCRIPTS:
+                            severity = "info"  # Informational SSL/TLS scripts
+                        elif "ssl" in sid_lower or "tls" in sid_lower:
+                            severity = "medium"
+
+                        # Extract CVE references from output (normalize to uppercase
+                        # so enrichment service's case-sensitive pattern matches them)
+                        refs = [c.upper() for c in re.findall(r"CVE-\d{4}-\d{4,}", script_output, re.IGNORECASE)]
+
+                        # Set external_id from first CVE if available
+                        external_id = refs[0] if refs else None
+
+                        # Non-CVE enrichment: CWE mapping + enrichment status
+                        extra_fields = {}
+                        cwe_ids = NMAP_SCRIPT_CWE_MAP.get(sid_lower)
+                        if cwe_ids:
+                            extra_fields["weakness_ids"] = cwe_ids
+                        if external_id:
+                            extra_fields["enrichment_status"] = "pending"
+                        elif cwe_ids:
+                            extra_fields["enrichment_status"] = "enriched"
+                            extra_fields["enrichment_source"] = "nmap_cwe_map"
+
+                        await result_store.persist_vulnerability(
+                            session, scan_id=scan_id, host_id=host_id,
+                            service_id=service_id,
+                            name=script_id,
+                            severity=severity,
+                            description=script_output[:MAX_DESCRIPTION_LENGTH] if script_output else None,
+                            refs=refs or None,
+                            external_id=external_id,
+                            data=script_output[:MAX_DATA_LENGTH] if script_output else None,
+                            tool_source="nmap",
+                            **extra_fields,
+                        )
+                        vulns_created += 1
+
+        await self._log_persist_summary("nmap", hosts_created, services_created, vulns_created)
+
+    async def _persist_openvas_results(self, xml_content: str, scan_id: str):
+        """Parse OpenVAS XML and persist hosts, services, and vulns to PostgreSQL."""
+        root = await self._parse_xml(xml_content, "openvas")
+        if root is None:
+            return
+
+        # Navigate: outer <report> → inner <report> → <results>
+        inner = root.find("report")
+        if inner is None:
+            inner = root
+        results_elem = inner.find("results")
+        if results_elem is None:
+            results_elem = inner
+        result_nodes = results_elem.findall("result")
+
+        # Extract host detail info (OS, hostnames) from <host> elements
+        host_detail_map = {}
+        for helem in inner.findall("host"):
+            ip = (helem.findtext("ip") or "").strip()
+            if not ip:
+                continue
+            hostnames = []
+            os_txt = ""
+            for d in helem.findall("detail"):
+                dname = (d.findtext("name") or "").strip()
+                dval = (d.findtext("value") or "").strip()
+                if dname == "hostname" and dval:
+                    hostnames.append(dval)
+                elif dname == "best_os_txt" and dval:
+                    os_txt = dval
+            host_detail_map[ip] = {"os": os_txt, "hostnames": hostnames}
+
+        host_db_ids = {}  # ip -> db host_id
+        service_db_ids = {}  # (ip, port, proto) -> db service_id
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        async with db_engine._session_factory() as session:
+            for r in result_nodes:
+                host_ip = (r.findtext("host") or "").strip()
+                if not host_ip:
+                    continue
+
+                # Ensure host in DB
+                if host_ip not in host_db_ids:
+                    hd = host_detail_map.get(host_ip, {})
+                    host_db_ids[host_ip] = await result_store.persist_host(
+                        session, scan_id=scan_id, ip=host_ip,
+                        os=hd.get("os") or None,
+                        hostnames=hd.get("hostnames") or None,
+                    )
+                    hosts_created += 1
+
+                host_id = host_db_ids[host_ip]
+
+                # Parse port
+                port_str = (r.findtext("port") or "").strip()
+                port_num = 0
+                protocol = "tcp"
+                if "/" in port_str:
+                    parts = port_str.split("/")
+                    protocol = parts[1] if len(parts) > 1 else "tcp"
+                    try:
+                        port_num = int(parts[0])
+                    except ValueError:
+                        pass
+
+                # Ensure service in DB (only for real ports)
+                service_id = None
+                if port_num > 0:
+                    svc_key = (host_ip, port_num, protocol)
+                    if svc_key not in service_db_ids:
+                        service_db_ids[svc_key] = await result_store.persist_service(
+                            session, host_id=host_id, scan_id=scan_id,
+                            port=port_num, protocol=protocol,
+                        )
+                        services_created += 1
+                    service_id = service_db_ids[svc_key]
+
+                # Extract vulnerability info
+                threat = (r.findtext("threat") or "Log").strip()
+                severity = OPENVAS_SEVERITY_MAP.get(threat, "info")
+
+                nvt = r.find("nvt")
+                vuln_name = nvt.findtext("name", "Unknown") if nvt is not None else "Unknown"
+                desc = (r.findtext("description") or "").strip()
+
+                # Parse NVT tags for solution
+                tags_str = nvt.findtext("tags", "") if nvt is not None else ""
+                td = {}
+                if tags_str:
+                    for part in tags_str.split("|"):
+                        if "=" in part:
+                            k, v = part.split("=", 1)
+                            td[k.strip()] = v.strip()
+                solution = td.get("solution", "")
+
+                # Extract CVEs — modern GVM (21.04+) uses <refs><ref type="cve" id="..."/></refs>
+                # Legacy GMP <22 uses <cve>CVE-...,CVE-...</cve> + <xref>URL:...|...</xref>
+                # Handle both formats so we work across upstream versions.
+                cves: list[str] = []
+                refs: list[str] = []
+                if nvt is not None:
+                    refs_elem = nvt.find("refs")
+                    if refs_elem is not None:
+                        for ref_el in refs_elem.findall("ref"):
+                            ref_type = (ref_el.get("type") or "").lower()
+                            ref_id = (ref_el.get("id") or "").strip()
+                            if not ref_id:
+                                continue
+                            if ref_type == "cve":
+                                cves.append(ref_id)
+                            else:
+                                refs.append(ref_id)
+                    # Legacy fallback
+                    cve_str = nvt.findtext("cve", "") or ""
+                    for c in cve_str.split(","):
+                        c = c.strip()
+                        if c and c != "NOCVE" and c not in cves:
+                            cves.append(c)
+                    xref = nvt.findtext("xref", "") or ""
+                    if xref and xref != "NOXREF":
+                        for x in re.split(r"[,|]", xref):
+                            x = x.strip()
+                            if x and x not in refs:
+                                refs.append(x)
+                # Description text sometimes contains CVE refs not in NVT metadata —
+                # scrape as a last resort
+                if not cves and desc:
+                    for c in re.findall(r"CVE-\d{4}-\d{4,}", desc):
+                        if c not in cves:
+                            cves.append(c)
+                # Final refs list = CVEs first, then everything else
+                refs = list(cves) + [r for r in refs if r not in cves]
+
+                # Use first CVE as external_id, fall back to NVT OID
+                external_id = cves[0] if cves else None
+                if external_id is None and nvt is not None:
+                    oid = nvt.get("oid", "")
+                    if oid:
+                        external_id = oid
+
+                # Extract CVSS data directly from OpenVAS NVT tags
+                # (available for ALL OpenVAS findings, not just CVE-bearing ones)
+                extra_fields = {}
+                cvss_base = td.get("cvss_base")
+                cvss_vector = td.get("cvss_base_vector")
+                if cvss_base:
+                    try:
+                        score = float(cvss_base)
+                        extra_fields["cvss_score"] = score
+                        extra_fields["cvss_version"] = "2.0" if cvss_vector and cvss_vector.startswith("AV:") else "3.1"
+                        extra_fields["nvd_severity"] = (
+                            "critical" if score >= 9.0 else
+                            "high" if score >= 7.0 else
+                            "medium" if score >= 4.0 else
+                            "low" if score >= 0.1 else "none"
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                if cvss_vector:
+                    extra_fields["cvss_vector"] = cvss_vector
+
+                # Store parsed tags as structured metadata
+                tag_data = {}
+                for key in ("summary", "impact", "affected", "insight"):
+                    val = td.get(key)
+                    if val:
+                        tag_data[key] = val
+                if tag_data:
+                    extra_fields["tags"] = tag_data
+
+                # Extract CWE from tags if present
+                weakness = td.get("vuldetect")
+                cwe_ids = []
+                for tag_val in td.values():
+                    for cwe_match in re.findall(r"CWE-\d+", str(tag_val)):
+                        if cwe_match not in cwe_ids:
+                            cwe_ids.append(cwe_match)
+                if cwe_ids:
+                    extra_fields["weakness_ids"] = cwe_ids
+
+                # Mark enrichment status based on available data
+                if cves:
+                    extra_fields["enrichment_status"] = "pending"  # Will be enriched by NVD/EPSS
+                elif cvss_base:
+                    extra_fields["enrichment_status"] = "enriched"
+                    extra_fields["enrichment_source"] = "openvas_tags"
+
+                await result_store.persist_vulnerability(
+                    session, scan_id=scan_id, host_id=host_id,
+                    service_id=service_id,
+                    name=vuln_name,
+                    severity=severity,
+                    description=desc[:MAX_DESCRIPTION_LENGTH] if desc else None,
+                    refs=refs or None,
+                    resolution=solution or None,
+                    external_id=external_id,
+                    tool_source="openvas",
+                    **extra_fields,
+                )
+                vulns_created += 1
+
+        await self._log_persist_summary("openvas", hosts_created, services_created, vulns_created)
+
+    async def _persist_metasploit_results(self, xml_content: str, scan_id: str):
+        """Parse Metasploit db_export XML and persist hosts, services, and vulns to PostgreSQL."""
+        root = await self._parse_xml(xml_content, "metasploit")
+        if root is None:
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+        host_db_ids = {}  # msf host address -> db host_id
+
+        async with db_engine._session_factory() as session:
+            # db_export format: <MetasploitV5><hosts><host>...</host></hosts></MetasploitV5>
+            for host_elem in root.findall("hosts/host"):
+                ip = (host_elem.findtext("address") or "").strip()
+                if not ip:
+                    continue
+
+                # Skip dead hosts
+                host_state = (host_elem.findtext("state") or "").strip()
+                if host_state and host_state not in ("alive", "up"):
+                    continue
+
+                os_name = (host_elem.findtext("os-name") or "").strip() or None
+
+                # Extract hostname
+                hostnames = []
+                host_name = (host_elem.findtext("name") or "").strip()
+                if host_name:
+                    hostnames.append(host_name)
+
+                host_db_ids[ip] = await result_store.persist_host(
+                    session, scan_id=scan_id, ip=ip, os=os_name,
+                    hostnames=hostnames or None,
+                )
+                hosts_created += 1
+
+                # Persist services (only open ones)
+                service_db_ids = {}  # (port, proto) -> db service_id
+                for svc_elem in host_elem.findall("services/service"):
+                    svc_state = (svc_elem.findtext("state") or "").strip()
+                    if svc_state and svc_state != "open":
+                        continue
+                    port_str = (svc_elem.findtext("port") or "0").strip()
+                    try:
+                        port_num = int(port_str)
+                    except ValueError:
+                        continue
+                    protocol = (svc_elem.findtext("proto") or "tcp").strip()
+                    svc_name = (svc_elem.findtext("name") or "").strip() or None
+                    svc_info = (svc_elem.findtext("info") or "").strip() or None
+
+                    service_db_ids[(port_num, protocol)] = await result_store.persist_service(
+                        session, host_id=host_db_ids[ip], scan_id=scan_id,
+                        port=port_num, protocol=protocol,
+                        name=svc_name, version=svc_info,
+                    )
+                    services_created += 1
+
+                # Persist vulns
+                for vuln_elem in host_elem.findall("vulns/vuln"):
+                    vuln_name = (vuln_elem.findtext("name") or "Unknown").strip()
+
+                    # Extract refs — CVE is text content of <ref>, not a child <name>
+                    refs = []
+                    for ref_elem in vuln_elem.findall("refs/ref"):
+                        ref_text = (ref_elem.text or "").strip()
+                        if ref_text:
+                            refs.append(ref_text)
+
+                    # Determine severity from refs/name (normalize CVE IDs to uppercase
+                    # so enrichment service's case-sensitive pattern matches them)
+                    cves = [c.upper() for c in re.findall(r"CVE-\d{4}-\d{4,}", " ".join(refs), re.IGNORECASE)]
+                    severity = "info"
+                    all_text = (vuln_name + " " + " ".join(refs)).lower()
+                    if any(kw in all_text for kw in MSF_CRITICAL_KEYWORDS):
+                        severity = "critical"
+                    elif cves:
+                        severity = "medium"  # Has CVE but unknown severity
+                    elif any(kw in all_text for kw in MSF_MEDIUM_KEYWORDS):
+                        severity = "medium"
+
+                    external_id = cves[0] if cves else None  # already uppercased above
+
+                    # Fall back to catalog CVE mapping when XML refs lack CVE IDs.
+                    # The vuln name in db_export is typically the MSF module path or
+                    # short name, so we check both full and short lookups.
+                    if not external_id:
+                        external_id = (
+                            _MSF_MODULE_CVE_MAP.get(vuln_name)
+                            or _MSF_MODULE_CVE_MAP_SHORT.get(vuln_name)
+                        )
+                        if external_id and not cves:
+                            cves = [external_id]
+
+                    # Build description from name + refs (db_export has no <info> element)
+                    desc_parts = [vuln_name]
+                    if refs:
+                        desc_parts.append("Refs: " + ", ".join(refs))
+                    description = " | ".join(desc_parts)
+
+                    extra_fields = {}
+                    if external_id:
+                        extra_fields["enrichment_status"] = "pending"
+
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_db_ids[ip],
+                        service_id=None,  # db_export doesn't link vulns to ports
+                        name=vuln_name,
+                        severity=severity,
+                        description=description[:MAX_DESCRIPTION_LENGTH],
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="metasploit",
+                        **extra_fields,
+                    )
+                    vulns_created += 1
+
+            # Persist console [+] findings that weren't in db_export XML.
+            # Many auxiliary scanners (libssh_auth_bypass, etc.) report positive
+            # results to stdout but don't call report_vuln() in the MSF database.
+            console_findings = getattr(self, "_msf_console_findings", [])
+            if console_findings:
+                # Get or create a host record for console findings
+                if host_db_ids:
+                    target_host_id = next(iter(host_db_ids.values()))
+                else:
+                    # XML had no hosts — create one from the scan target
+                    target_host, _ = self._parse_target(
+                        self.current_scan.target if self.current_scan else "unknown"
+                    )
+                    target_host_id = await result_store.persist_host(
+                        session, scan_id=scan_id, ip=target_host,
+                    )
+                    hosts_created += 1
+
+                for cf in console_findings:
+                    module_name = cf["module"]
+                    message = cf["message"]
+
+                    # Extract CVE references and normalize to uppercase
+                    cves = re.findall(r"CVE-\d{4}-\d{4,}", message, re.IGNORECASE)
+                    cves += re.findall(r"CVE-\d{4}-\d{4,}", module_name, re.IGNORECASE)
+                    cves = list(dict.fromkeys(c.upper() for c in cves))
+
+                    severity = "high"  # [+] findings are positive hits
+                    external_id = cves[0] if cves else None
+
+                    # Fall back to catalog CVE mapping when console output
+                    # doesn't contain CVE refs
+                    if not external_id:
+                        external_id = (
+                            _MSF_MODULE_CVE_MAP.get(module_name)
+                            or _MSF_MODULE_CVE_MAP_SHORT.get(module_name.rsplit("/", 1)[-1])
+                        )
+                        if external_id and not cves:
+                            cves = [external_id]
+
+                    extra_fields = {}
+                    if external_id:
+                        extra_fields["enrichment_status"] = "pending"
+
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=target_host_id,
+                        service_id=None,
+                        name=module_name.split("/")[-1],
+                        severity=severity,
+                        description=f"{message} (module: {module_name})",
+                        refs=cves or None,
+                        external_id=external_id,
+                        tool_source="metasploit",
+                        **extra_fields,
+                    )
+                    vulns_created += 1
+                self._msf_console_findings = []
+
+        await self._log_persist_summary("metasploit", hosts_created, services_created, vulns_created)
+
+    async def _persist_wpscan_results(self, json_content: str, scan_id: str):
+        """Parse WPScan JSON and persist hosts, services, and vulns to PostgreSQL.
+
+        WPScan JSON structure:
+        {
+          "target_url": "http://host:port/",
+          "version": {"number": "4.6", "vulnerabilities": [...]},
+          "main_theme": {"slug": "...", "vulnerabilities": [...]},
+          "plugins": {"plugin-name": {"slug": "...", "version": {...}, "vulnerabilities": [...]}},
+          "themes": {"theme-name": {"slug": "...", "vulnerabilities": [...]}},
+        }
+        """
+        try:
+            data = json.loads(json_content)
+        except json.JSONDecodeError as e:
+            await self.log("wpscan", "warn", f"Failed to parse WPScan JSON for DB persistence: {e}")
+            return
+
+        hosts_created = 0
+        services_created = 0
+        vulns_created = 0
+
+        # Extract target info
+        target_url = data.get("target_url", "")
+        # Parse IP/hostname from URL
+        import urllib.parse
+        parsed = urllib.parse.urlparse(target_url)
+        ip = parsed.hostname or "unknown"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        async with db_engine._session_factory() as session:
+            # Create host
+            host_id = await result_store.persist_host(
+                session, scan_id=scan_id, ip=ip,
+            )
+            hosts_created += 1
+
+            # Create HTTP service
+            wp_version = data.get("version", {})
+            version_str = f"WordPress {wp_version.get('number', 'unknown')}" if wp_version else None
+            service_id = await result_store.persist_service(
+                session, host_id=host_id, scan_id=scan_id,
+                port=port, protocol="tcp", name="http",
+                version=version_str, status="open",
+            )
+            services_created += 1
+
+            # WordPress core vulnerabilities
+            if wp_version:
+                for vuln in wp_version.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r.get("url", "") for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=vuln.get("title", "WordPress Core Vulnerability"),
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+            # Plugin vulnerabilities
+            for plugin_slug, plugin_data in data.get("plugins", {}).items():
+                for vuln in plugin_data.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=f"[Plugin: {plugin_slug}] {vuln.get('title', 'Unknown')}",
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+            # Theme vulnerabilities
+            for theme_slug, theme_data in data.get("themes", {}).items():
+                for vuln in theme_data.get("vulnerabilities", []):
+                    severity = self._wpscan_vuln_severity(vuln)
+                    refs = [r for r in vuln.get("references", {}).get("url", [])]
+                    cves = vuln.get("references", {}).get("cve", [])
+                    external_id = f"CVE-{cves[0]}" if cves else None
+                    await result_store.persist_vulnerability(
+                        session, scan_id=scan_id, host_id=host_id,
+                        service_id=service_id,
+                        name=f"[Theme: {theme_slug}] {vuln.get('title', 'Unknown')}",
+                        severity=severity,
+                        description=vuln.get("title", ""),
+                        refs=refs or None,
+                        external_id=external_id,
+                        tool_source="wpscan",
+                    )
+                    vulns_created += 1
+
+        await self._log_persist_summary("wpscan", hosts_created, services_created, vulns_created)
+
+    @staticmethod
+    def _wpscan_vuln_severity(vuln: dict) -> str:
+        """Map WPScan vuln type to severity string."""
+        vuln_type = vuln.get("vuln_type", "").lower()
+        if "rce" in vuln_type or "sqli" in vuln_type or "sql injection" in vuln_type:
+            return "critical"
+        elif "xss" in vuln_type or "auth" in vuln_type or "bypass" in vuln_type:
+            return "high"
+        elif "csrf" in vuln_type or "redirect" in vuln_type:
+            return "medium"
+        elif "disclosure" in vuln_type or "information" in vuln_type:
+            return "low"
+        # Default: if it has CVEs, it's at least medium
+        cves = vuln.get("references", {}).get("cve", [])
+        return "medium" if cves else "low"
+
+    def _save_to_history(self):
+        """Save current scan summary to history."""
+        if not self.current_scan:
+            return
+        scan = self.current_scan
+        self.scan_history.append({
+            "id": scan.id,
+            "target": scan.target,
+            "profile": scan.profile.value,
+            "status": scan.status.value,
+            "started_at": scan.started_at.isoformat() if scan.started_at else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "tools": [
+                {
+                    "tool": ts.tool.value,
+                    "status": ts.status.value,
+                    "findings_count": ts.findings_count,
+                    "uploaded_to_faraday": ts.uploaded_to_faraday
+                }
+                for ts in scan.tools
+            ]
+        })
+        # Keep only last 50 scans
+        if len(self.scan_history) > 50:
+            self.scan_history = self.scan_history[-50:]
+
+
+# Global scan service instance
+_scan_service: Optional[ScanService] = None
+
+
+def get_scan_service() -> ScanService:
+    """Get or create the global scan service instance."""
+    global _scan_service
+    if _scan_service is None:
+        _scan_service = ScanService()
+    return _scan_service

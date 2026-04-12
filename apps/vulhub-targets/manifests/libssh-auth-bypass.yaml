@@ -1,0 +1,65 @@
+# Vulhub: libssh Auth Bypass (CVE-2018-10933)
+# Source: https://github.com/vulhub/vulhub/tree/master/libssh/CVE-2018-10933
+# Port: 2222 (SSH)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: libssh-auth-bypass
+  labels:
+    app.kubernetes.io/name: libssh-auth-bypass
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: libssh-auth-bypass
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: libssh-auth-bypass
+    spec:
+      containers:
+        - name: libssh
+          image: vulhub/libssh:0.8.1
+          ports:
+            # Image's sshd listens on port 22 internally; we expose externally as 2222
+            - containerPort: 22
+              protocol: TCP
+              name: ssh
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 22
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 22
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: libssh-auth-bypass
+  labels:
+    app.kubernetes.io/name: libssh-auth-bypass
+    app.kubernetes.io/part-of: vulhub-targets
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: libssh-auth-bypass
+  ports:
+    - port: 2222
+      targetPort: 22
+      protocol: TCP
+      name: ssh

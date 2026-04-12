@@ -1,0 +1,145 @@
+talosVersion: v1.12.2
+kubernetesVersion: v1.32.3
+# Cluster configuration
+clusterName: proxmox-CleanRoom-cluster
+endpoint: https://${CONTROL_PLANE_ENDPOINT_FQDN}:6443
+clusterPodNets:
+- 10.14.0.0/16
+clusterSvcNets:
+- 10.15.0.0/16
+# NOTE: Using pre-built Image Factory schematics with extensions:
+#   - siderolabs/iscsi-tools
+#   - siderolabs/qemu-guest-agent
+#   - siderolabs/util-linux-tools
+# Node schematic ID: 88d1f7a5c4f1d3aba7df787c448c1d3d008ed29cfb34af53fa0df4336a56040b
+
+nodes:
+# Control plane node (from Terraform)
+- hostname: ${TALOS_CONTROL_PLANE_NAME_0}
+  controlPlane: true
+  ipAddress: ${TALOS_CONTROL_PLANE_FQDN_0}
+  installDisk: /dev/vda
+  certSANs:
+    - ${TALOS_CONTROL_PLANE_NAME_0}
+    - ${TALOS_CONTROL_PLANE_FQDN_0}
+
+# Worker nodes (from Terraform)
+- hostname: ${TALOS_WORKER_NAME_1}
+  controlPlane: false
+  ipAddress: ${TALOS_WORKER_FQDN_1}
+  installDisk: /dev/vda
+  nodeLabels:
+    node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_1}
+    - ${TALOS_WORKER_FQDN_1}
+
+- hostname: ${TALOS_WORKER_NAME_2}
+  controlPlane: false
+  ipAddress: ${TALOS_WORKER_FQDN_2}
+  installDisk: /dev/vda
+  nodeLabels:
+    node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_2}
+    - ${TALOS_WORKER_FQDN_2}
+
+- hostname: ${TALOS_WORKER_NAME_3}
+  controlPlane: false
+  ipAddress: ${TALOS_WORKER_FQDN_3}
+  installDisk: /dev/vda
+  nodeLabels:
+    node-type: worker
+  certSANs:
+    - ${TALOS_WORKER_NAME_3}
+    - ${TALOS_WORKER_FQDN_3}    
+
+# Global patches
+patches:
+# Network configuration - explicit DHCP on eth0
+- |-
+  machine:
+    network:
+      interfaces:
+        - interface: eth0
+          dhcp: true
+      nameservers:
+        - 1.1.1.1
+        - 8.8.8.8
+# Time configuration
+- |-
+  machine:
+    time:
+      disabled: false
+      servers:
+        - time.cloudflare.com
+# Harbor registry mirror (production Let's Encrypt certs — trusted by default)
+- |-
+  machine:
+    registries:
+      mirrors:
+        harbor.knowledgeondemand.net:
+          endpoints:
+            - https://harbor.knowledgeondemand.net
+# Common kernel modules and sysctls
+- |-
+  machine:
+    sysctls:
+      vm.nr_hugepages: "1024"
+      net.core.bpf_jit_harden: 1
+    kernel:
+      modules:
+        - name: nvme_tcp
+        - name: vfio_pci
+        - name: uio_pci_generic
+# Control plane specific configuration
+controlPlane:
+  patches:
+  # Default containerd runtime for control plane nodes
+  - |-
+    machine:
+      files:
+        - path: /etc/cri/conf.d/20-customization.part
+          op: create
+          content: |
+            [plugins]
+              [plugins."io.containerd.cri.v1.runtime"]
+                [plugins."io.containerd.cri.v1.runtime".containerd]
+                  default_runtime_name = "runc"
+  # Machine certificate SANs (allows connection via both shortname and FQDN)
+  - |-
+    machine:
+      certSANs:
+        - ${TALOS_CONTROL_PLANE_NAME_0}
+        - ${TALOS_CONTROL_PLANE_FQDN_0}
+  # Cluster configuration
+  - |-
+    cluster:
+      controllerManager:
+        extraArgs:
+          bind-address: 0.0.0.0
+      scheduler:
+        extraArgs:
+          bind-address: 0.0.0.0
+  # Node labels for control plane nodes that should not be load balancers
+  - |-
+    machine:
+      nodeLabels:
+        node.kubernetes.io/exclude-from-external-load-balancers: ""
+  # Explicitly pin control plane image to the one used in the installer schematic
+  - |-
+    machine:
+      install:
+        image: factory.talos.dev/metal-installer/88d1f7a5c4f1d3aba7df787c448c1d3d008ed29cfb34af53fa0df4336a56040b:v1.12.2
+# Worker specific configuration
+worker:
+  patches:
+  # Pin worker install image to match control plane schematic
+  - |-
+    machine:
+      install:
+        image: factory.talos.dev/metal-installer/88d1f7a5c4f1d3aba7df787c448c1d3d008ed29cfb34af53fa0df4336a56040b:v1.12.2
+  # Note: node-role.kubernetes.io/* labels are protected and cannot be self-applied
+  # The node-type: worker label is already set in per-node config above
+  # Storage: Ceph CSI (rbd module built into kernel, no local disk needed)
+

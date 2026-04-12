@@ -1,0 +1,17 @@
+# Unified Portal - Service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal
+  namespace: portal
+  labels:
+    app.kubernetes.io/name: portal
+    app.kubernetes.io/component: web-portal
+spec:
+  selector:
+    app.kubernetes.io/name: portal
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http

@@ -1,0 +1,156 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: harbor
+  namespace: argocd
+  finalizers:
+    - argoproj.io/resources-finalizer
+  annotations:
+    # Deploy after Traefik and cert-manager are ready
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  sources:
+    # Harbor Helm chart
+    - repoURL: https://helm.goharbor.io
+      targetRevision: 1.16.2
+      chart: harbor
+      helm:
+        valuesObject:
+          externalURL: https://harbor.knowledgeondemand.net
+
+          # Disable built-in ingress — we use Traefik IngressRoute instead
+          expose:
+            type: clusterIP
+            tls:
+              enabled: false
+
+          # Internal TLS between components (not needed in single-cluster)
+          internalTLS:
+            enabled: false
+
+          # PostgreSQL (internal, managed by Harbor chart)
+          database:
+            type: internal
+
+          # Persistent storage via Ceph RBD
+          persistence:
+            enabled: true
+            persistentVolumeClaim:
+              registry:
+                storageClass: ceph-rbd
+                size: 50Gi
+              database:
+                storageClass: ceph-rbd
+                size: 10Gi
+              redis:
+                storageClass: ceph-rbd
+                size: 2Gi
+              trivy:
+                storageClass: ceph-rbd
+                size: 5Gi
+              jobservice:
+                jobLog:
+                  storageClass: ceph-rbd
+                  size: 2Gi
+
+          # Trivy vulnerability scanner
+          trivy:
+            enabled: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 1
+                memory: 1Gi
+
+          # Notary (image signing) — disabled
+          notary:
+            enabled: false
+
+          # Chart Museum — disabled
+          chartmuseum:
+            enabled: false
+
+          # Component resource limits
+          core:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 1
+                memory: 1Gi
+          portal:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+          # Recreate strategy for deployments with RWO PVCs (jobservice, registry)
+          # Prevents deadlock where new pod on different node can't attach the volume
+          updateStrategy:
+            type: Recreate
+          registry:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 1
+                memory: 1Gi
+          jobservice:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+    # IngressRoute and namespace from git repo
+    - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
+      targetRevision: refactor/restructure
+      path: apps/harbor
+      directory:
+        recurse: false
+        exclude: 'application.yaml'
+  ignoreDifferences:
+    # StatefulSet VolumeClaimTemplates are immutable after creation — Helm rendered
+    # defaults may differ from API-server-enriched live state
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates/0/apiVersion
+        - /spec/volumeClaimTemplates/0/kind
+        - /spec/persistentVolumeClaimRetentionPolicy
+    # Harbor Helm chart auto-generates secrets on each render, producing different
+    # checksum annotations every time. Ignore these to prevent perpetual OutOfSync.
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - .spec.template.metadata.annotations["checksum/secret"]
+        - .spec.template.metadata.annotations["checksum/secret-core"]
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - .spec.template.metadata.annotations["checksum/secret"]
+        - .spec.template.metadata.annotations["checksum/secret-core"]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: harbor
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

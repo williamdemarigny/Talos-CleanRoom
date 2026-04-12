@@ -1,0 +1,5 @@
+# Ephemeral validator outputs
+diag/
+validate-targets.log
+validate-targets-summary.md
+openvas-test.log

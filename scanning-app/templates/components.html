@@ -1,0 +1,72 @@
+{#
+    Reusable Jinja2 macro components — copied from talos_common.
+#}
+
+{# ---------- SVG Spinner ---------- #}
+{% macro spinner(size="h-5 w-5", extra_classes="") %}
+<svg class="animate-spin {{ size }}{% if extra_classes %} {{ extra_classes }}{% endif %}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+</svg>
+{% endmacro %}
+
+{# ---------- SVG Spinner (short path) ---------- #}
+{% macro spinner_short(size="w-5 h-5", extra_classes="") %}
+<svg class="animate-spin {{ size }}{% if extra_classes %} {{ extra_classes }}{% endif %}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+</svg>
+{% endmacro %}
+
+{# ---------- Form Input with Label ---------- #}
+{% macro form_input(label, model, placeholder="", help_text="", input_type="text", required=false, model_modifier="", extra_attrs="") %}
+<div>
+    <label class="block text-sm font-medium text-gray-300 mb-2">{{ label }}</label>
+    <input
+        type="{{ input_type }}"
+        x-model{{ model_modifier }}="{{ model }}"
+        {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+        {% if required %}required{% endif %}
+        class="w-full bg-gray-700 text-white border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-transparent placeholder-gray-500"
+        {{ extra_attrs }}
+    >
+    {% if help_text %}
+    <p class="text-xs text-gray-500 mt-1">{{ help_text }}</p>
+    {% endif %}
+</div>
+{% endmacro %}
+
+{# ---------- Form Select with Label ---------- #}
+{% macro form_select(label, model, options=[], extra_attrs="") %}
+<div>
+    <label class="block text-sm text-gray-400 mb-1">{{ label }}</label>
+    <select
+        x-model="{{ model }}"
+        class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+        {{ extra_attrs }}
+    >
+        {% for opt in options %}
+        <option value="{{ opt.value }}">{{ opt.label }}</option>
+        {% endfor %}
+    </select>
+</div>
+{% endmacro %}
+
+{# ---------- Log Viewer Container ---------- #}
+{% macro log_viewer(ref_name="logContainer", height="h-96") %}
+<div
+    x-ref="{{ ref_name }}"
+    class="bg-gray-900 rounded p-4 font-mono text-sm {{ height }} overflow-y-auto"
+>
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+{# ---------- Connection Status Badge ---------- #}
+{% macro connection_status() %}
+<div class="fixed bottom-4 right-4">
+    <div class="px-3 py-1 rounded-full text-sm" :class="wsConnected ? 'bg-green-600' : 'bg-red-600'">
+        <span x-text="wsConnected ? 'Connected' : 'Disconnected'"></span>
+    </div>
+</div>
+{% endmacro %}

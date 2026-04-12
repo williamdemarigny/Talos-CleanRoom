@@ -1,0 +1,159 @@
+# Scanning Console - Deployment
+# FastAPI application for security scanning orchestration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scanning-console
+  namespace: scanning-console
+  labels:
+    app.kubernetes.io/name: scanning-console
+    app.kubernetes.io/component: security-console
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scanning-console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scanning-console
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: security-platform
+    spec:
+      serviceAccountName: scanning-console
+      imagePullSecrets:
+      - name: harbor-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # ============================================================
+      # INIT CONTAINERS
+      # ============================================================
+      initContainers:
+      - name: db-migrate
+        image: harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: database-url
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      # ============================================================
+      # MAIN CONTAINERS
+      # ============================================================
+      containers:
+      - name: scanning-console
+        image: harbor.knowledgeondemand.net/cleanroom/scanning-console:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          # Generate kubeconfig from ServiceAccount token (kubectl doesn't auto-detect in-cluster config in this image)
+          SA=/var/run/secrets/kubernetes.io/serviceaccount
+          mkdir -p /tmp/.kube
+          kubectl config set-cluster in-cluster --server=https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT} --certificate-authority=${SA}/ca.crt 2>/dev/null
+          kubectl config set-credentials sa --token="$(cat ${SA}/token)" 2>/dev/null
+          kubectl config set-context default --cluster=in-cluster --user=sa 2>/dev/null
+          kubectl config use-context default 2>/dev/null
+          exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: secret-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: database-url
+        - name: ADMIN_PASSWORD_HASH
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: admin-password-hash
+        - name: HOME
+          value: /tmp
+        - name: ENRICHMENT_ENABLED
+          value: "true"
+        - name: NVD_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: nvd-api-key
+              optional: true
+        - name: OTX_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: scanning-console-credentials
+              key: otx-api-key
+              optional: true
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        startupProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/system/health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+      volumes:
+      - name: tmp
+        emptyDir: {}
+# =============================================================================
+# SECRETS - Managed externally via SOPS encryption
+# =============================================================================
+# Required secrets:
+#   - scanning-console-credentials:
+#       secret-key: Application SECRET_KEY (for JWT/HMAC derivation)
+#       database-url: postgresql+asyncpg://cleanroom:<pw>@cleanroom-db.cleanroom-db.svc.cluster.local:5432/cleanroom
+#       admin-password-hash: bcrypt hash of admin password
+# =============================================================================
