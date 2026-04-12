@@ -90,12 +90,6 @@ If the Target Lab feature is disabled, you will see a warning banner:
 
 Contact your administrator to enable this feature.
 
-## Video Walkthrough
-
-Video 3 shows the full Target Lab workflow — deploying a target, then scanning it:
-
-![type:video](../videos/03-vuln-scan.mp4)
-
 ## What's Next?
 
 - [Vulnerability Scanning](vulnerability-scan.md) — run a scan against a deployed target

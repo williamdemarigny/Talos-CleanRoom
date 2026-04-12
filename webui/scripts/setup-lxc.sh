@@ -147,6 +147,13 @@ if [ -d "$REPO_PATH/webui" ]; then
     done
 fi
 
+# Symlink docs site (pre-built MkDocs HTML served at /docs/)
+if [ -d "$REPO_PATH/docs/user-guide/site" ]; then
+    echo "Symlinking docs site..."
+    rm -rf "$APP_DIR/docs-site"
+    ln -sf "$REPO_PATH/docs/user-guide/site" "$APP_DIR/docs-site"
+fi
+
 # Create Python virtual environment and install dependencies
 echo "[12/12] Setting up Python environment..."
 cd "$APP_DIR"
