@@ -350,9 +350,9 @@ Located in `scanning-app/app/services/scan_service.py`. Results persisted to Pos
 
 **Nmap flags:** Quick: `-T4 --top-ports 100`, Standard: `-sV -sC`, Thorough: `-sV -sC -p- -A`
 
-**OpenVAS config UUIDs:** Quick: Host Discovery (`d21f6c81...`), Standard: Full and Fast (`daba56c8...`), Thorough: Full and Deep (`698f691e...`)
+**OpenVAS config UUIDs:** Quick: Host Discovery (`d21f6c81...`), Standard+Thorough: Talos CleanRoom Active Web (`d5440c17...`) — a clone of Full and Fast with "Enable generic web application scanning" set to YES. Report retrieval uses `min_qod=0` to include low-QoD version-check NVTs (e.g. SambaCry QoD=30).
 
-**Metasploit modules:** 11 for Standard (EternalBlue, Conficker, BlueKeep, Heartbleed, Log4Shell, Shellshock, HTTP.sys, SMB/SSH/HTTP/FTP version), 39 for Thorough (adds share/user enum, RDP, HTTP brute-force, DB scanners, etc.)
+**Metasploit modules:** 21 for Standard (EternalBlue, Conficker, BlueKeep, Heartbleed, Log4Shell, Shellshock, HTTP.sys, SMB/SSH/HTTP/FTP version, plus Vulhub Labs: Drupalgeddon2, Tomcat PUT, Elasticsearch Groovy/MVEL, SambaCry, Redis, libssh), 49 for Thorough (adds share/user enum, RDP, HTTP brute-force, DB scanners, Struts2 REST XStream, WebLogic T3 deserialize, etc.)
 
 **Tool execution:** Each tool runs via `kubectl exec` or `kubectl run` against pods in K8s namespaces. Results are XML parsed locally, persisted to PostgreSQL, then uploaded to Faraday via individual REST calls.
 

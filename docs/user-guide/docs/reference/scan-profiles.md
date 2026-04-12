@@ -26,15 +26,15 @@ Scan profiles control how thorough (and how long) each scanning tool operates. C
 | Profile | Config | What It Does |
 |---|---|---|
 | Quick | Host Discovery | Only checks if hosts are alive and identifies their OS |
-| Standard | Full and Fast | Runs all vulnerability tests that can be done without being disruptive |
-| Thorough | Full and Deep | Runs all tests including potentially disruptive ones and deep checks |
+| Standard | Talos CleanRoom Active Web | Full and Fast clone with generic web application scanning enabled — detects Log4Shell, SSRF, and other webapp CVEs |
+| Thorough | Talos CleanRoom Active Web | Same config as Standard (Full and Deep is unavailable in Community Edition); longer timeouts allow more NVTs to complete |
 
 !!! warning "Thorough scans are intensive"
     A Thorough OpenVAS scan can generate significant network traffic and may cause performance impacts on target systems. Use with caution on production networks.
 
 ## Metasploit Details
 
-### Standard Profile (11 modules)
+### Standard Profile (21 modules)
 
 Checks for the most commonly exploited vulnerabilities:
 
@@ -42,8 +42,9 @@ Checks for the most commonly exploited vulnerabilities:
 - Heartbleed (OpenSSL), Log4Shell, Shellshock
 - HTTP.sys (MS15-034)
 - SSH, HTTP, SMB, and FTP version detection
+- Vulhub Labs checks: Drupalgeddon2, Tomcat PUT, Elasticsearch Groovy/MVEL, SambaCry, Redis, libssh auth bypass
 
-### Thorough Profile (39 modules)
+### Thorough Profile (49 modules)
 
 Adds to Standard with:
 
@@ -52,6 +53,7 @@ Adds to Standard with:
 - HTTP brute-force and directory scanning
 - Database scanners (MySQL, PostgreSQL, MSSQL)
 - Additional service fingerprinting
+- Extended Vulhub Labs: Struts2 REST XStream, WebLogic T3 deserialize
 
 ## WPScan Details
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Vulhub Target Lab Validation Suite
 #
-# Validates all 16 (or a subset) Vulhub targets end-to-end:
+# Validates all 8 curated Vulhub targets end-to-end:
 #   1. Deploy via API
 #   2. Verify pod is healthy and stays healthy (no crashloops)
 #   3. Verify TCP connectivity from openvas namespace
@@ -13,7 +13,7 @@
 # A summary markdown table is written at the end.
 #
 # Usage:
-#   ./validate-targets.sh                              # all 16 targets
+#   ./validate-targets.sh                              # all 8 targets
 #   ./validate-targets.sh --targets log4shell,heartbleed
 #   SCANNING_PW=xxx ./validate-targets.sh
 #
