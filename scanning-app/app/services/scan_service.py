@@ -122,14 +122,19 @@ NMAP_PROFILES = {
 }
 
 # OpenVAS scan config UUIDs
-# These are standard Greenbone Community Edition config IDs.
-# "Full and Deep" (698f691e) is not available in all GVM versions —
-# Thorough falls back to "Full and fast" which runs all NVTs.
+# Quick uses the stock Host Discovery config.
+# Standard/Thorough use a clone of Full and Fast ("Talos CleanRoom Active Web")
+# with "Enable generic web application scanning" set to YES — without this,
+# Log4Shell active checks and other webapp NVTs are silently skipped.
+# The clone config (d5440c17) was created via direct GMP + SQL insert to set
+# NVT preference 12288:7 (Enable generic web application scanning) = yes.
 OPENVAS_SCAN_CONFIGS = {
     ScanProfile.QUICK: "2d3f051c-55ba-11e3-bf43-406186ea4fc5",     # Host Discovery
-    ScanProfile.STANDARD: "daba56c8-73ec-11df-a475-002264764cea",   # Full and Fast
-    ScanProfile.THOROUGH: "daba56c8-73ec-11df-a475-002264764cea",   # Full and Fast (Full and Deep unavailable)
+    ScanProfile.STANDARD: "d5440c17-a640-4cff-a67a-cb7742fec937",  # Talos CleanRoom Active Web
+    ScanProfile.THOROUGH: "d5440c17-a640-4cff-a67a-cb7742fec937",  # Talos CleanRoom Active Web
 }
+# Fallback: if the custom config UUID isn't found, use stock Full and Fast
+OPENVAS_FALLBACK_CONFIG = "daba56c8-73ec-11df-a475-002264764cea"
 
 # Greenbone XML report format UUID
 OPENVAS_XML_FORMAT = "a994b278-1f62-11e1-96ac-406186ea4fc5"
@@ -2298,7 +2303,7 @@ def reconnect_gmp(old_sock, password, max_retries=3):
     REPORT_FILE = f"/tmp/gvm-report-{SCAN_ID}.xml"
     if report_id:
         print("STATUS: Retrieving scan report...", flush=True)
-        get_report = f\'<get_reports report_id="{report_id}" format_id="{REPORT_FORMAT}" details="1" filter="rows=-1 first=1"/>\'
+        get_report = f\'<get_reports report_id="{report_id}" format_id="{REPORT_FORMAT}" details="1" filter="rows=-1 first=1 min_qod=0"/>\'
         sock.settimeout(600)
         try:
             resp = send_gmp(sock, get_report, end_tag="get_reports_response")
@@ -2442,7 +2447,7 @@ try:
     REPORT_FILE = f"/tmp/gvm-report-{{SCAN_ID}}-recovery.xml"
     print(f"STATUS: Recovery - retrieving report {{report_id}}...", flush=True)
     sock.settimeout(600)
-    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1"/>', end_tag="get_reports_response")
+    resp = send_gmp(sock, f'<get_reports report_id="{{report_id}}" format_id="{{REPORT_FORMAT}}" details="1" filter="rows=-1 first=1 min_qod=0"/>', end_tag="get_reports_response")
     resp_len = len(resp)
     print(f"STATUS: Recovery - report response ({{resp_len}} bytes)", flush=True)
     if resp_len == 0:
