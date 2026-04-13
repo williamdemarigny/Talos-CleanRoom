@@ -1800,7 +1800,7 @@ class DeploymentService(BaseServiceMixin):
         await self.log(step_id, "info", "Updating Build VM git repository...")
         git_result = await self.process_manager.run_command(
             ssh_cmd_prefix + [
-                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/refactor/restructure"
+                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/main"
             ],
             on_output=self._sanitized_output_callback(step_id),
             timeout=60,
@@ -2680,7 +2680,7 @@ ssh_user_groups   = "sudo,docker"
         branch_result = await self.process_manager.run_command_simple(
             ["git", "branch", "--show-current"], cwd=self.repo_root,
         )
-        git_branch = (branch_result.output or "").strip() or "refactor/restructure"
+        git_branch = (branch_result.output or "").strip() or "main"
 
         # Build the pct exec setup script
         setup_script = f"""set -e
@@ -2907,7 +2907,7 @@ echo "=== Setup Complete ==="
         await self.log(step_id, "info", "Updating Build VM git repository...")
         git_result = await self.process_manager.run_command(
             ssh_cmd_prefix + [
-                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/refactor/restructure"
+                "cd /opt/talos-cleanroom && git fetch && git reset --hard origin/main"
             ],
             on_output=self._sanitized_output_callback(step_id),
             timeout=60,

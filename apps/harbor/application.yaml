@@ -113,7 +113,7 @@ spec:
 
     # IngressRoute and namespace from git repo
     - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-      targetRevision: refactor/restructure
+      targetRevision: main
       path: apps/harbor
       directory:
         recurse: false

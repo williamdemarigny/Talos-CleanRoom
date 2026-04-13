@@ -20,7 +20,7 @@ spec:
           - $values/apps/argocd/values.yaml
     # Git repo containing values.yaml
     - repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-      targetRevision: refactor/restructure
+      targetRevision: main
       ref: values
   destination:
     server: https://kubernetes.default.svc

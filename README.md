@@ -151,7 +151,7 @@ For complete step-by-step deployment instructions, see **[DEPLOYMENT.md](DEPLOYM
 # 1. Clone repo
 git clone git@github.com:williamdemarigny/Talos-CleanRoom.git
 cd Talos-CleanRoom
-git checkout refactor/restructure
+git checkout main
 
 # 2. Deploy the WebUI LXC container
 cd webui && ./deploy-lxc.sh
@@ -168,7 +168,7 @@ cd webui && ./deploy-lxc.sh
 # 1. Clone and generate secrets
 git clone git@github.com:williamdemarigny/Talos-CleanRoom.git
 cd Talos-CleanRoom
-git checkout refactor/restructure
+git checkout main
 ./scripts/generate-secrets.sh
 
 # 2. Automated deployment (Terraform -> Talos -> ArgoCD -> infra -> security tools)

@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: git@github.com:williamdemarigny/Talos-CleanRoom.git
-    targetRevision: refactor/restructure
+    targetRevision: main
     path: apps/portal
     directory:
       recurse: false

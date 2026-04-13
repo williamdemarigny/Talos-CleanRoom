@@ -82,7 +82,7 @@ Clone the repository and check out the deployment branch:
 ```bash
 git clone git@github.com:williamdemarigny/Talos-CleanRoom.git
 cd Talos-CleanRoom
-git checkout refactor/restructure
+git checkout main
 ```
 
 ## 2. Generate Secrets
