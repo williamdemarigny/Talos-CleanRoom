@@ -1,0 +1,20 @@
+# Endpoints for the Deployment Console LXC container.
+# The Deployment Console runs outside K8s (LXC at 10.83.3.190:8000),
+# so we manually define Endpoints to back the selector-less Service.
+# This must match the Service name so Traefik can route to it.
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: deployment-console
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: deployment-console
+    app.kubernetes.io/component: web-ui
+subsets:
+  - addresses:
+      - ip: "10.83.3.190"
+    ports:
+      - port: 8000
+        protocol: TCP
+        name: http
