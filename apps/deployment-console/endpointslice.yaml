@@ -1,0 +1,25 @@
+# EndpointSlice pointing to the Deployment Console LXC container IP.
+# Kept in a separate file so ArgoCD SSA tracks it as its own resource.
+# The "managed-by: argocd" label prevents the K8s endpoints controller
+# from garbage-collecting this manually-managed EndpointSlice.
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: deployment-console-external
+  namespace: deployment-console
+  labels:
+    app.kubernetes.io/name: deployment-console
+    app.kubernetes.io/component: web-ui
+    kubernetes.io/service-name: deployment-console
+    endpointslice.kubernetes.io/managed-by: argocd
+addressType: IPv4
+ports:
+  - port: 8000
+    protocol: TCP
+    name: http
+endpoints:
+  - addresses:
+      - "10.83.3.190"
+    conditions:
+      ready: true
