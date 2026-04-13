@@ -38,6 +38,10 @@ COPY portal/app/ ./app/
 COPY portal/static/ ./static/
 COPY portal/templates/ ./templates/
 
+# Copy user guide documentation (pre-built MkDocs site, excluding videos)
+COPY docs/user-guide/site/ ./docs-site/
+RUN rm -rf ./docs-site/videos/
+
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 

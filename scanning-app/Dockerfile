@@ -49,6 +49,10 @@ COPY scanning-app/templates/ ./templates/
 # Copy Vulhub K8s manifests (baked into image for kubectl apply)
 COPY apps/vulhub-targets/manifests/ ./vulhub-manifests/
 
+# Copy user guide documentation (pre-built MkDocs site, excluding videos)
+COPY docs/user-guide/site/ ./docs-site/
+RUN rm -rf ./docs-site/videos/
+
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app

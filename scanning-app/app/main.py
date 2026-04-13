@@ -107,6 +107,11 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Mount user guide documentation (pre-built MkDocs site)
+DOCS_DIR = APP_DIR.parent / "docs-site"
+if DOCS_DIR.exists():
+    app.mount("/docs", StaticFiles(directory=str(DOCS_DIR), html=True), name="docs")
+
 # Setup templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
