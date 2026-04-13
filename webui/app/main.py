@@ -24,7 +24,10 @@ TEMPLATES_DIR = APP_DIR.parent / "templates"
 app = FastAPI(
     title="Talos CleanRoom Deployment",
     description="Web UI for deploying Talos Kubernetes clusters",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # Mount static files

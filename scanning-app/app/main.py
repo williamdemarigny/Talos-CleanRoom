@@ -87,6 +87,9 @@ app = FastAPI(
     title="Talos CleanRoom Scanning Console",
     description="Security scanning, vulnerability management, and reporting",
     version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
 

@@ -25,6 +25,9 @@ app = FastAPI(
     title="Talos CleanRoom Portal",
     description="Unified landing page for Talos CleanRoom applications",
     version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
 
 # Mount static files
