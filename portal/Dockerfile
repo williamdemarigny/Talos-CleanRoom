@@ -4,6 +4,15 @@
 # Build context must be the REPO ROOT (not portal/):
 #   docker build -f portal/Dockerfile -t portal .
 
+# --- Stage: build user-guide docs ---
+FROM python:3.11-slim AS docs-builder
+WORKDIR /docs
+COPY docs/user-guide/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY docs/user-guide/ .
+RUN mkdocs build && rm -rf site/videos/
+
+# --- Stage: Python deps ---
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
@@ -38,9 +47,8 @@ COPY portal/app/ ./app/
 COPY portal/static/ ./static/
 COPY portal/templates/ ./templates/
 
-# Copy user guide documentation (pre-built MkDocs site, excluding videos)
-COPY docs/user-guide/site/ ./docs-site/
-RUN rm -rf ./docs-site/videos/
+# Copy user guide documentation (built by docs-builder stage)
+COPY --from=docs-builder /docs/site/ ./docs-site/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
