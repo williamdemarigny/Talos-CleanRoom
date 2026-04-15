@@ -220,6 +220,8 @@ webui/
 ### Deployment
 - `POST /api/deployment/start` - Start deployment
 - `POST /api/deployment/abort` - Abort deployment
+- `POST /api/deployment/resume` - Resume a failed or aborted deployment
+- `POST /api/deployment/skip-step` - Skip a failed step and resume
 - `GET /api/deployment/status` - Get deployment status
 - `GET /api/deployment/logs` - Get deployment logs
 - `GET /api/deployment/kubeconfig` - Download kubeconfig

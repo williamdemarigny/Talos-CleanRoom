@@ -19,7 +19,7 @@ The Deployment Console has four main sections, accessible from the navigation ba
 |---|---|
 | **Dashboard** | Overview of deployment status, dependencies, and service credentials |
 | **Configuration** | View and edit cluster configuration settings |
-| **Deployment** | Start, monitor, and manage the 23-step deployment process |
+| **Deployment** | Start, monitor, and manage the 26-step deployment process |
 | **Logs** | Search and filter deployment log entries |
 
 ### Scanning Console

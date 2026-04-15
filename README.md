@@ -77,8 +77,11 @@ Talos-CleanRoom/
 |   +-- cleanroom-db/                   # PostgreSQL 17 StatefulSet + backup CronJob
 |   +-- scanning-console/              # Scanning Console K8s manifests
 |   +-- portal/                         # Portal K8s manifests
+|   +-- deployment-console/             # Deployment Console reference manifests
 |   +-- network-policies/              # Zero-trust namespace isolation
-|   +-- securecodebox/                  # Automated scanning framework
+|   +-- securecodebox/                  # Automated scanning framework (optional)
+|   +-- longhorn/                       # Optional block storage (Ceph RBD preferred)
+|   +-- vulhub-targets/                 # Intentionally vulnerable lab targets
 |   +-- deploy-ingress-stack.sh         # 13-step infrastructure deployment
 |
 +-- scanning-app/                       # Scanning Console source (FastAPI)
@@ -157,7 +160,7 @@ git checkout main
 cd webui && ./deploy-lxc.sh
 
 # 3. Open http://10.83.3.190:8000, login, click "Deploy"
-#    All 23 steps run automatically — secrets, Build VM, images, apps, network policies
+#    All 26 steps run automatically — secrets, Build VM, images, apps, network policies
 
 # 4. Configure DNS: *.knowledgeondemand.net → Traefik LB IP (10.83.3.200)
 ```

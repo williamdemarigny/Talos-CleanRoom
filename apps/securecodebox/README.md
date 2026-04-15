@@ -33,9 +33,9 @@ This directory contains the ArgoCD applications for deploying SecureCodeBox with
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| SecureCodeBox Operator | 4.9.0 | Manages scan lifecycle, CRDs |
-| Nmap Scanner | 4.9.0 | Network discovery and security auditing |
-| Nmap Parser | 4.9.0 | Processes nmap XML output into findings |
+| SecureCodeBox Operator | 5.5.0 | Manages scan lifecycle, CRDs |
+| Nmap Scanner | 5.5.0 | Network discovery and security auditing |
+| Nmap Parser | 5.5.0 | Processes nmap XML output into findings |
 
 ## Resource Requirements
 

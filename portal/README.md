@@ -27,7 +27,8 @@ The Portal is a lightweight FastAPI application that serves as the entry point f
 | POST | `/api/auth/logout` | Clear auth cookie |
 | GET | `/api/auth/me` | Current user info |
 | POST | `/api/auth/redeem-code` | Redeem SSO code for JWT |
-| GET | `/api/portal/status` | App link status |
+| POST | `/api/portal/exchange-code` | Issue one-time SSO code for cross-app navigation |
+| GET | `/api/credentials/` | Service credentials list |
 
 ## Running Locally
 

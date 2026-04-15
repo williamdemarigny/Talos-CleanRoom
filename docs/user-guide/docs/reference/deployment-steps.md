@@ -19,7 +19,7 @@ The deployment process runs 26 automated steps (numbered 0-25). Here is what eac
 | **10** | Enable ArgoCD Self-Management | Configures ArgoCD to manage its own updates |
 | **11** | Deploy Harbor Registry | Installs the container image registry |
 | **12** | Deploy Build VM | Creates the container image build environment (LXC) |
-| **13** | Mirror Greenbone Images | Pulls Greenbone (OpenVAS) images from upstream and pushes them to Harbor |
+| **13** | Mirror Greenbone Images to Harbor | Pulls Greenbone (OpenVAS) images from upstream and pushes them to Harbor |
 | **14** | Deploy OpenVAS | Installs the vulnerability scanner engine |
 | **15** | Deploy Faraday | Installs the vulnerability management platform |
 | **16** | Deploy Metasploit | Installs the penetration testing framework |
@@ -27,7 +27,7 @@ The deployment process runs 26 automated steps (numbered 0-25). Here is what eac
 | **18** | Configure Integrations | Sets up connections between the deployed tools |
 | **19** | Generate & Apply Secrets | Creates passwords and encryption keys for all services |
 | **20** | Commit & Push Secrets | Saves encrypted secrets to the Git repository |
-| **21** | Prepare Vulhub Targets | Downloads and prepares vulnerable test environments for the Target Lab |
+| **21** | Prepare Vulhub Target Environments | Downloads and prepares vulnerable test environments for the Target Lab |
 | **22** | Build & Push Container Images | Builds the Scanning Console, Portal, and other custom images |
 | **23** | Deploy CleanRoom Applications | Deploys the Scanning Console and Portal to Kubernetes |
 | **24** | Deploy Deployment Console Routing | Configures Traefik routing for the Deployment Console |

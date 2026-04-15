@@ -129,7 +129,7 @@ You now have two options:
 
 | Path | Best for | What it automates |
 |------|----------|-------------------|
-| **[Automated (WebUI)](#automated-deployment-webui)** | Most users | Everything — K8s cluster, ArgoCD, infra, security tools, secrets, Build VM, images, apps, network policies (23 steps, zero manual intervention) |
+| **[Automated (WebUI)](#automated-deployment-webui)** | Most users | Everything — K8s cluster, ArgoCD, infra, security tools, secrets, Build VM, images, apps, network policies (26 steps, zero manual intervention) |
 | **[Manual](#manual-deployment)** | Debugging, customization | Nothing — you run every command |
 
 ---
@@ -179,7 +179,7 @@ Access at `http://10.83.3.190:8000` (login: `admin` / `admin`).
 
 Open `http://10.83.3.190:8000`, login, and click **Deploy**.
 
-The WebUI runs a fully automated 23-step deployment:
+The WebUI runs a fully automated 26-step deployment:
 
 | Steps | What |
 |-------|------|
@@ -190,16 +190,20 @@ The WebUI runs a fully automated 23-step deployment:
 | 8 | Install ArgoCD |
 | 9 | Infrastructure stack (MetalLB, cert-manager, Traefik, Ceph CSI) |
 | 10 | ArgoCD self-management |
-| 11–15 | Security tools (OpenVAS, Faraday, Metasploit, Threat Dragon, Harbor) |
-| 16 | Configure integrations |
-| 17 | Generate & apply K8s secrets (all services) |
-| 18 | Commit & push SOPS-encrypted secrets to git |
-| 19 | Deploy Build VM (LXC with Docker CE) |
-| 20 | Build & push container images (LOKI-RS, Scanning Console, Portal) |
-| 21 | Deploy CleanRoom applications (DB, Scanning Console, Portal) |
-| 22 | Apply zero-trust network policies |
+| 11 | Deploy Harbor container registry |
+| 12 | Deploy Build VM (LXC with Docker CE) |
+| 13 | Mirror Greenbone images to Harbor |
+| 14–17 | Security tools (OpenVAS, Faraday, Metasploit, Threat Dragon) |
+| 18 | Configure integrations |
+| 19 | Generate & apply K8s secrets (all services) |
+| 20 | Commit & push SOPS-encrypted secrets to git |
+| 21 | Prepare Vulhub target environments |
+| 22 | Build & push container images (LOKI-RS, Scanning Console, Portal) |
+| 23 | Deploy CleanRoom applications (DB, Scanning Console, Portal) |
+| 24 | Deploy Deployment Console routing |
+| 25 | Apply zero-trust network policies |
 
-Wait for all 23 steps to complete. The entire platform is now running — K8s cluster, infrastructure, security tools, custom applications, and network policies.
+Wait for all 26 steps to complete. The entire platform is now running — K8s cluster, infrastructure, security tools, custom applications, and network policies.
 
 **Resumable deployments:** If any step fails, fix the issue and click **Resume** to continue from where it left off. You can also **Skip** a failed step to proceed to the next one. All logs are preserved across resume operations.
 
@@ -313,23 +317,28 @@ python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes
 ```
 Local Workstation (one-time setup)
     ├─ [1]  Clone repo
-    ├─ [2]  generate-secrets.sh           → (optional — WebUI step 17 does this)
-    ├─ [3]  git commit + push             → (optional — WebUI step 18 does this)
+    ├─ [2]  generate-secrets.sh           → (optional — WebUI step 19 does this)
+    ├─ [3]  git commit + push             → (optional — WebUI step 20 does this)
     │
 Proxmox (run from local workstation)
     ├─ [A1] WebUI deploy-lxc.sh           → Deployment Console (10.83.3.190)
     │
 WebUI (browser — fully automated, ~60 min)
-    ├─ [A2] Click "Deploy" button         → All 23 steps run unattended:
+    ├─ [A2] Click "Deploy" button         → All 26 steps run unattended:
     │       Steps 0-7:   K8s cluster (Terraform + Talos + bootstrap)
     │       Steps 8-10:  ArgoCD + infrastructure + self-management
-    │       Steps 11-16: Security tools + integrations
-    │       Step  17:    Generate & apply K8s secrets
-    │       Step  18:    Commit & push secrets to git
-    │       Step  19:    Deploy Build VM (LXC + Docker CE)
-    │       Step  20:    Build & push container images
-    │       Step  21:    Deploy CleanRoom apps (DB, Scanner, Portal)
-    │       Step  22:    Apply network policies
+    │       Step  11:    Deploy Harbor container registry
+    │       Step  12:    Deploy Build VM (LXC + Docker CE)
+    │       Step  13:    Mirror Greenbone images to Harbor
+    │       Steps 14-17: Security tools (OpenVAS, Faraday, Metasploit, Threat Dragon)
+    │       Step  18:    Configure integrations
+    │       Step  19:    Generate & apply K8s secrets
+    │       Step  20:    Commit & push secrets to git
+    │       Step  21:    Prepare Vulhub target environments
+    │       Step  22:    Build & push container images
+    │       Step  23:    Deploy CleanRoom apps (DB, Scanner, Portal)
+    │       Step  24:    Deploy Deployment Console routing
+    │       Step  25:    Apply network policies
     │
 Manual (only 2 steps remain)
     ├─ [A3] DNS records                   → *.knowledgeondemand.net
@@ -734,11 +743,11 @@ See [apps/network-policies/README.md](apps/network-policies/README.md) for the f
 
 ## M15. Post-Deployment Verification
 
-Follow the same verification steps as [A12. Post-Deployment Verification](#a12-post-deployment-verification).
+Follow the same verification steps as [A4. Post-Deployment Verification](#a4-post-deployment-verification).
 
 ## M16. Change Default Credentials
 
-Follow the same steps as [A13. Change Default Credentials](#a13-change-default-credentials).
+Follow the same steps as [A5. Change Default Credentials](#a5-change-default-credentials).
 
 ---
 
@@ -902,5 +911,4 @@ HEALTH:.status.health.status
 | LOKI image build | [apps/loki/build-and-push.sh](apps/loki/build-and-push.sh) |
 | DNS reference | [docs/DNS-MAPPING.md](docs/DNS-MAPPING.md) |
 | Network policy reference | [apps/network-policies/README.md](apps/network-policies/README.md) |
-| Architecture plan | [docs/vuln-management-plan.md](docs/vuln-management-plan.md) |
 | ArgoCD app manifests | [apps/](apps/) (each subdirectory) |

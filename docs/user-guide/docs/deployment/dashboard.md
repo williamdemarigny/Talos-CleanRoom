@@ -11,7 +11,7 @@ At the top of the Dashboard, you will see three status cards:
 | Card | What It Shows |
 |---|---|
 | **Deployment Status** | Current state: Idle (not deployed), Running (in progress), Completed (success), Failed, or Aborted |
-| **Dependencies** | How many required tools are installed (e.g., "7/7"). Green means all tools are present. |
+| **Dependencies** | How many required tools are installed (e.g., "9/9"). Green means all tools are present. |
 | **Configuration** | Whether the cluster configuration is valid. Shows "Valid" (green) or "Check Required" (yellow) |
 
 ## Quick Actions

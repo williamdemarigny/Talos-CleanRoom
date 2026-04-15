@@ -23,7 +23,7 @@ The Dashboard shows all deployed services with clickable URLs:
 | **Harbor** | `https://harbor.knowledgeondemand.net` | Container registry — stores Docker images used by the platform |
 | **OpenVAS** | `https://openvas.knowledgeondemand.net` | Vulnerability scanner engine (also accessible through the Scanning Console) |
 | **Faraday** | `https://faraday.knowledgeondemand.net` | Vulnerability management — aggregates all scan findings in one place |
-| **Threat Dragon** | `https://threat-dragon.knowledgeondemand.net` | Threat modeling tool for documenting security architecture |
+| **Threat Dragon** | `https://threatdragon.knowledgeondemand.net` | Threat modeling tool for documenting security architecture |
 
 Use the credentials shown on the Dashboard (or the [Portal Credentials page](../getting-started/credentials.md)) to log in to each service.
 

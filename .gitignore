@@ -70,11 +70,9 @@ kubeconfig.yaml
 docs/user-guide/site/
 
 # ============================================
-# Video raw captures
+# Video raw captures (pre-conversion intermediates)
 # ============================================
 docs/user-guide/docs/videos/raw/
-docs/user-guide/screenshot-tool/videos/
-docs/user-guide/screenshot-tool/capture_all.log
 
 # ============================================
 # Validation / diagnostic outputs

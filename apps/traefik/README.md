@@ -36,9 +36,9 @@ Internet/Network
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| MetalLB | 0.14.9 | LoadBalancer implementation for bare-metal |
-| cert-manager | 1.16.2 | Automatic TLS certificate management |
-| Traefik | 33.2.1 | Ingress controller |
+| MetalLB | 0.15.3 | LoadBalancer implementation for bare-metal |
+| cert-manager | v1.19.3 | Automatic TLS certificate management |
+| Traefik | 38.0.2 | Ingress controller |
 
 ## Deployment Order
 
