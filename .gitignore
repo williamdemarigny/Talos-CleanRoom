@@ -33,8 +33,12 @@ apps/portal/credential-vault.yaml
 # ============================================
 # Talos cluster
 # ============================================
-# Generated machine configs (contain cluster secrets)
-cluster/clusterconfig/
+# Generated machine configs (contain cluster CA, machine token, etcd
+# encryption key, service-account signing key — never commit, ever).
+# Match every clusterconfig directory and any stray talosconfig file
+# regardless of where the IaC tree lives.
+**/clusterconfig/
+**/talosconfig
 
 # ============================================
 # Application runtime
